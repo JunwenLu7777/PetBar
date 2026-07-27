@@ -1120,6 +1120,18 @@ private func isHideActivityAccessibilityLabel(_ value: String) -> Bool {
     return normalized == "hide activity" || normalized == "隐藏活动"
 }
 
+private func isShowActivityAccessibilityLabel(_ value: String) -> Bool {
+    let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return normalized.range(
+        of: #"^show activity,\s*[0-9]+\s+items?$"#,
+        options: .regularExpression
+    ) != nil
+        || normalized.range(
+            of: #"^显示活动[，,]\s*[0-9]+\s*项$"#,
+            options: .regularExpression
+        ) != nil
+}
+
 private func isOpenActivityNotificationAccessibilityLabel(_ value: String) -> Bool {
     let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     return normalized.contains("open notification")
@@ -1635,6 +1647,67 @@ private func isNativeActivityPillWindowTitle(_ value: String?) -> Bool {
     return normalized == "codex pet composition surface"
 }
 
+private func shouldHideNativeActivityBadgeWindow(
+    title: String?,
+    hasShowActivityButton: Bool
+) -> Bool {
+    isNativeActivityPillWindowTitle(title) && hasShowActivityButton
+}
+
+private func offscreenOrigin(
+    displayBounds: [CGRect],
+    windowSize: CGSize,
+    margin: CGFloat = 64
+) -> CGPoint? {
+    guard windowSize.width.isFinite,
+          windowSize.height.isFinite,
+          windowSize.width > 0,
+          windowSize.height > 0,
+          margin.isFinite,
+          margin >= 0
+    else { return nil }
+
+    let validDisplayBounds = displayBounds.filter { bounds in
+        bounds.origin.x.isFinite
+            && bounds.origin.y.isFinite
+            && bounds.width.isFinite
+            && bounds.height.isFinite
+            && bounds.width > 0
+            && bounds.height > 0
+    }
+    guard var desktopBounds = validDisplayBounds.first else { return nil }
+    for bounds in validDisplayBounds.dropFirst() {
+        desktopBounds = desktopBounds.union(bounds)
+    }
+
+    let origin = CGPoint(
+        x: desktopBounds.minX - windowSize.width - margin,
+        y: desktopBounds.minY - windowSize.height - margin
+    )
+    return origin.x.isFinite && origin.y.isFinite ? origin : nil
+}
+
+private func activeDisplayBounds() -> [CGRect] {
+    var displayCount: UInt32 = 0
+    guard CGGetActiveDisplayList(0, nil, &displayCount) == .success,
+          displayCount > 0
+    else { return [] }
+
+    var displayIDs = [CGDirectDisplayID](
+        repeating: CGMainDisplayID(),
+        count: Int(displayCount)
+    )
+    let result = displayIDs.withUnsafeMutableBufferPointer { buffer in
+        CGGetActiveDisplayList(
+            displayCount,
+            buffer.baseAddress,
+            &displayCount
+        )
+    }
+    guard result == .success else { return [] }
+    return displayIDs.prefix(Int(displayCount)).map(CGDisplayBounds)
+}
+
 private func isNativeActivityToggleWindowTitle(_ value: String?) -> Bool {
     let normalized = value?
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1664,9 +1737,16 @@ private func nativeActivityToggleClickPoint(
 private enum NativeActivityPillSuppressionResult {
     case permissionRequired
     case codexNotRunning
+    case badgeHidden
     case muted
     case buttonNotFound
     case actionFailed
+}
+
+private enum NativeActivityBadgeWindowHidingResult {
+    case alreadyHidden
+    case moved
+    case failed
 }
 
 private enum NativeActivitySuppressionStrategy: Equatable {
@@ -1708,6 +1788,9 @@ private final class NativeActivityPillSuppressor {
         }
         guard !codexApplications.isEmpty else { return .codexNotRunning }
 
+        let displayBounds = activeDisplayBounds()
+        var badgeWindowHidden = false
+        var badgeWindowHidingFailed = false
         var foundNotification = false
         var performedMenuAction = false
         for application in codexApplications {
@@ -1725,6 +1808,28 @@ private final class NativeActivityPillSuppressor {
                     attribute(kAXTitleAttribute as CFString, of: $0) as? String
                 )
             }
+            for window in activityWindows {
+                let title = attribute(
+                    kAXTitleAttribute as CFString,
+                    of: window
+                ) as? String
+                let hasShowActivityButton = showActivityButton(in: window) != nil
+                guard shouldHideNativeActivityBadgeWindow(
+                    title: title,
+                    hasShowActivityButton: hasShowActivityButton
+                ) else { continue }
+
+                switch hideActivityBadgeWindow(
+                    window,
+                    displayBounds: displayBounds
+                ) {
+                case .alreadyHidden, .moved:
+                    badgeWindowHidden = true
+                case .failed:
+                    badgeWindowHidingFailed = true
+                }
+            }
+
             var notificationButtons = activityWindows.flatMap {
                 activityNotificationButtons(in: $0)
             }
@@ -1761,9 +1866,49 @@ private final class NativeActivityPillSuppressor {
             }
         }
 
+        if badgeWindowHidingFailed { return .actionFailed }
         if performedMenuAction { return .muted }
+        if badgeWindowHidden { return .badgeHidden }
         if foundNotification { return .actionFailed }
         return .buttonNotFound
+    }
+
+    private func showActivityButton(in root: AXUIElement) -> AXUIElement? {
+        descendants(in: root, maximumElements: 1_200).first { element in
+            supportsPress(element)
+                && accessibilityStrings(of: element).contains(where: {
+                    isShowActivityAccessibilityLabel($0)
+                })
+        }
+    }
+
+    private func hideActivityBadgeWindow(
+        _ window: AXUIElement,
+        displayBounds: [CGRect]
+    ) -> NativeActivityBadgeWindowHidingResult {
+        guard let size = elementSize(window),
+              let targetOrigin = offscreenOrigin(
+                  displayBounds: displayBounds,
+                  windowSize: size
+              )
+        else { return .failed }
+
+        if let position = elementPosition(window) {
+            let frame = CGRect(origin: position, size: size)
+            if displayBounds.allSatisfy({ !$0.intersects(frame) }) {
+                return .alreadyHidden
+            }
+        }
+
+        var mutableOrigin = targetOrigin
+        guard let positionValue = AXValueCreate(.cgPoint, &mutableOrigin),
+              AXUIElementSetAttributeValue(
+                  window,
+                  kAXPositionAttribute as CFString,
+                  positionValue
+              ) == .success
+        else { return .failed }
+        return .moved
     }
 
     private func activityNotificationButtons(
@@ -1882,14 +2027,39 @@ private final class NativeActivityPillSuppressor {
     }
 
     private func elementArea(_ element: AXUIElement) -> CGFloat {
-        guard let value = attribute(kAXSizeAttribute as CFString, of: element),
-              CFGetTypeID(value) == AXValueGetTypeID()
-        else { return .greatestFiniteMagnitude }
-        var size = CGSize.zero
-        guard AXValueGetValue(value as! AXValue, .cgSize, &size) else {
+        guard let size = elementSize(element) else {
             return .greatestFiniteMagnitude
         }
         return size.width * size.height
+    }
+
+    private func elementPosition(_ element: AXUIElement) -> CGPoint? {
+        guard let value = attribute(
+            kAXPositionAttribute as CFString,
+            of: element
+        ),
+              CFGetTypeID(value) == AXValueGetTypeID()
+        else { return nil }
+        var position = CGPoint.zero
+        guard AXValueGetValue(value as! AXValue, .cgPoint, &position),
+              position.x.isFinite,
+              position.y.isFinite
+        else { return nil }
+        return position
+    }
+
+    private func elementSize(_ element: AXUIElement) -> CGSize? {
+        guard let value = attribute(kAXSizeAttribute as CFString, of: element),
+              CFGetTypeID(value) == AXValueGetTypeID()
+        else { return nil }
+        var size = CGSize.zero
+        guard AXValueGetValue(value as! AXValue, .cgSize, &size),
+              size.width.isFinite,
+              size.height.isFinite,
+              size.width > 0,
+              size.height > 0
+        else { return nil }
+        return size
     }
 }
 
@@ -8533,13 +8703,19 @@ private func printAccessibilityStatus() -> Never {
         print("accessibility: authorized")
         exit(0)
     }
-    fputs("accessibility: required for muting Codex activity pills\n", stderr)
+    fputs(
+        "accessibility: required for hiding and muting Codex activity UI\n",
+        stderr
+    )
     exit(1)
 }
 
 private func suppressNativeActivityOnce() -> Never {
     let result = NativeActivityPillSuppressor().suppressActivityPillsIfNeeded()
     switch result {
+    case .badgeHidden:
+        print("native-activity: badge hidden")
+        exit(0)
     case .muted:
         print("native-activity: muted")
         exit(0)
@@ -9062,6 +9238,71 @@ private func runLifecycleSelfTest() -> Never {
         }
     }
 
+    let showActivityLabels = [
+        ("Show activity, 1 item", true),
+        ("  SHOW ACTIVITY, 27 ITEMS  ", true),
+        ("显示活动，1 项", true),
+        ("显示活动, 12项", true),
+        ("Show activity", false),
+        ("Show activity, one item", false),
+        ("Hide activity", false),
+    ]
+    for (label, expected) in showActivityLabels {
+        guard isShowActivityAccessibilityLabel(label) == expected else {
+            fputs(
+                "show-activity label '\(label)' did not match expected=\(expected)\n",
+                stderr
+            )
+            exit(1)
+        }
+    }
+
+    let badgeWindowCases: [(String?, Bool, Bool)] = [
+        ("Codex Pet Composition Surface", true, true),
+        ("Codex Pet Composition Surface", false, false),
+        ("Codex Pet Activity Stack Backing", true, false),
+    ]
+    for (title, hasShowActivityButton, expected) in badgeWindowCases {
+        guard shouldHideNativeActivityBadgeWindow(
+            title: title,
+            hasShowActivityButton: hasShowActivityButton
+        ) == expected
+        else {
+            fputs("native activity badge-window selection failed\n", stderr)
+            exit(1)
+        }
+    }
+
+    let displayBounds = [
+        CGRect(x: -1_920, y: 0, width: 1_920, height: 1_080),
+        CGRect(x: 0, y: -180, width: 2_560, height: 1_440),
+    ]
+    let badgeWindowSize = CGSize(width: 34, height: 34)
+    guard let hiddenBadgeOrigin = offscreenOrigin(
+        displayBounds: displayBounds,
+        windowSize: badgeWindowSize,
+        margin: 64
+    ),
+          abs(hiddenBadgeOrigin.x - (-2_018)) <= 0.01,
+          abs(hiddenBadgeOrigin.y - (-278)) <= 0.01,
+          displayBounds.allSatisfy({
+              !$0.intersects(
+                  CGRect(origin: hiddenBadgeOrigin, size: badgeWindowSize)
+              )
+          }),
+          offscreenOrigin(
+              displayBounds: [],
+              windowSize: badgeWindowSize
+          ) == nil,
+          offscreenOrigin(
+              displayBounds: displayBounds,
+              windowSize: .zero
+          ) == nil
+    else {
+        fputs("native activity badge offscreen placement failed\n", stderr)
+        exit(1)
+    }
+
     guard isNativeActivityToggleWindowTitle("Codex Pet Voice Controls Backing"),
           !isNativeActivityToggleWindowTitle("Codex Pet Activity Stack Backing"),
           let togglePoint = nativeActivityToggleClickPoint(
@@ -9117,7 +9358,7 @@ private func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
-    print("lifecycle-self-test: desktop-app=5/5 visibility=4/4 pet-click-restore=5/5 activity-window=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut status-item=restore")
+    print("lifecycle-self-test: desktop-app=5/5 visibility=4/4 pet-click-restore=5/5 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut status-item=restore")
     exit(0)
 }
 
