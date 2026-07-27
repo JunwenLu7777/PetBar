@@ -17,13 +17,13 @@ ChatBird NT 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Ju
 - ChatBird NT 宠物 ID：`chatbird-nt`。
 - ChatBird 额度面板安装位置：`~/Applications/ChatBird 额度面板.app`。
 - LaunchAgent label：`dev.chatbird.codex-quota-panel`。
-- 左侧可在 Codex 与 Claude Code 间切换：Codex 显示周额度，Claude Code 同时显示 5h、周额度与 Fable 周额度；不显示 Token、Credits 或行情模块。
+- 检测到 Claude Code CLI 时，左侧可在 Codex 与 Claude Code 间切换：Codex 显示周额度，Claude Code 同时显示 5h、周额度与 Fable 周额度；未安装 Claude Code 时只显示 Codex。已安装但未登录或读取失败时保留 Claude Code 入口并显示对应状态；不显示 Token、Credits 或行情模块。
 - 面板约 30 ms 跟随宠物窗口；即使 Codex 原生任务气泡短暂出现，也只识别宠物本体，箭头与面板中心不会被气泡带偏。
 - 箭头尖端到宠物头顶保持 14 个逻辑像素，箭头中心严格对齐可见宠物中心。
 - 点击面板“收起”后，单击宠物或点击菜单栏 “ChatBird” 即可恢复显示。
 - Codex 未运行时会立即关闭已知任务的原生气泡；若安装时 Codex 正在运行，ChatBird 会在 Codex 完全退出且状态落盘稳定后自动同步，避免下次打开时旧气泡恢复。
 - 若用户已经授予辅助功能权限，面板会约每 2 秒通过 Codex 自带的“静音任务”菜单关闭当前运行中新出现的原生气泡；不会移动鼠标或发送按键，只匹配固定辅助功能标签，其他字符串不保留、不记录、不上传。未授权时仍使用退出后的磁盘同步，新任务首个气泡可手动静音。
-- 横向 388×226 基准面板采用额度与任务列表左右分栏，默认实显不小于约 369×215；Codex 周额度下方显示本期重置时间与剩余时长。任务状态约每 2 秒从本机 Codex 与 Claude Code 状态读取，点击任务行可返回对应 Codex 任务或在 Terminal 恢复 Claude 会话。
+- 横向 388×226 基准面板采用额度与任务列表左右分栏，默认实显不小于约 369×215；Codex 周额度下方显示本期重置时间与剩余时长。任务状态约每 2 秒从本机 Codex 与可用的 Claude Code 状态读取；未安装 Claude Code 时不显示其残留会话。点击任务行可返回对应 Codex 任务或在 Terminal 恢复 Claude 会话。
 - 面板正文使用 14 pt 基准字号，并按宠物可见图像比例同步缩放。
 - 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json` 和会话公开输出；不会展示 Claude thinking、工具参数或原始工具输出，也不会发起远程第三方行情请求。
 

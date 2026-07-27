@@ -19,6 +19,10 @@ private let followInterval: TimeInterval = 0.03
 private let idlePetLocationPollInterval: TimeInterval = 0.20
 private let petMovementGraceInterval: TimeInterval = 0.50
 private let overlayStateRefreshInterval: TimeInterval = 0.25
+private let panelDefaultWindowLevel = NSWindow.Level.statusBar
+private let panelNativeActivityWindowLevel = NSWindow.Level(
+    rawValue: NSWindow.Level.statusBar.rawValue + 1
+)
 private let taskProgressRowHeight: CGFloat = 28
 private let maximumVisibleTaskRows = 5
 
@@ -1586,16 +1590,8 @@ private func openClaudeSession(
         atPath: workingDirectory,
         isDirectory: &isDirectory
     ), isDirectory.boolValue else { return false }
-    let home = FileManager.default.homeDirectoryForCurrentUser
-    let executableCandidates = [
-        ProcessInfo.processInfo.environment["CLAUDE_BIN"],
-        home.appendingPathComponent(".local/bin/claude").path,
-        "/opt/homebrew/bin/claude",
-        "/usr/local/bin/claude",
-    ].compactMap { $0 }
-    guard let executablePath = executableCandidates.first(where: {
-        FileManager.default.isExecutableFile(atPath: $0)
-    }), let command = claudeResumeCommand(
+    guard let executablePath = locateClaudeExecutable()?.path,
+          let command = claudeResumeCommand(
         sessionID: sessionID,
         workingDirectory: workingDirectory,
         executablePath: executablePath
@@ -2210,6 +2206,44 @@ private enum QuotaProvider: String, CaseIterable {
             return "terminal"
         }
     }
+}
+
+private func quotaProviders(claudeCodeAvailable: Bool) -> [QuotaProvider] {
+    claudeCodeAvailable ? QuotaProvider.allCases : [.codex]
+}
+
+private func resolvedQuotaProvider(
+    preferred: QuotaProvider,
+    availableProviders: [QuotaProvider]
+) -> QuotaProvider {
+    if availableProviders.contains(preferred) {
+        return preferred
+    }
+    if availableProviders.contains(.codex) {
+        return .codex
+    }
+    return availableProviders.first ?? .codex
+}
+
+private func locateClaudeExecutable(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+    isExecutableFile: (String) -> Bool = {
+        FileManager.default.isExecutableFile(atPath: $0)
+    }
+) -> URL? {
+    let candidatePaths: [String?] = [
+        environment["CLAUDE_BIN"],
+        homeDirectory.appendingPathComponent(".local/bin/claude").path,
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+    ]
+    let candidates: [String] = candidatePaths.compactMap { path -> String? in
+        guard let path, !path.isEmpty else { return nil }
+        return path
+    }
+    return candidates.first(where: isExecutableFile)
+        .map(URL.init(fileURLWithPath:))
 }
 
 private final class QuotaProviderPreference {
@@ -4032,7 +4066,7 @@ private final class ClaudeTaskProgressReader {
     }
 
     private func readAgents() -> [ClaudeAgentSnapshot] {
-        guard let claudeURL = locateClaude() else { return [] }
+        guard let claudeURL = locateClaudeExecutable() else { return [] }
         let process = Process()
         let stdout = Pipe()
         let stderr = Pipe()
@@ -4208,19 +4242,6 @@ private final class ClaudeTaskProgressReader {
         }
     }
 
-    private func locateClaude() -> URL? {
-        let home = fileManager.homeDirectoryForCurrentUser
-        let candidates = [
-            ProcessInfo.processInfo.environment["CLAUDE_BIN"],
-            home.appendingPathComponent(".local/bin/claude").path,
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-        ].compactMap { $0 }
-        return candidates.first(where: {
-            fileManager.isExecutableFile(atPath: $0)
-        }).map(URL.init(fileURLWithPath:))
-    }
-
     private func launchEnvironment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let standardPath = [
@@ -4304,18 +4325,32 @@ private final class ClaudeTaskProgressReader {
     private static let iso8601 = ISO8601DateFormatter()
 }
 
+private func combinedTaskProgressItems(
+    codexItems: [TaskProgressItem],
+    claudeItems: [TaskProgressItem],
+    claudeCodeAvailable: Bool
+) -> [TaskProgressItem] {
+    codexItems + (claudeCodeAvailable ? claudeItems : [])
+}
+
 private final class CombinedTaskProgressReader {
     private let codexReader = CodexTaskProgressReader()
     private let claudeReader = ClaudeTaskProgressReader()
 
-    func read() -> TaskProgressSnapshot {
+    func read(claudeCodeAvailable: Bool = true) -> TaskProgressSnapshot {
         let codexItems = codexReader.read().items.filter {
             $0.kind != .idle && $0.kind != .reading
         }
-        let claudeItems = claudeReader.read().items.filter {
-            $0.kind != .idle && $0.kind != .reading
-        }
-        return .displaying(codexItems + claudeItems)
+        let claudeItems = claudeCodeAvailable
+            ? claudeReader.read().items.filter {
+                $0.kind != .idle && $0.kind != .reading
+            }
+            : []
+        return .displaying(combinedTaskProgressItems(
+            codexItems: codexItems,
+            claudeItems: claudeItems,
+            claudeCodeAvailable: claudeCodeAvailable
+        ))
     }
 }
 
@@ -4412,12 +4447,21 @@ private func quotaFailurePresentation(
     provider: QuotaProvider = .codex
 ) -> QuotaFailurePresentation {
     let displayError: String
+    var statusText = "1 分钟后自动重试"
     if provider == .claudeCode, let quotaError = error as? ClaudeQuotaError {
         switch quotaError {
         case .claudeNotFound:
             displayError = "未找到 Claude Code"
-        case .launchFailed, .captureFailed, .parseFailed:
-            displayError = "无法读取 Claude 额度"
+            statusText = "安装后自动显示"
+        case .authenticationRequired:
+            displayError = "请先登录 Claude Code"
+            statusText = "登录后点击刷新"
+        case .launchFailed:
+            displayError = "Claude Code 启动失败"
+        case .captureFailed:
+            displayError = "Claude 额度读取失败"
+        case .parseFailed:
+            displayError = "无法识别 Claude 额度"
         }
     } else if let quotaError = error as? QuotaClientError {
         switch quotaError {
@@ -4433,12 +4477,13 @@ private func quotaFailurePresentation(
     }
     return QuotaFailurePresentation(
         errorText: hasExistingRows ? nil : displayError,
-        statusText: "1 分钟后自动重试"
+        statusText: statusText
     )
 }
 
 private enum ClaudeQuotaError: LocalizedError {
     case claudeNotFound
+    case authenticationRequired
     case launchFailed
     case captureFailed
     case parseFailed
@@ -4447,6 +4492,8 @@ private enum ClaudeQuotaError: LocalizedError {
         switch self {
         case .claudeNotFound:
             return "没有找到 Claude Code"
+        case .authenticationRequired:
+            return "Claude Code 尚未登录"
         case .launchFailed:
             return "无法启动 Claude Code"
         case .captureFailed:
@@ -4462,6 +4509,19 @@ private struct ClaudeQuotaSnapshot: Equatable {
 }
 
 private enum ClaudeQuotaParser {
+    static func requiresAuthentication(_ rawText: String) -> Bool {
+        let clean = stripTerminalControlSequences(rawText).lowercased()
+        return [
+            "not logged in",
+            "not signed in",
+            "please log in",
+            "please login",
+            "authentication required",
+            "login required",
+            "run /login",
+        ].contains(where: clean.contains)
+    }
+
     static func parse(_ rawText: String) throws -> ClaudeQuotaSnapshot {
         let clean = stripTerminalControlSequences(rawText)
         guard !clean.isEmpty else { throw ClaudeQuotaError.parseFailed }
@@ -4946,11 +5006,14 @@ private final class ClaudeQuotaClient {
     }
 
     private func fetchSynchronously() -> Result<ClaudeQuotaSnapshot, Error> {
-        guard let claudeURL = locateClaude() else {
+        guard let claudeURL = locateClaudeExecutable() else {
             return .failure(ClaudeQuotaError.claudeNotFound)
         }
         do {
             let rawText = try captureUsage(from: claudeURL)
+            if ClaudeQuotaParser.requiresAuthentication(rawText) {
+                return .failure(ClaudeQuotaError.authenticationRequired)
+            }
             return .success(try ClaudeQuotaParser.parse(rawText))
         } catch let error as ClaudeQuotaError {
             return .failure(error)
@@ -5119,19 +5182,6 @@ private final class ClaudeQuotaClient {
         return text
     }
 
-    private func locateClaude() -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let candidates = [
-            ProcessInfo.processInfo.environment["CLAUDE_BIN"],
-            home.appendingPathComponent(".local/bin/claude").path,
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-        ].compactMap { $0 }
-        return candidates.first(where: {
-            FileManager.default.isExecutableFile(atPath: $0)
-        }).map(URL.init(fileURLWithPath:))
-    }
-
     private func prepareProbeWorkingDirectory() throws -> URL {
         let directory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Caches", isDirectory: true)
@@ -5261,6 +5311,18 @@ private final class QuotaPanelView: NSView {
     var rows: [QuotaRow] = [] { didSet { needsDisplay = true } }
     var providerRemainingPercents: [QuotaProvider: Int] = [:] {
         didSet { needsDisplay = true }
+    }
+    var availableQuotaProviders = QuotaProvider.allCases {
+        didSet {
+            guard availableQuotaProviders != oldValue else { return }
+            if let hoveredQuotaProvider,
+               !availableQuotaProviders.contains(hoveredQuotaProvider) {
+                self.hoveredQuotaProvider = nil
+            }
+            needsDisplay = true
+            updateTrackingAreas()
+            window?.invalidateCursorRects(for: self)
+        }
     }
     var codexResetCredits: CodexResetCreditsSnapshot? {
         didSet { needsDisplay = true }
@@ -5628,7 +5690,9 @@ private final class QuotaPanelView: NSView {
         drawRefreshIcon(in: quotaRefreshButtonRect(in: bodyRect))
 
         drawText(
-            "Codex + Claude 任务",
+            availableQuotaProviders.contains(.claudeCode)
+                ? "Codex + Claude 任务"
+                : "Codex 任务",
             in: NSRect(x: taskRect.minX + 2, y: 42, width: taskRect.width - 4, height: 16),
             font: .systemFont(ofSize: 10.2, weight: .semibold),
             color: NSColor.white.withAlphaComponent(0.58)
@@ -5656,7 +5720,7 @@ private final class QuotaPanelView: NSView {
         addTrackingArea(hideTrackingArea)
         interactiveTrackingAreas.append(hideTrackingArea)
 
-        for provider in QuotaProvider.allCases {
+        for provider in availableQuotaProviders {
             let providerTrackingArea = NSTrackingArea(
                 rect: quotaProviderButtonRect(for: provider, in: panelBodyRect()),
                 options: [.mouseEnteredAndExited, .activeAlways],
@@ -5734,7 +5798,7 @@ private final class QuotaPanelView: NSView {
             onRequestQuotaRefresh?()
             return
         }
-        for provider in QuotaProvider.allCases
+        for provider in availableQuotaProviders
             where quotaProviderButtonRect(for: provider, in: bodyRect).contains(point)
         {
             selectedQuotaProvider = provider
@@ -5760,7 +5824,7 @@ private final class QuotaPanelView: NSView {
         super.resetCursorRects()
         let bodyRect = panelBodyRect()
         addCursorRect(hideButtonRect(in: bodyRect), cursor: .pointingHand)
-        for provider in QuotaProvider.allCases {
+        for provider in availableQuotaProviders {
             addCursorRect(
                 quotaProviderButtonRect(for: provider, in: bodyRect),
                 cursor: .pointingHand
@@ -6081,7 +6145,7 @@ private final class QuotaPanelView: NSView {
     }
 
     private func drawQuotaProviderButtons(in bodyRect: NSRect) {
-        for provider in QuotaProvider.allCases {
+        for provider in availableQuotaProviders {
             let rect = quotaProviderButtonRect(for: provider, in: bodyRect)
             let isSelected = provider == selectedQuotaProvider
             let isHovered = provider == hoveredQuotaProvider
@@ -6466,6 +6530,142 @@ private func isMascotAnchorWindow(
         && rect.width <= 900
         && rect.height >= 80
         && rect.height <= 300
+}
+
+private struct WindowStackEntry {
+    let number: CGWindowID
+    let ownerProcessID: pid_t?
+    let ownerName: String
+    let name: String
+    let alpha: Double
+    let bounds: CGRect
+}
+
+private func isCodexNativeWindowOwner(_ ownerName: String) -> Bool {
+    let normalizedOwner = ownerName.lowercased()
+    return normalizedOwner.contains("codex")
+        || normalizedOwner.contains("chatgpt")
+}
+
+private func isCodexNativeActivityStackWindow(
+    _ entry: WindowStackEntry
+) -> Bool {
+    let normalizedName = entry.name
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    return isCodexNativeWindowOwner(entry.ownerName)
+        && normalizedName == "codex pet activity stack backing"
+        && entry.alpha > 0.05
+        && entry.bounds.width >= 160
+        && entry.bounds.width <= 900
+        && entry.bounds.height >= 32
+        && entry.bounds.height <= 300
+}
+
+private func isCodexPetCompositionSurfaceWindow(
+    _ entry: WindowStackEntry
+) -> Bool {
+    let normalizedName = entry.name
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    return isCodexNativeWindowOwner(entry.ownerName)
+        && normalizedName == "codex pet composition surface"
+        && entry.alpha > 0.05
+        && entry.bounds.width >= 160
+        && entry.bounds.width <= 2_000
+        && entry.bounds.height >= 80
+        && entry.bounds.height <= 2_000
+}
+
+private func nativeWindowOwnersMatch(
+    _ lhs: WindowStackEntry,
+    _ rhs: WindowStackEntry
+) -> Bool {
+    if let lhsPID = lhs.ownerProcessID,
+       let rhsPID = rhs.ownerProcessID,
+       lhsPID > 0,
+       rhsPID > 0
+    {
+        return lhsPID == rhsPID
+    }
+    return lhs.ownerName.caseInsensitiveCompare(rhs.ownerName) == .orderedSame
+}
+
+private func nativeActivityStackOccludesPanel(
+    entries: [WindowStackEntry],
+    panelWindowNumber: CGWindowID
+) -> Bool {
+    guard let panelIndex = entries.firstIndex(where: {
+        $0.number == panelWindowNumber
+    }) else { return false }
+    let panelBounds = entries[panelIndex].bounds
+    guard panelBounds.width > 0, panelBounds.height > 0 else { return false }
+
+    let intersectingActivityStacks = entries.enumerated().filter { _, entry in
+        isCodexNativeActivityStackWindow(entry)
+            && entry.bounds.intersects(panelBounds)
+    }
+    guard !intersectingActivityStacks.isEmpty else { return false }
+
+    // CGWindowListCopyWindowInfo returns windows from front to back. Newer
+    // Codex builds use the backing window for the activity pill's geometry,
+    // while a separate composition surface in front of the panel draws it.
+    // Treat either window as the z-order signal, but require the backing
+    // window's exact bounds to intersect the ChatBird panel.
+    return intersectingActivityStacks.contains { activityIndex, activity in
+        if activityIndex < panelIndex {
+            return true
+        }
+        return entries[..<panelIndex].contains { surface in
+            isCodexPetCompositionSurfaceWindow(surface)
+                && nativeWindowOwnersMatch(surface, activity)
+                && surface.bounds.intersects(panelBounds)
+        }
+    }
+}
+
+private func nativeActivityStackIntersectsPanel(
+    entries: [WindowStackEntry],
+    panelWindowNumber: CGWindowID
+) -> Bool {
+    guard let panel = entries.first(where: {
+        $0.number == panelWindowNumber
+    }) else { return false }
+    guard panel.bounds.width > 0, panel.bounds.height > 0 else { return false }
+    return entries.contains { entry in
+        isCodexNativeActivityStackWindow(entry)
+            && entry.bounds.intersects(panel.bounds)
+    }
+}
+
+private func currentWindowStackEntries() -> [WindowStackEntry] {
+    let options: CGWindowListOption = [
+        .optionOnScreenOnly,
+        .excludeDesktopElements,
+    ]
+    guard let windows = CGWindowListCopyWindowInfo(
+        options,
+        kCGNullWindowID
+    ) as? [[String: Any]] else { return [] }
+
+    return windows.compactMap { window in
+        guard let number = window[kCGWindowNumber as String] as? NSNumber,
+              let ownerName = window[kCGWindowOwnerName as String] as? String,
+              let alpha = (window[kCGWindowAlpha as String] as? NSNumber)?
+                .doubleValue,
+              let rawBounds = window[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: rawBounds)
+        else { return nil }
+        return WindowStackEntry(
+            number: number.uint32Value,
+            ownerProcessID: (window[kCGWindowOwnerPID as String] as? NSNumber)?
+                .int32Value,
+            ownerName: ownerName,
+            name: window[kCGWindowName as String] as? String ?? "",
+            alpha: alpha,
+            bounds: bounds
+        )
+    }
 }
 
 private func mascotEffectPetGeometry(
@@ -7407,6 +7607,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastLocatedAt: CFAbsoluteTime = 0
     private var lastPetLocationPollAt: CFAbsoluteTime = 0
     private var lastPetMovementAt: CFAbsoluteTime = 0
+    private var lastWindowStackCheckAt: CFAbsoluteTime = 0
     private var currentPanelScale: CGFloat = 1
     private var currentBasePanelSize = expandedPanelSize
     private var isPanelHiddenByUser = false
@@ -7465,7 +7666,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         _ = petSelectionStore.selectChatBird()
-        quotaView.selectedQuotaProvider = quotaProviderPreference.selectedProvider
+        let availableProviders = synchronizeQuotaProviderAvailability()
         makePanel()
         startClaudePermissionHook()
         makeStatusItem()
@@ -7475,9 +7676,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         healthWriter.write(status: "started", panelVisible: false, locationSource: nil, force: true)
         followPet()
         refreshQuota()
-        refreshBackgroundQuotaSummary(
-            for: quotaView.selectedQuotaProvider == .codex ? .claudeCode : .codex
-        )
+        if let backgroundProvider = availableProviders.first(where: {
+            $0 != quotaView.selectedQuotaProvider
+        }) {
+            refreshBackgroundQuotaSummary(for: backgroundProvider)
+        }
         refreshTaskProgress()
         nativeActivityPillSuppressionMonitor.start()
 
@@ -7526,7 +7729,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = .statusBar
+        panel.level = panelDefaultWindowLevel
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = false
         panel.isMovable = false
@@ -7761,6 +7964,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         isPanelHiddenByUser = true
         taskActivityPreviewController.hide()
         quotaView.setRunningTaskBadgeAnimationsEnabled(false)
+        panel.level = panelDefaultWindowLevel
         panel.orderOut(nil)
         updateStatusItem()
         healthWriter.write(
@@ -7786,8 +7990,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             lastLocatedAt = 0
             lastPetLocationPollAt = 0
             lastPetMovementAt = 0
+            lastWindowStackCheckAt = 0
             taskActivityPreviewController.hide()
             quotaView.setRunningTaskBadgeAnimationsEnabled(false)
+            panel.level = panelDefaultWindowLevel
             panel.orderOut(nil)
             healthWriter.write(
                 status: "waiting-for-codex",
@@ -7822,6 +8028,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             taskActivityPreviewController.hide()
             quotaView.setRunningTaskBadgeAnimationsEnabled(false)
+            panel.level = panelDefaultWindowLevel
             panel.orderOut(nil)
             healthWriter.write(
                 status: "waiting-for-pet-location",
@@ -7838,6 +8045,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         if isPanelHiddenByUser {
             taskActivityPreviewController.hide()
             quotaView.setRunningTaskBadgeAnimationsEnabled(false)
+            panel.level = panelDefaultWindowLevel
             panel.orderOut(nil)
             claudePermissionPanelController?.reposition()
             return
@@ -7888,11 +8096,42 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             quotaView.refreshHoveredTaskAnchor()
             claudePermissionPanelController?.reposition()
         }
+
+        var shouldReorderForNativeActivity = false
+        if panel.isVisible,
+           forceLocationPoll
+            || now - lastWindowStackCheckAt >= overlayStateRefreshInterval
+        {
+            lastWindowStackCheckAt = now
+            let windowNumber = panel.windowNumber
+            if windowNumber > 0 {
+                let entries = currentWindowStackEntries()
+                let panelWindowNumber = CGWindowID(windowNumber)
+                let activityStackIntersects =
+                    nativeActivityStackIntersectsPanel(
+                        entries: entries,
+                        panelWindowNumber: panelWindowNumber
+                    )
+                let targetLevel = activityStackIntersects
+                    ? panelNativeActivityWindowLevel
+                    : panelDefaultWindowLevel
+                let panelLevelChanged =
+                    panel.level.rawValue != targetLevel.rawValue
+                if panelLevelChanged {
+                    panel.level = targetLevel
+                }
+                shouldReorderForNativeActivity = panelLevelChanged
+                    || nativeActivityStackOccludesPanel(
+                        entries: entries,
+                        panelWindowNumber: panelWindowNumber
+                    )
+            }
+        }
         if shouldPresentPanel(
             codexDesktopRunning: true,
             hiddenByUser: isPanelHiddenByUser,
             hasPetLocation: true
-        ), !panel.isVisible {
+        ), !panel.isVisible || shouldReorderForNativeActivity {
             panel.orderFrontRegardless()
         }
         healthWriter.write(
@@ -7906,7 +8145,34 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    @discardableResult
+    private func synchronizeQuotaProviderAvailability() -> [QuotaProvider] {
+        let availableProviders = quotaProviders(
+            claudeCodeAvailable: locateClaudeExecutable() != nil
+        )
+        let preferredProvider = quotaProviderPreference.selectedProvider
+        let resolvedProvider = resolvedQuotaProvider(
+            preferred: preferredProvider,
+            availableProviders: availableProviders
+        )
+        quotaView.availableQuotaProviders = availableProviders
+        if preferredProvider != resolvedProvider {
+            quotaProviderPreference.selectedProvider = resolvedProvider
+        }
+        if quotaView.selectedQuotaProvider != resolvedProvider {
+            quotaView.selectedQuotaProvider = resolvedProvider
+            quotaView.rows = quotaRowsByProvider[resolvedProvider] ?? []
+            quotaView.codexResetCredits = codexResetCreditsSnapshot
+            quotaView.errorText = nil
+            quotaView.statusText = quotaView.rows.isEmpty
+                ? "正在读取额度…"
+                : "正在更新…"
+        }
+        return availableProviders
+    }
+
     private func refreshQuota() {
+        synchronizeQuotaProviderAvailability()
         guard !isRefreshing else { return }
         isRefreshing = true
         let provider = quotaView.selectedQuotaProvider
@@ -7982,6 +8248,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func selectQuotaProvider(_ provider: QuotaProvider) {
+        guard quotaView.availableQuotaProviders.contains(provider) else { return }
         quotaProviderPreference.selectedProvider = provider
         quotaView.selectedQuotaProvider = provider
         quotaView.rows = quotaRowsByProvider[provider] ?? []
@@ -8045,9 +8312,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshTaskProgress() {
         guard !isRefreshingTaskProgress else { return }
         isRefreshingTaskProgress = true
+        let claudeCodeAvailable = synchronizeQuotaProviderAvailability()
+            .contains(.claudeCode)
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let snapshot = self.taskProgressReader.read()
+            let snapshot = self.taskProgressReader.read(
+                claudeCodeAvailable: claudeCodeAvailable
+            )
             DispatchQueue.main.async {
                 self.isRefreshingTaskProgress = false
                 self.quotaView.taskProgress = snapshot
@@ -8457,6 +8728,91 @@ private func runPlacementSelfTest() -> Never {
         exit(1)
     }
 
+    let panelStackEntry = WindowStackEntry(
+        number: 10,
+        ownerProcessID: 100,
+        ownerName: "ChatBird 额度面板",
+        name: "",
+        alpha: 1,
+        bounds: CGRect(x: 100, y: 100, width: 388, height: 226)
+    )
+    let activityStackEntry = WindowStackEntry(
+        number: 20,
+        ownerProcessID: 200,
+        ownerName: "ChatGPT",
+        name: "Codex Pet Activity Stack Backing",
+        alpha: 1,
+        bounds: CGRect(x: 120, y: 120, width: 345, height: 54)
+    )
+    let separateActivityStackEntry = WindowStackEntry(
+        number: 21,
+        ownerProcessID: 200,
+        ownerName: "ChatGPT",
+        name: "Codex Pet Activity Stack Backing",
+        alpha: 1,
+        bounds: CGRect(x: 700, y: 120, width: 345, height: 54)
+    )
+    let compositionSurfaceEntry = WindowStackEntry(
+        number: 22,
+        ownerProcessID: 200,
+        ownerName: "ChatGPT",
+        name: "Codex Pet Composition Surface",
+        alpha: 1,
+        bounds: CGRect(x: 0, y: 0, width: 768, height: 912)
+    )
+    let foreignCompositionSurfaceEntry = WindowStackEntry(
+        number: 23,
+        ownerProcessID: 201,
+        ownerName: "ChatGPT",
+        name: "Codex Pet Composition Surface",
+        alpha: 1,
+        bounds: CGRect(x: 0, y: 0, width: 768, height: 912)
+    )
+    guard isCodexNativeActivityStackWindow(activityStackEntry),
+          isCodexPetCompositionSurfaceWindow(compositionSurfaceEntry),
+          nativeActivityStackOccludesPanel(
+              entries: [activityStackEntry, panelStackEntry],
+              panelWindowNumber: panelStackEntry.number
+          ),
+          nativeActivityStackOccludesPanel(
+              entries: [
+                  compositionSurfaceEntry,
+                  panelStackEntry,
+                  activityStackEntry,
+              ],
+              panelWindowNumber: panelStackEntry.number
+          ),
+          !nativeActivityStackOccludesPanel(
+              entries: [panelStackEntry, activityStackEntry],
+              panelWindowNumber: panelStackEntry.number
+          ),
+          !nativeActivityStackOccludesPanel(
+              entries: [separateActivityStackEntry, panelStackEntry],
+              panelWindowNumber: panelStackEntry.number
+          ),
+          !nativeActivityStackOccludesPanel(
+              entries: [
+                  foreignCompositionSurfaceEntry,
+                  panelStackEntry,
+                  activityStackEntry,
+              ],
+              panelWindowNumber: panelStackEntry.number
+          ),
+          nativeActivityStackIntersectsPanel(
+              entries: [panelStackEntry, activityStackEntry],
+              panelWindowNumber: panelStackEntry.number
+          ),
+          !nativeActivityStackIntersectsPanel(
+              entries: [panelStackEntry, separateActivityStackEntry],
+              panelWindowNumber: panelStackEntry.number
+          ),
+          panelNativeActivityWindowLevel.rawValue
+              == panelDefaultWindowLevel.rawValue + 1
+    else {
+        fputs("native activity stack z-order self-test failed\n", stderr)
+        exit(1)
+    }
+
     let stateSignature = OverlayStateFileSignature(
         attributes: [
             .modificationDate: Date(timeIntervalSince1970: 1_000),
@@ -8563,7 +8919,7 @@ private func runPlacementSelfTest() -> Never {
         exit(1)
     }
 
-    print("placement-self-test: 6/6 passed; activity-pill-segmentation=2/2; activity-pill-centerError=0.0; unnamed-pet-windows=4/4; mascot-effect-geometry=2/2; mascot-scaling=6/6; visual-scaling=6/6; panel-scaling=6/6; overlay-state-cache=4/4; geometry-invalidation=4/4; pet-polling=6/6; gap=14.0; centerError=0.0")
+    print("placement-self-test: 6/6 passed; activity-pill-segmentation=2/2; activity-pill-centerError=0.0; unnamed-pet-windows=4/4; mascot-effect-geometry=2/2; native-activity-z-order=7/7; native-activity-level=3/3; mascot-scaling=6/6; visual-scaling=6/6; panel-scaling=6/6; overlay-state-cache=4/4; geometry-invalidation=4/4; pet-polling=6/6; gap=14.0; centerError=0.0")
     exit(0)
 }
 
@@ -10576,6 +10932,10 @@ private func runClaudeQuotaSelfTest() -> Never {
     7% used
     Resets Jul 30 at 12pm
     """
+    let authenticationFixture = """
+    Claude Code is not logged in.
+    Run /login to continue.
+    """
     _ = NSApplication.shared
     let providerView = QuotaPanelView(
         frame: NSRect(origin: .zero, size: panelSizeForTaskRows(1))
@@ -10590,6 +10950,7 @@ private func runClaudeQuotaSelfTest() -> Never {
     providerView.pointerSide = .bottom
     var clickedProvider: QuotaProvider?
     providerView.onSelectQuotaProvider = { clickedProvider = $0 }
+    providerView.availableQuotaProviders = [.codex]
     let providerPointInWindow = providerView.convert(
         NSPoint(x: 135, y: 20),
         to: nil
@@ -10606,8 +10967,49 @@ private func runClaudeQuotaSelfTest() -> Never {
         pressure: 1
     ) {
         providerView.mouseDown(with: event)
+        guard clickedProvider == nil else {
+            fputs("hidden Claude provider accepted a click\n", stderr)
+            exit(1)
+        }
+        providerView.availableQuotaProviders = QuotaProvider.allCases
+        providerView.mouseDown(with: event)
     }
 
+    let customClaudeURL = locateClaudeExecutable(
+        environment: ["CLAUDE_BIN": "/custom/bin/claude"],
+        homeDirectory: URL(fileURLWithPath: "/test-home", isDirectory: true),
+        isExecutableFile: { $0 == "/custom/bin/claude" }
+    )
+    let missingClaudeURL = locateClaudeExecutable(
+        environment: [:],
+        homeDirectory: URL(fileURLWithPath: "/test-home", isDirectory: true),
+        isExecutableFile: { _ in false }
+    )
+    let authenticationPresentation = quotaFailurePresentation(
+        for: ClaudeQuotaError.authenticationRequired,
+        hasExistingRows: false,
+        provider: .claudeCode
+    )
+    let codexTask = TaskProgressItem(
+        title: "Codex task",
+        kind: .running,
+        source: .codex
+    )
+    let claudeTask = TaskProgressItem(
+        title: "Claude task",
+        kind: .running,
+        source: .claudeCode
+    )
+    let codexOnlyTasks = combinedTaskProgressItems(
+        codexItems: [codexTask],
+        claudeItems: [claudeTask],
+        claudeCodeAvailable: false
+    )
+    let combinedTasks = combinedTaskProgressItems(
+        codexItems: [codexTask],
+        claudeItems: [claudeTask],
+        claudeCodeAvailable: true
+    )
     guard let remaining = try? ClaudeQuotaParser.parse(remainingFixture),
           let used = try? ClaudeQuotaParser.parse(usedFixture),
           let withoutFable = try? ClaudeQuotaParser.parse(withoutFableFixture),
@@ -10619,13 +11021,30 @@ private func runClaudeQuotaSelfTest() -> Never {
           QuotaProvider.codex.displayName == "Codex",
           QuotaProvider.claudeCode.displayName == "Claude Code",
           QuotaProvider.allCases == [.codex, .claudeCode],
+          quotaProviders(claudeCodeAvailable: false) == [.codex],
+          quotaProviders(claudeCodeAvailable: true) == [.codex, .claudeCode],
+          resolvedQuotaProvider(
+              preferred: .claudeCode,
+              availableProviders: [.codex]
+          ) == .codex,
+          resolvedQuotaProvider(
+              preferred: .claudeCode,
+              availableProviders: QuotaProvider.allCases
+          ) == .claudeCode,
+          ClaudeQuotaParser.requiresAuthentication(authenticationFixture),
+          authenticationPresentation.errorText == "请先登录 Claude Code",
+          authenticationPresentation.statusText == "登录后点击刷新",
+          customClaudeURL?.path == "/custom/bin/claude",
+          missingClaudeURL == nil,
+          codexOnlyTasks.map(\.source) == [.codex],
+          combinedTasks.map(\.source) == [.codex, .claudeCode],
           clickedProvider == .claudeCode
     else {
         fputs("claude quota self-test failed\n", stderr)
         exit(1)
     }
 
-    print("claude-quota-self-test: left-percent=3/3 used-percent=3/3 windows=5h+weekly+fable legacy-without-fable=pass provider-buttons=2/2 click-hit=pass")
+    print("claude-quota-self-test: left-percent=3/3 used-percent=3/3 windows=5h+weekly+fable legacy-without-fable=pass provider-buttons=2/2 click-hit=pass provider-visibility=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass")
     exit(0)
 }
 
