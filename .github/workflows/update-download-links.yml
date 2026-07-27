@@ -1,0 +1,76 @@
+name: update-download-links
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "已经发布的 ChatBird 语义化版本（例如 1.0.0）"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Resolve release version
+        id: release
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.version }}"
+          VERSION="${TAG#v}"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "只支持语义化 Release 版本，收到：$TAG" >&2
+            exit 1
+          }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Detect and verify ChatBird package
+        id: packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          ASSETS="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          ARCHIVE="ChatBird-NT-macOS-Universal-$VERSION.zip"
+          CHECKSUM="$ARCHIVE.sha256"
+          if ! grep -Fxq "$ARCHIVE" <<< "$ASSETS"; then
+            echo "Release $TAG 不是 ChatBird 发布，跳过 README 更新。"
+            echo "chatbird=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          grep -Fxq "$CHECKSUM" <<< "$ASSETS" || {
+            echo "Release $TAG 缺少校验文件：$CHECKSUM" >&2
+            exit 1
+          }
+          echo "chatbird=true" >> "$GITHUB_OUTPUT"
+
+      - name: Update README download table
+        if: steps.packages.outputs.chatbird == 'true'
+        run: ./scripts/update-readme-downloads.sh "${{ steps.release.outputs.version }}"
+
+      - name: Commit updated links
+        if: steps.packages.outputs.chatbird == 'true'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          if git diff --quiet -- README.md; then
+            echo "README 已经指向 ChatBird Release $VERSION"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "更新 ChatBird Release $VERSION 下载信息"
+          git push origin HEAD:main

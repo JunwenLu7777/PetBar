@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "pet": {
+    "id": "chatbird-nt",
+    "display_name": "ChatBird",
+    "sprite_version_number": 2,
+    "atlas": {
+      "width": 1536,
+      "height": 2288,
+      "columns": 8,
+      "rows": 11,
+      "cell_width": 192,
+      "cell_height": 208,
+      "png_sha256": "66cd60c9eefaeee8769ac7591e40c8d2a3f8991215644daa9a6da9fd3a9c2c20",
+      "webp_sha256": "b9aa75ac7005e6a3eac370edabbdb1e9bfa43bae4ac6202c4b71a71a140bf90d"
+    }
+  },
+  "generation": {
+    "standard_rows": 9,
+    "look_directions": 16,
+    "running_left_derivation": "framewise-horizontal-mirror-preserving-order",
+    "final_row_10_source": "imagegen-jobs.json",
+    "final_chroma_pass": "qa/chroma-despill-extended.json"
+  },
+  "validation": {
+    "atlas": "pass",
+    "standard_animation_review": "pass",
+    "direction_blind_hard_gates": "pass",
+    "direction_semantics": "pass",
+    "continuity": "pass-with-explained-review-warnings",
+    "independent_final_visual_qa": "pass"
+  },
+  "artifacts": {
+    "manifest": "final/pet.json",
+    "spritesheet": "final/spritesheet.webp",
+    "validation": "final/validation-extended.json",
+    "contact_sheet": "qa/contact-sheet-extended.png",
+    "direction_sheet": "qa/look-directions.png",
+    "blind_validation": "qa/direction-blind-validation.json",
+    "direction_semantics": "qa/direction-semantics.json",
+    "final_visual_qa": "qa/final-visual-qa.json"
+  },
+  "result": "pass"
+}

@@ -1,0 +1,53 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  chatbird-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject unresolved merge markers
+        run: "! git grep -n -E '^(<<<<<<<|=======|>>>>>>>)( |$)'"
+      - name: Validate ChatBird repository layout
+        run: python3 scripts/validate-repository-layout.py
+      - run: ./macos/ChatBirdQuotaPanel/scripts/build.sh
+      - name: Verify ChatBird macOS Universal 2 app and behavior
+        run: |
+          APP='macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app'
+          BIN="$APP/Contents/MacOS/ChatBirdQuotaPanel"
+          lipo "$BIN" -verify_arch arm64 x86_64
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")" = "12.3"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")" = "1"
+          test "$(vtool -show-build "$BIN" | grep -c 'minos 12.3')" -eq 2
+          codesign --verify --deep --strict "$APP"
+          "$BIN" --print-panel-config | grep 'version=1.0.0 edition=chatbird-nt petID=chatbird-nt codexWeeklyQuotaOnly=true claudeQuotaPeriods=5h,weekly,fable width=388 height=226'
+          "$BIN" --self-test-placement | grep 'activity-pill-segmentation=2/2.*gap=14.0; centerError=0.0'
+          "$BIN" --self-test-lifecycle | grep 'pet-click-restore=5/5.*no-input-injection=2/2'
+          "$BIN" --self-test-native-notification-state | grep 'prepare=pass reinstall=pass restore=pass file-lifecycle=pass user-values=preserved'
+          "$BIN" --self-test-task-progress | grep 'lifecycle=7/7.*claude-terminal-focus=pid-chain+3-hosts.*claude-iterm-resume=2/2.*claude-otty=3/3.*claude-resume=2/2'
+          "$BIN" --self-test-chatbird-edition | grep 'edition=chatbird-nt pet=chatbird-nt persistence=pass duplicate-key=pass'
+          "$BIN" --self-test-weekly-quota | grep 'legacy-secondary=pass.*thresholds=7/7.*refresh=60s'
+          "$BIN" --self-test-claude-quota | grep 'left-percent=3/3 used-percent=3/3 windows=5h+weekly+fable.*click-hit=pass'
+          "$BIN" --self-test-claude-hook | grep 'protocol=3/3.*privacy=pass.*config=install+idempotent+uninstall'
+      - name: Build and inspect ChatBird macOS release
+        run: |
+          ./scripts/build-macos-release.sh
+          RELEASE='ChatBird-NT-macOS-Universal-1.0.0'
+          test -f "dist/$RELEASE.zip"
+          test -f "dist/$RELEASE.zip.sha256"
+          test -e "build/release/$RELEASE/pet/chatbird-nt/spritesheet.webp"
+          test -e "build/release/$RELEASE/quota-panel/ChatBird 额度面板.app"
+          unzip -tq "dist/$RELEASE.zip"
+          ./scripts/privacy-audit.sh
+      - run: zsh -n macos/package/*.command macos/ChatBirdQuotaPanel/scripts/*.sh script/*.sh scripts/*.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chatbird-nt-macos-1.0.0
+          if-no-files-found: error
+          path: |
+            dist/ChatBird-NT-macOS-Universal-1.0.0.zip
+            dist/ChatBird-NT-macOS-Universal-1.0.0.zip.sha256

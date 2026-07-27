@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "decision": "accept",
+  "source": "look-continuity.json",
+  "alpha_holes": 0,
+  "warnings": [
+    {
+      "pair": "247.5->270",
+      "disposition": "explained",
+      "reason": "The narrowed down-gaze eyes return to the neutral-height left cardinal while the body center changes by only 5.5 pixels and area ratio is 1.02."
+    },
+    {
+      "pair": "292.5->315",
+      "disposition": "explained",
+      "reason": "The strongest side silhouette begins opening toward a three-quarter pose; center delta is 3.4 pixels and area ratio is 1.03."
+    },
+    {
+      "pair": "337.5->000",
+      "disposition": "explained",
+      "reason": "The shallow three-quarter silhouette closes into the wider frontal up cardinal. Visual inspection shows no obvious pop; center delta is 5.0 pixels and the linear size change implied by the 1.15 area ratio is about seven percent."
+    }
+  ],
+  "visual_result": "The 16-frame loop stays on one baseline, keeps a coherent face screen and identity, crosses each quadrant in order, and contains no clipping or abrupt whole-sprite rotation."
+}

@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "overall_verdict": "pass",
+  "directions": [
+    {
+      "direction": "000",
+      "expected": "up",
+      "observed": "Frontal pose with tall raised cyan eyes and lifted face-screen read.",
+      "verdict": "pass",
+      "reason": "The up cardinal is unmistakable and passed the hard blind gate."
+    },
+    {
+      "direction": "022.5",
+      "expected": "up-right",
+      "observed": "Near-frontal raised gaze with a shallow screen-right turn.",
+      "verdict": "pass",
+      "reason": "Correct first clockwise intermediate; the shallow horizontal component remains intentionally subtle."
+    },
+    {
+      "direction": "045",
+      "expected": "up-right",
+      "observed": "Raised gaze and clear screen-right three-quarter turn.",
+      "verdict": "pass",
+      "reason": "Both vertical and horizontal components read in the expected quadrant."
+    },
+    {
+      "direction": "067.5",
+      "expected": "up-right",
+      "observed": "Strong screen-right turn with raised upright eye treatment.",
+      "verdict": "pass",
+      "reason": "The pose progresses smoothly toward the right cardinal."
+    },
+    {
+      "direction": "090",
+      "expected": "right",
+      "observed": "Unmistakable screen-right side view with the beak at the right edge.",
+      "verdict": "pass",
+      "reason": "The right cardinal passed the hard blind gate."
+    },
+    {
+      "direction": "112.5",
+      "expected": "down-right",
+      "observed": "Strong screen-right turn with visibly lowered eyelids.",
+      "verdict": "pass",
+      "reason": "Both components read in the down-right quadrant."
+    },
+    {
+      "direction": "135",
+      "expected": "down-right",
+      "observed": "Lowered gaze with a moderate screen-right turn.",
+      "verdict": "pass",
+      "reason": "The down component is clear; the shallower horizontal component is acceptable for an intermediate."
+    },
+    {
+      "direction": "157.5",
+      "expected": "down-right",
+      "observed": "Near-frontal down gaze with a shallow remaining screen-right turn.",
+      "verdict": "pass",
+      "reason": "Correct approach to the down cardinal; blind ambiguity affected only the intentionally shallow horizontal component."
+    },
+    {
+      "direction": "180",
+      "expected": "down",
+      "observed": "Frontal pose with strongly lowered eyelids and dipped face-screen read.",
+      "verdict": "pass",
+      "reason": "The down cardinal is unmistakable and passed the hard blind gate."
+    },
+    {
+      "direction": "202.5",
+      "expected": "down-left",
+      "observed": "Strong lowered gaze with a shallow screen-left turn.",
+      "verdict": "pass",
+      "reason": "All three final blind reviewers classified the vertical component as down; the horizontal pair classified screen-left."
+    },
+    {
+      "direction": "225",
+      "expected": "down-left",
+      "observed": "Balanced down-left three-quarter pose with lowered eyelids.",
+      "verdict": "pass",
+      "reason": "Both axes passed the final blind classification."
+    },
+    {
+      "direction": "247.5",
+      "expected": "down-left",
+      "observed": "Strong screen-left turn retaining a visibly lowered gaze.",
+      "verdict": "pass",
+      "reason": "The repaired frame passed both horizontal and vertical blind classifications."
+    },
+    {
+      "direction": "270",
+      "expected": "left",
+      "observed": "Unmistakable screen-left side view with the beak at the left edge.",
+      "verdict": "pass",
+      "reason": "The left cardinal passed the hard blind gate."
+    },
+    {
+      "direction": "292.5",
+      "expected": "up-left",
+      "observed": "Strong screen-left turn with tall raised eye treatment.",
+      "verdict": "pass",
+      "reason": "Both axes passed the final blind classification."
+    },
+    {
+      "direction": "315",
+      "expected": "up-left",
+      "observed": "Raised gaze with a moderate screen-left turn.",
+      "verdict": "pass",
+      "reason": "The up component is clear; the shallower horizontal component is acceptable for an intermediate."
+    },
+    {
+      "direction": "337.5",
+      "expected": "up-left",
+      "observed": "Near-frontal raised gaze with a shallow remaining screen-left turn.",
+      "verdict": "pass",
+      "reason": "Correct approach to the up cardinal; blind ambiguity affected only the intentionally shallow horizontal component."
+    }
+  ]
+}

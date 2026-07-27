@@ -1,0 +1,15 @@
+.DS_Store
+.idea/
+.vscode/
+.env
+.env.*
+build/
+**/build/
+*.log
+panel-health.json
+*-Check.txt
+*.tmp
+*.bak
+__MACOSX/
+__pycache__/
+*.py[cod]
