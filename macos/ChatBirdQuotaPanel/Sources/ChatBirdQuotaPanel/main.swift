@@ -19,6 +19,7 @@ private let followInterval: TimeInterval = 0.03
 private let idlePetLocationPollInterval: TimeInterval = 0.20
 private let petMovementGraceInterval: TimeInterval = 0.50
 private let overlayStateRefreshInterval: TimeInterval = 0.25
+private let maximumStoredOverlayAspectDistortion: CGFloat = 0.15
 private let panelDefaultWindowLevel = NSWindow.Level.statusBar
 private let panelNativeActivityWindowLevel = NSWindow.Level(
     rawValue: NSWindow.Level.statusBar.rawValue + 1
@@ -6135,7 +6136,7 @@ private final class QuotaPanelView: NSView {
         card.stroke()
 
         drawText(
-            "限额重置额度",
+            "限额重置",
             in: NSRect(
                 x: rect.minX + 8,
                 y: rect.minY + 4,
@@ -6893,6 +6894,17 @@ private func overlayStateNeedsReload(
     return current != previous
 }
 
+private func shouldDiscoverMascotEffectWindows(
+    now: CFAbsoluteTime,
+    lastDiscoveryAt: CFAbsoluteTime,
+    hasCachedGenericWindow: Bool
+) -> Bool {
+    if !hasCachedGenericWindow || lastDiscoveryAt <= 0 || now < lastDiscoveryAt {
+        return true
+    }
+    return now - lastDiscoveryAt >= overlayStateRefreshInterval
+}
+
 private final class PetWindowLocator {
     private struct NamedWindow {
         let id: CGWindowID
@@ -6934,6 +6946,7 @@ private final class PetWindowLocator {
     private var cachedVisualWindowID: CGWindowID?
     private var cachedMascotEffectWindowID: CGWindowID?
     private var cachedMascotAnchorWindowID: CGWindowID?
+    private var lastMascotEffectDiscoveryAt: CFAbsoluteTime = 0
     private var lastVisualProbeAt: CFAbsoluteTime = 0
     private var lastOverlayStateReadAt: CFAbsoluteTime = 0
     private var lastOverlayStateFileSignature: OverlayStateFileSignature?
@@ -6960,6 +6973,28 @@ private final class PetWindowLocator {
         cachedMascotEffectWindowID = nil
         cachedMascotAnchorWindowID = nil
 
+        var discoveredWindows: [[String: Any]]?
+        if shouldDiscoverMascotEffectWindows(
+            now: now,
+            lastDiscoveryAt: lastMascotEffectDiscoveryAt,
+            hasCachedGenericWindow: cachedWindowID != nil
+        ) {
+            lastMascotEffectDiscoveryAt = now
+            let options: CGWindowListOption = [
+                .optionOnScreenOnly,
+                .excludeDesktopElements,
+            ]
+            discoveredWindows = CGWindowListCopyWindowInfo(
+                options,
+                kCGNullWindowID
+            ) as? [[String: Any]]
+            if let discoveredWindows,
+               let location = cacheMascotEffectLocation(in: discoveredWindows)
+            {
+                return location
+            }
+        }
+
         if let cachedWindowID,
            let windows = CGWindowListCopyWindowInfo(.optionIncludingWindow, cachedWindowID) as? [[String: Any]],
            let window = windows.first,
@@ -6970,19 +7005,25 @@ private final class PetWindowLocator {
         }
 
         cachedWindowID = nil
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return storedOverlayLocation()
+        let windows: [[String: Any]]
+        if let discoveredWindows {
+            windows = discoveredWindows
+        } else {
+            let options: CGWindowListOption = [
+                .optionOnScreenOnly,
+                .excludeDesktopElements,
+            ]
+            lastMascotEffectDiscoveryAt = now
+            guard let currentWindows = CGWindowListCopyWindowInfo(
+                options,
+                kCGNullWindowID
+            ) as? [[String: Any]] else {
+                return storedOverlayLocation()
+            }
+            windows = currentWindows
         }
 
-        if let pair = mascotEffectWindowPair(in: windows),
-           let location = makeMascotEffectLocation(
-               effectRect: pair.effect.rect,
-               anchorRect: pair.anchor.rect
-           )
-        {
-            cachedMascotEffectWindowID = pair.effect.id
-            cachedMascotAnchorWindowID = pair.anchor.id
+        if let location = cacheMascotEffectLocation(in: windows) {
             return location
         }
 
@@ -6998,6 +7039,21 @@ private final class PetWindowLocator {
         }
         cachedWindowID = best.id
         return makeLocation(from: best.rect, windowID: best.id) ?? storedOverlayLocation()
+    }
+
+    private func cacheMascotEffectLocation(
+        in windows: [[String: Any]]
+    ) -> LocatedPet? {
+        guard let pair = mascotEffectWindowPair(in: windows),
+              let location = makeMascotEffectLocation(
+                  effectRect: pair.effect.rect,
+                  anchorRect: pair.anchor.rect
+              )
+        else { return nil }
+        cachedWindowID = nil
+        cachedMascotEffectWindowID = pair.effect.id
+        cachedMascotAnchorWindowID = pair.anchor.id
+        return location
     }
 
     func locateSavedState() -> LocatedPet? {
@@ -7361,7 +7417,8 @@ private final class PetWindowLocator {
               scaleX <= 8,
               scaleY >= 0.20,
               scaleY <= 8,
-              abs(log(scaleX / scaleY)) <= 0.30
+              abs(log(scaleX / scaleY))
+                <= maximumStoredOverlayAspectDistortion
         else { return nil }
 
         let scaled = StoredMascotMetrics(
@@ -7386,7 +7443,8 @@ private final class PetWindowLocator {
                   scaleX <= 8,
                   scaleY >= 0.20,
                   scaleY <= 8,
-                  abs(log(scaleX / scaleY)) <= 0.30,
+                  abs(log(scaleX / scaleY))
+                    <= maximumStoredOverlayAspectDistortion,
                   scaledMetrics(metrics, from: stored.rect.size, to: liveRect.size) != nil
             else { return nil }
 
@@ -7627,6 +7685,15 @@ private final class PetWindowLocator {
         }
 
         let name = window[kCGWindowName as String] as? String ?? ""
+        let normalizedName = name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        // Dedicated Codex pet surfaces have independent geometry contracts.
+        // Treating one as the legacy overlay can cache its large composition
+        // bounds and permanently inflate the panel before the mascot pair
+        // becomes available.
+        guard !normalizedName.hasPrefix("codex pet ") else { return nil }
+
         var score = Double(abs(bounds.width - 356) + abs(bounds.height - 320) * 0.35)
         score += Double(abs(layer - 3) * 50)
         if name == "ChatGPT" || name == "Codex" { score -= 80 }
@@ -7681,6 +7748,39 @@ private final class PetWindowLocator {
             topPadding: petSpriteTopPaddingInsideAnchor,
             source: "self-test"
         )
+        func testWindow(
+            name: String,
+            layer: Int,
+            bounds: CGRect
+        ) -> [String: Any] {
+            [
+                kCGWindowOwnerName as String: "ChatGPT",
+                kCGWindowLayer as String: NSNumber(value: layer),
+                kCGWindowAlpha as String: NSNumber(value: 1),
+                kCGWindowBounds as String: bounds.dictionaryRepresentation,
+                kCGWindowName as String: name,
+            ]
+        }
+        let genericOverlay = testWindow(
+            name: "ChatGPT",
+            layer: 3,
+            bounds: CGRect(x: 0, y: 0, width: 356, height: 320)
+        )
+        let compositionSurface = testWindow(
+            name: "Codex Pet Composition Surface",
+            layer: 3,
+            bounds: CGRect(x: 0, y: 0, width: 768, height: 912)
+        )
+        let mascotEffect = testWindow(
+            name: "Codex Pet Mascot Effect",
+            layer: 2,
+            bounds: CGRect(x: 0, y: 0, width: 172, height: 179)
+        )
+        guard candidate(from: genericOverlay) != nil,
+              candidate(from: compositionSurface) == nil,
+              candidate(from: mascotEffect) == nil
+        else { return false }
+
         let centeredFallback = centeredFallbackMetrics(for: baseSize)
         guard abs(centeredFallback.left + centeredFallback.width / 2 - baseSize.width / 2) <= 0.01,
               let scaledFallback = scaledMetrics(
@@ -7688,7 +7788,27 @@ private final class PetWindowLocator {
                   from: baseSize,
                   to: CGSize(width: 408, height: 400)
               ),
-              abs(scaledFallback.left + scaledFallback.width / 2 - 204) <= 0.01
+              abs(scaledFallback.left + scaledFallback.width / 2 - 204) <= 0.01,
+              scaledMetrics(
+                  centeredFallback,
+                  from: baseSize,
+                  to: CGSize(width: 768, height: 912)
+              ) == nil,
+              shouldDiscoverMascotEffectWindows(
+                  now: 10,
+                  lastDiscoveryAt: 9.9,
+                  hasCachedGenericWindow: false
+              ),
+              !shouldDiscoverMascotEffectWindows(
+                  now: 10,
+                  lastDiscoveryAt: 9.9,
+                  hasCachedGenericWindow: true
+              ),
+              shouldDiscoverMascotEffectWindows(
+                  now: 10,
+                  lastDiscoveryAt: 9.5,
+                  hasCachedGenericWindow: true
+              )
         else { return false }
         for factor in [0.25, 0.5, 1.0, 1.25, 2.0, 3.0] as [CGFloat] {
             let liveSize = CGSize(width: baseSize.width * factor, height: baseSize.height * factor)
@@ -9095,7 +9215,7 @@ private func runPlacementSelfTest() -> Never {
         exit(1)
     }
 
-    print("placement-self-test: 6/6 passed; activity-pill-segmentation=2/2; activity-pill-centerError=0.0; unnamed-pet-windows=4/4; mascot-effect-geometry=2/2; native-activity-z-order=7/7; native-activity-level=3/3; mascot-scaling=6/6; visual-scaling=6/6; panel-scaling=6/6; overlay-state-cache=4/4; geometry-invalidation=4/4; pet-polling=6/6; gap=14.0; centerError=0.0")
+    print("placement-self-test: 6/6 passed; activity-pill-segmentation=2/2; activity-pill-centerError=0.0; unnamed-pet-windows=4/4; mascot-effect-geometry=2/2; generic-window-filter=3/3; stored-overlay-shape=2/2; mascot-rediscovery=3/3; native-activity-z-order=7/7; native-activity-level=3/3; mascot-scaling=6/6; visual-scaling=6/6; panel-scaling=6/6; overlay-state-cache=4/4; geometry-invalidation=4/4; pet-polling=6/6; gap=14.0; centerError=0.0")
     exit(0)
 }
 
