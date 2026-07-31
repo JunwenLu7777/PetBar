@@ -30,6 +30,7 @@ for ARCH in arm64 x86_64; do
     -framework AppKit \
     -framework CoreGraphics \
     -framework Network \
+    -framework Security \
     "${SOURCE_FILES[@]}" \
     -o "$TMP_DIR/ChatBirdQuotaPanel-$ARCH"
 done

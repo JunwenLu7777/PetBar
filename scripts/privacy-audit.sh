@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-ROOT="${0:A:h:h}"
+ROOT="${CHATBIRD_PRIVACY_AUDIT_ROOT:-${0:A:h:h}}"
 PATTERN='(/Users/[^/[:space:]]+|[A-Za-z]:\\Users\\[^\\[:space:]]+|com\.jing|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})'
 
 typeset -i findings=0

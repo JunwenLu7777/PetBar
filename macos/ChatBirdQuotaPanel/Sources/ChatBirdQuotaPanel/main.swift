@@ -77,12 +77,37 @@ if CommandLine.arguments.contains("--self-test-claude-hook") {
     runClaudeHookSelfTest()
 }
 
+if CommandLine.arguments.contains("--self-test-client-contract") {
+    runClientContractSelfTest()
+}
+
 if CommandLine.arguments.contains("--install-claude-hook") {
     do {
-        let changed = try ClaudeHookConfiguration.install()
-        print(changed
-            ? "ChatBird Claude Hook 已安装：\(ClaudeHookConstants.url)"
-            : "ChatBird Claude Hook 已经安装")
+        let claudeAvailable = locateClaudeExecutable() != nil
+        let changed = try ClaudeHookConfiguration.install(
+            isClaudeAvailable: { claudeAvailable }
+        )
+        let status = try ClaudeHookConfiguration.status()
+        switch classifyClaudeHookInstall(
+            changed: changed,
+            status: status,
+            claudeAvailable: claudeAvailable
+        ) {
+        case .installed:
+            print("ChatBird Claude Hook 已安装：\(ClaudeHookConstants.url)")
+        case .alreadyInstalled:
+            print("ChatBird Claude Hook 已经安装")
+        case .skippedClaudeUnavailable:
+            print("未找到 Claude CLI，已跳过 ChatBird Claude Hook")
+        case .skippedConflict(let handlers):
+            print(
+                "已保留其他 PermissionRequest Hook，跳过 ChatBird Claude Hook："
+                    + handlers.joined(separator: "；")
+            )
+        case .failedMissing:
+            fputs("ChatBird Claude Hook 安装后仍未生效\n", stderr)
+            exit(1)
+        }
         exit(0)
     } catch {
         fputs("安装 ChatBird Claude Hook 失败：\(error.localizedDescription)\n", stderr)
@@ -109,7 +134,7 @@ if CommandLine.arguments.contains("--print-claude-hook-status") {
         case .installed:
             print("installed \(ClaudeHookConstants.url)")
         case .missing:
-            print("missing")
+            print(locateClaudeExecutable() == nil ? "unavailable" : "missing")
         case .conflict(let handlers):
             print("conflict \(handlers.joined(separator: " | "))")
         }

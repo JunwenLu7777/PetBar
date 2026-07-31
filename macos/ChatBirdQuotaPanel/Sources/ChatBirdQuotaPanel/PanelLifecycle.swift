@@ -58,17 +58,38 @@ func petPanelClickAction(
 }
 
 final class RuntimeHealthWriter {
-    private let fileURL: URL = {
-        if let override = ProcessInfo.processInfo.environment["CHATBIRD_PANEL_HEALTH_FILE"],
-           !override.isEmpty
-        {
-            return URL(fileURLWithPath: override)
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/dev.chatbird.codex-quota-panel/panel-health.json")
-    }()
+    typealias DirectoryCreator = (URL, Bool) throws -> Void
+    typealias DataWriter = (Data, URL) throws -> Void
+    typealias FailureLogger = (String) -> Void
+
+    private let fileURL: URL
+    private let createDirectory: DirectoryCreator
+    private let writeData: DataWriter
+    private let logFailure: FailureLogger
     private var lastSignature = ""
     private var lastWriteAt: CFAbsoluteTime = 0
+    private var didLogWriteFailure = false
+
+    init(
+        fileURL: URL = RuntimeHealthWriter.defaultFileURL(),
+        createDirectory: @escaping DirectoryCreator = { url, createIntermediates in
+            try FileManager.default.createDirectory(
+                at: url,
+                withIntermediateDirectories: createIntermediates
+            )
+        },
+        writeData: @escaping DataWriter = { data, url in
+            try data.write(to: url, options: .atomic)
+        },
+        logFailure: @escaping FailureLogger = { message in
+            fputs("\(message)\n", stderr)
+        }
+    ) {
+        self.fileURL = fileURL
+        self.createDirectory = createDirectory
+        self.writeData = writeData
+        self.logFailure = logFailure
+    }
 
     func write(
         status: String,
@@ -109,16 +130,29 @@ final class RuntimeHealthWriter {
         if let centerError { payload["pointerCenterErrorPoints"] = centerError }
 
         do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+            try createDirectory(fileURL.deletingLastPathComponent(), true)
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-            try data.write(to: fileURL, options: .atomic)
+            try writeData(data, fileURL)
             lastSignature = signature
             lastWriteAt = now
+            didLogWriteFailure = false
         } catch {
-            // The panel must remain usable even if a managed Mac blocks cache writes.
+            if !didLogWriteFailure {
+                didLogWriteFailure = true
+                logFailure(
+                    "ChatBird health write failed: \(error.localizedDescription)"
+                )
+            }
         }
+    }
+
+    private static func defaultFileURL() -> URL {
+        if let override = ProcessInfo.processInfo.environment["CHATBIRD_PANEL_HEALTH_FILE"],
+           !override.isEmpty
+        {
+            return URL(fileURLWithPath: override)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Caches/dev.chatbird.codex-quota-panel/panel-health.json")
     }
 }

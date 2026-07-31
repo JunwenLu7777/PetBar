@@ -17,7 +17,26 @@ DOMAIN="gui/$(id -u)"
 "$ROOT/scripts/build.sh" >/dev/null
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs" "${HEALTH:h}"
 /usr/bin/codesign --verify --deep --strict "$APP"
-"$APP_BINARY" --install-claude-hook
+if ! "$APP_BINARY" --install-claude-hook; then
+  echo "警告：Claude Code 权限确认 Hook 安装命令失败；Codex 核心安装将继续。" >&2
+fi
+CLAUDE_HOOK_STATUS_OUTPUT=""
+if CLAUDE_HOOK_STATUS_OUTPUT="$("$APP_BINARY" --print-claude-hook-status)"; then
+  case "$CLAUDE_HOOK_STATUS_OUTPUT" in
+    installed*) ;;
+    unavailable)
+      echo "提示：未找到 Claude CLI，未启用 Claude Code 权限确认 Hook。" >&2
+      ;;
+    conflict*)
+      echo "警告：已保留现有 PermissionRequest Hook，未启用 ChatBird Claude Hook。" >&2
+      ;;
+    *)
+      echo "警告：Claude Code 权限确认 Hook 未启用；Codex 核心安装将继续。" >&2
+      ;;
+  esac
+else
+  echo "警告：无法读取 Claude Code 权限确认 Hook 状态；Codex 核心安装将继续。" >&2
+fi
 "$APP_BINARY" \
   --prepare-codex-overlay-notifications \
   "$STATE" \

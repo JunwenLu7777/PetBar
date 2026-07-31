@@ -15,6 +15,48 @@ import Darwin
 import Foundation
 
 func runTaskProgressSelfTestPhase2(now: Date, started: String) {
+    let desktopSelectionInput = [
+        "# keep leading comment",
+        #"selected-avatar-id = "outside-desktop""#,
+        "",
+        "[desktop] # existing desktop settings",
+        "  # keep nearby comment",
+        #"  selected-avatar-id = "other-avatar" # inline note"#,
+        "",
+        "[desktop.window]",
+        #"selected-avatar-id = "nested-desktop-value""#,
+        "",
+        "[other]",
+        #"selected-avatar-id = "other-section-value""#,
+        "",
+    ].joined(separator: "\r\n")
+    let desktopSelectionOutput =
+        ChatBirdPetSelectionStore.updatingDesktopSelection(
+            in: desktopSelectionInput,
+            avatarID: chatBirdPetAvatarID
+        )
+    guard desktopSelectionOutput.contains("\r\n"),
+          desktopSelectionOutput.contains(
+              #"selected-avatar-id = "outside-desktop""#
+          ),
+          desktopSelectionOutput.contains(
+              #"selected-avatar-id = "nested-desktop-value""#
+          ),
+          desktopSelectionOutput.contains(
+              #"selected-avatar-id = "other-section-value""#
+          ),
+          desktopSelectionOutput.contains(
+              #"  selected-avatar-id = "\#(chatBirdPetAvatarID)" # inline note"#
+          ),
+          ChatBirdPetSelectionStore.updatingDesktopSelection(
+              in: desktopSelectionOutput,
+              avatarID: chatBirdPetAvatarID
+          ) == desktopSelectionOutput
+    else {
+        fputs("desktop selection TOML preservation failed\n", stderr)
+        exit(1)
+    }
+
     let topLevelMetadata = #"{"type":"session_meta","payload":{"thread_source":"user","source":{"cli":{}}}}"#
     let subagentMetadata = #"{"type":"session_meta","payload":{"thread_source":"subagent","source":{"subagent":{"thread_spawn":{}}}}}"#
     let automationMetadata = #"{"type":"session_meta","payload":{"thread_source":"automation","source":"vscode"}}"#
@@ -71,6 +113,39 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
           completedPresentation.items[1].statusText == "最新"
     else {
         fputs("task presentation deduplication failed\n", stderr)
+        exit(1)
+    }
+
+    let simultaneousCodexPresentation = TaskProgressSnapshot.displaying([
+        TaskProgressItem(
+            title: "相同标题的实时任务",
+            kind: .running,
+            startedAt: now.addingTimeInterval(-60),
+            updatedAt: now.addingTimeInterval(-1),
+            threadID: "11111111-1111-4111-8111-111111111111"
+        ),
+        TaskProgressItem(
+            title: "相同标题的实时任务",
+            kind: .running,
+            startedAt: now.addingTimeInterval(-30),
+            updatedAt: now,
+            threadID: "22222222-2222-4222-8222-222222222222"
+        ),
+        TaskProgressItem(
+            title: "相同标题的实时任务",
+            kind: .running,
+            startedAt: now.addingTimeInterval(-30),
+            updatedAt: now,
+            threadID: "22222222-2222-4222-8222-222222222222"
+        ),
+    ])
+    guard simultaneousCodexPresentation.items.count == 2,
+          simultaneousCodexPresentation.items.map(\.threadID) == [
+              "22222222-2222-4222-8222-222222222222",
+              "11111111-1111-4111-8111-111111111111",
+          ]
+    else {
+        fputs("simultaneous task identity deduplication failed\n", stderr)
         exit(1)
     }
 

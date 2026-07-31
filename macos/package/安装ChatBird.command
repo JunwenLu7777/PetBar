@@ -208,8 +208,21 @@ done
 /usr/bin/codesign --force --deep --sign - "$APP_DEST" >/dev/null
 /usr/bin/codesign --verify --deep --strict "$APP_DEST" \
   || fail "额度面板自动签名失败，请重新下载分享包。"
-"$APP_BINARY" --install-claude-hook \
-  || fail "无法安装 Claude Code 权限确认 Hook。"
+CLAUDE_HOOK_STATUS="warning"
+if ! "$APP_BINARY" --install-claude-hook; then
+  echo "警告：Claude Code 权限确认 Hook 安装命令失败；Codex 核心安装将继续。" >&2
+fi
+CLAUDE_HOOK_STATUS_OUTPUT=""
+if CLAUDE_HOOK_STATUS_OUTPUT="$("$APP_BINARY" --print-claude-hook-status)"; then
+  case "$CLAUDE_HOOK_STATUS_OUTPUT" in
+    installed*) CLAUDE_HOOK_STATUS="enabled" ;;
+    unavailable) CLAUDE_HOOK_STATUS="skipped" ;;
+    conflict*) CLAUDE_HOOK_STATUS="conflict" ;;
+    *) CLAUDE_HOOK_STATUS="warning" ;;
+  esac
+else
+  echo "警告：无法读取 Claude Code 权限确认 Hook 状态；Codex 核心安装将继续。" >&2
+fi
 "$APP_BINARY" \
   --prepare-codex-overlay-notifications \
   "$STATE_PATH" \
@@ -254,6 +267,12 @@ echo "  ✓ ChatBird 宠物"
 echo "  ✓ ChatBird 额度面板"
 echo "  ✓ 已在 Codex 中选中 ChatBird"
 echo "  ✓ 已启用 Codex 原生任务气泡静音同步"
+case "$CLAUDE_HOOK_STATUS" in
+  enabled) echo "  ✓ 已启用 Claude Code 权限确认 Hook" ;;
+  conflict) echo "  … 已保留现有 PermissionRequest Hook，未启用 ChatBird Hook" ;;
+  warning) echo "  … Claude Code 权限确认 Hook 未启用，请检查上方警告" ;;
+  *) echo "  … 未检测到 Claude CLI，已跳过 Claude Code 权限确认 Hook" ;;
+esac
 if "$APP_BINARY" --check-accessibility >/dev/null 2>&1; then
   echo "  ✓ 当前运行中新任务气泡自动静音已启用"
 else

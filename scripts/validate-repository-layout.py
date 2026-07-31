@@ -43,6 +43,9 @@ ALLOWED_SCRIPT_PATHS = {
     "scripts/update-readme-downloads.sh",
     "scripts/validate-repository-layout.py",
 }
+ALLOWED_SCRIPT_PREFIXES = (
+    "scripts/tests/",
+)
 ALLOWED_SHARED_PREFIXES = (
     "shared/pet/chatbird-nt/",
     "shared/preview/chatbird-nt/",
@@ -62,6 +65,9 @@ FORBIDDEN_TEXT = re.compile(
 CONTENT_SCAN_EXCLUDED_PATHS = {
     "scripts/validate-repository-layout.py",
 }
+CONTENT_SCAN_EXCLUDED_PREFIXES = (
+    "scripts/tests/",
+)
 REQUIRED_FILES = {
     "macos/ChatBirdQuotaPanel/Resources/ChatBirdQuotaPanel.entitlements",
     "macos/ChatBirdQuotaPanel/Resources/Info.plist",
@@ -87,6 +93,17 @@ def tracked_files() -> set[str]:
     }
 
 
+def path_has_forbidden_marker(path: str) -> bool:
+    """Match legacy path markers as components or separator-delimited tokens."""
+    for component in path.casefold().split("/"):
+        tokens = [token for token in re.split(r"[^0-9a-z]+", component) if token]
+        for marker in FORBIDDEN_PATH_MARKERS:
+            folded_marker = marker.casefold()
+            if component == folded_marker or folded_marker in tokens:
+                return True
+    return False
+
+
 def validate(paths: set[str]) -> list[str]:
     violations: list[str] = []
 
@@ -101,7 +118,11 @@ def validate(paths: set[str]) -> list[str]:
         ):
             violations.append(f"{path}: unexpected macOS product path")
 
-        if path.startswith(("script/", "scripts/")) and path not in ALLOWED_SCRIPT_PATHS:
+        if (
+            path.startswith(("script/", "scripts/"))
+            and path not in ALLOWED_SCRIPT_PATHS
+            and not path.startswith(ALLOWED_SCRIPT_PREFIXES)
+        ):
             violations.append(f"{path}: unexpected repository script")
 
         if path.startswith("shared/") and not path.startswith(ALLOWED_SHARED_PREFIXES):
@@ -110,8 +131,7 @@ def validate(paths: set[str]) -> list[str]:
         if path.startswith("macos/ChatBirdQuotaPanel/Resources/Airplane/"):
             violations.append(f"{path}: unused legacy resource is forbidden")
 
-        folded_path = path.casefold()
-        if any(marker in folded_path for marker in FORBIDDEN_PATH_MARKERS):
+        if path_has_forbidden_marker(path):
             violations.append(f"{path}: legacy product name is forbidden in tracked paths")
 
         if path.startswith("dist/"):
@@ -125,7 +145,10 @@ def validate(paths: set[str]) -> list[str]:
             else:
                 violations.append(f"{path}: unexpected file in dist")
 
-        if path not in CONTENT_SCAN_EXCLUDED_PATHS:
+        if (
+            path not in CONTENT_SCAN_EXCLUDED_PATHS
+            and not path.startswith(CONTENT_SCAN_EXCLUDED_PREFIXES)
+        ):
             file_path = ROOT / path
             if file_path.is_file():
                 data = file_path.read_bytes()
@@ -140,7 +163,7 @@ def validate(paths: set[str]) -> list[str]:
                             continue
                         if (
                             path == "scripts/build-macos-release.sh"
-                            and "local forbidden=" in line
+                            and ("local forbidden" in line or "markers=(" in line)
                         ):
                             continue
                         violations.append(

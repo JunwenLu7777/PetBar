@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Regression tests for repository layout path marker matching."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+VALIDATOR_PATH = ROOT / "scripts" / "validate-repository-layout.py"
+
+
+spec = importlib.util.spec_from_file_location("validate_repository_layout", VALIDATOR_PATH)
+assert spec is not None and spec.loader is not None
+validator = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(validator)
+
+
+def base_paths() -> set[str]:
+    return set(validator.REQUIRED_FILES) | {
+        ".gitattributes",
+        ".gitignore",
+        "ASSET-NOTICE.md",
+        "LICENSE",
+        "PRIVACY.md",
+        "README.md",
+        "macos/README.md",
+        "macos/VERSION.txt",
+        "scripts/build-macos-release.sh",
+        "scripts/privacy-audit.sh",
+        "scripts/update-readme-downloads.sh",
+        "scripts/validate-repository-layout.py",
+        "dist/ChatBird-NT-macOS-Universal-1.0.0.zip",
+        "dist/ChatBird-NT-macOS-Universal-1.0.0.zip.sha256",
+    }
+
+
+def assert_no_legacy_path(paths: set[str]) -> None:
+    violations = validator.validate(paths)
+    legacy_path_violations = [
+        violation for violation in violations
+        if "legacy product name is forbidden in tracked paths" in violation
+    ]
+    assert legacy_path_violations == [], legacy_path_violations
+
+
+def assert_legacy_path(path: str) -> None:
+    violations = validator.validate(base_paths() | {path})
+    assert any(
+        violation.startswith(f"{path}:")
+        and "legacy product name is forbidden in tracked paths" in violation
+        for violation in violations
+    ), violations
+
+
+assert_no_legacy_path(
+    base_paths() | {"macos/ChatBirdQuotaPanel/Sources/ChatBirdQuotaPanel/WindowStackGeometry.swift"}
+)
+assert_legacy_path("macos/package/Windows/legacy.txt")
+assert_legacy_path("shared/pet/chatbird-nt/Bubu/legacy.txt")
+
+print("layout validator path marker tests passed")

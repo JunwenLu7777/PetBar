@@ -19,8 +19,80 @@ func runTaskProgressSelfTest() -> Never {
     let started = #"{"type":"event_msg","payload":{"type":"task_started"}}"#
     runTaskProgressSelfTestPhase1(now: now, started: started)
     runTaskProgressSelfTestPhase2(now: now, started: started)
-    print("task-progress-self-test: lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; click-hit=pass; scroll-hit=pass; refresh-hit=pass; hover-live=pass; completed-unread=pass; read-state=6/6; top-level-filter=5/5; task-dedup=pass; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
+    runTaskProgressRefreshGateSelfTest()
+    runRuntimeHealthWriterFailureSelfTest()
+    print("task-progress-self-test: lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; click-hit=pass; scroll-hit=pass; refresh-hit=pass; hover-live=pass; completed-unread=pass; read-state=6/6; top-level-filter=5/5; task-dedup=pass; refresh-gate=timeout+generation; runtime-health-failure=logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
     exit(0)
+}
+
+private func runTaskProgressRefreshGateSelfTest() {
+    var gate = TaskProgressRefreshGate(
+        timeout: 1,
+        maximumConcurrentReads: 2
+    )
+    guard let slowGeneration = gate.begin(now: 10) else {
+        fputs("task progress refresh gate did not start first read\n", stderr)
+        exit(1)
+    }
+    guard gate.begin(now: 10.5) == nil else {
+        fputs("task progress refresh gate allowed overlapping read before timeout\n", stderr)
+        exit(1)
+    }
+    guard let freshGeneration = gate.begin(now: 11.1),
+          freshGeneration != slowGeneration
+    else {
+        fputs("task progress refresh gate did not recover after timeout\n", stderr)
+        exit(1)
+    }
+    guard gate.begin(now: 12.2) == nil else {
+        fputs("task progress refresh gate exceeded concurrent read limit\n", stderr)
+        exit(1)
+    }
+    guard !gate.complete(generation: slowGeneration),
+          let newestGeneration = gate.begin(now: 12.3),
+          newestGeneration != freshGeneration,
+          !gate.complete(generation: freshGeneration),
+          gate.complete(generation: newestGeneration),
+          gate.begin(now: 12.4) != nil
+    else {
+        fputs("task progress refresh gate did not release stale read capacity\n", stderr)
+        exit(1)
+    }
+}
+
+private func runRuntimeHealthWriterFailureSelfTest() {
+    let blockedURL = URL(fileURLWithPath: "/tmp/chatbird-health-blocked/panel-health.json")
+    var messages: [String] = []
+    let writer = RuntimeHealthWriter(
+        fileURL: blockedURL,
+        createDirectory: { _, _ in
+            throw NSError(domain: "RuntimeHealthWriterSelfTest", code: 1)
+        },
+        writeData: { _, _ in
+            throw NSError(domain: "RuntimeHealthWriterSelfTest", code: 2)
+        },
+        logFailure: { message in
+            messages.append(message)
+        }
+    )
+    writer.write(
+        status: "following-pet",
+        panelVisible: true,
+        locationSource: "self-test",
+        force: true
+    )
+    writer.write(
+        status: "following-pet",
+        panelVisible: true,
+        locationSource: "self-test",
+        force: true
+    )
+    guard messages.count == 1,
+          messages[0].contains("ChatBird health write failed")
+    else {
+        fputs("runtime health writer failure logging failed\n", stderr)
+        exit(1)
+    }
 }
 
 private func runTaskProgressSelfTestPhase1(now: Date, started: String) {

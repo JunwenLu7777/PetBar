@@ -130,6 +130,13 @@ func codexResetCreditsPresentation(
     }
     let credits = snapshot.availableCredits(at: now)
     guard !credits.isEmpty else {
+        if snapshot.reportedAvailableCount > 0 {
+            return CodexResetCreditsPresentation(
+                availableText: "\(snapshot.reportedAvailableCount) 次可用",
+                expiryLines: [],
+                hasAvailableCredits: true
+            )
+        }
         return CodexResetCreditsPresentation(
             availableText: "暂无可用重置额度",
             expiryLines: [],
@@ -152,7 +159,7 @@ func codexResetCreditsPresentation(
         ]
     }
     return CodexResetCreditsPresentation(
-        availableText: "\(credits.count) 次可用",
+        availableText: "\(max(credits.count, snapshot.reportedAvailableCount)) 次可用",
         expiryLines: expiryLines,
         hasAvailableCredits: true
     )

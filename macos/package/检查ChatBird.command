@@ -14,12 +14,71 @@ NATIVE_NOTIFICATION_BACKUP="${CODEX_HOME:-$HOME/.codex}/chatbird-native-notifica
 FAILED=0
 
 check() {
-  if eval "$2"; then
-    echo "✓ $1"
+  local label="$1"
+  local predicate="$2"
+  if run_check "$predicate"; then
+    echo "✓ $label"
   else
-    echo "✗ $1"
+    echo "✗ $label"
     FAILED=1
   fi
+}
+
+run_check() {
+  case "$1" in
+    pet-files)
+      [[ -f "$PET_DIR/pet.json" && -f "$PET_DIR/spritesheet.webp" ]]
+      ;;
+    pet-id)
+      [[ -f "$PET_DIR/pet.json" && "$(json_value "$PET_DIR/pet.json" id)" == "chatbird-nt" ]]
+      ;;
+    pet-sprite-version)
+      [[ -f "$PET_DIR/pet.json" && "$(json_value "$PET_DIR/pet.json" spriteVersionNumber)" == "2" ]]
+      ;;
+    pet-atlas-size)
+      [[ -f "$PET_DIR/spritesheet.webp" \
+        && "$(image_dimension "$PET_DIR/spritesheet.webp" pixelWidth)" == "1536" \
+        && "$(image_dimension "$PET_DIR/spritesheet.webp" pixelHeight)" == "2288" ]]
+      ;;
+    panel-installed)
+      [[ -x "$BIN" ]]
+      ;;
+    panel-universal)
+      [[ -x "$BIN" ]] \
+        && /usr/bin/lipo "$BIN" -verify_arch arm64 \
+        && /usr/bin/lipo "$BIN" -verify_arch x86_64
+      ;;
+    panel-current-arch)
+      [[ -x "$BIN" ]] && /usr/bin/lipo "$BIN" -verify_arch "$(/usr/bin/uname -m)"
+      ;;
+    panel-signature)
+      [[ -d "$APP" ]] && /usr/bin/codesign --verify --deep --strict "$APP"
+      ;;
+    launch-agent-exists)
+      [[ -f "$PLIST" ]]
+      ;;
+    launch-agent-label)
+      [[ -f "$PLIST" && "$(/usr/bin/plutil -extract Label raw "$PLIST" 2>/dev/null)" == "$LABEL" ]]
+      ;;
+    panel-running)
+      /bin/launchctl print "$DOMAIN/$LABEL" 2>/dev/null | /usr/bin/grep -Eq "^[[:space:]]*pid = [0-9]+"
+      ;;
+    health-edition)
+      [[ -s "$HEALTH" ]] && /usr/bin/grep -q '"edition":"chatbird-nt"' "$HEALTH"
+      ;;
+    health-pet-id)
+      [[ -s "$HEALTH" ]] && /usr/bin/grep -q '"petID":"chatbird-nt"' "$HEALTH"
+      ;;
+    health-codex-weekly)
+      [[ -s "$HEALTH" ]] && /usr/bin/grep -q '"codexWeeklyQuotaOnly":true' "$HEALTH"
+      ;;
+    health-claude-periods)
+      [[ -s "$HEALTH" ]] && /usr/bin/grep -q '"claudeQuotaPeriods":\["5h","weekly","fable"\]' "$HEALTH"
+      ;;
+    *)
+      return 2
+      ;;
+  esac
 }
 
 json_value() {
@@ -32,26 +91,26 @@ image_dimension() {
 
 echo "ChatBird 安装检查"
 echo "───────────────"
-check "宠物文件完整" '[[ -f "$PET_DIR/pet.json" && -f "$PET_DIR/spritesheet.webp" ]]'
-check "pet.json id 正确" '[[ -f "$PET_DIR/pet.json" && "$(json_value "$PET_DIR/pet.json" id)" == "chatbird-nt" ]]'
-check "pet.json spriteVersionNumber 为 2" '[[ -f "$PET_DIR/pet.json" && "$(json_value "$PET_DIR/pet.json" spriteVersionNumber)" == "2" ]]'
-check "宠物图集为 1536x2288" '[[ -f "$PET_DIR/spritesheet.webp" && "$(image_dimension "$PET_DIR/spritesheet.webp" pixelWidth)" == "1536" && "$(image_dimension "$PET_DIR/spritesheet.webp" pixelHeight)" == "2288" ]]'
-check "额度面板已安装" '[[ -x "$BIN" ]]'
-check "额度面板为 Universal 2" '[[ -x "$BIN" ]] && /usr/bin/lipo "$BIN" -verify_arch arm64 && /usr/bin/lipo "$BIN" -verify_arch x86_64'
-check "额度面板支持当前 Mac" '[[ -x "$BIN" ]] && /usr/bin/lipo "$BIN" -verify_arch "$(/usr/bin/uname -m)"'
-check "额度面板签名正常" '[[ -d "$APP" ]] && /usr/bin/codesign --verify --deep --strict "$APP"'
+check "宠物文件完整" pet-files
+check "pet.json id 正确" pet-id
+check "pet.json spriteVersionNumber 为 2" pet-sprite-version
+check "宠物图集为 1536x2288" pet-atlas-size
+check "额度面板已安装" panel-installed
+check "额度面板为 Universal 2" panel-universal
+check "额度面板支持当前 Mac" panel-current-arch
+check "额度面板签名正常" panel-signature
 if [[ -x "$BIN" ]] && "$BIN" --check-accessibility >/dev/null 2>&1; then
   echo "✓ 当前运行中新任务气泡自动静音已授权"
 else
   echo "… 当前运行中新任务气泡自动静音未授权（不影响其他功能）"
 fi
-check "登录启动项存在" '[[ -f "$PLIST" ]]'
-check "登录启动项标签正确" '[[ -f "$PLIST" && "$(/usr/bin/plutil -extract Label raw "$PLIST" 2>/dev/null)" == "$LABEL" ]]'
-check "额度面板进程正在运行" '/bin/launchctl print "$DOMAIN/$LABEL" 2>/dev/null | /usr/bin/grep -Eq "^[[:space:]]*pid = [0-9]+"'
-check "健康文件 edition 正确" '[[ -s "$HEALTH" ]] && /usr/bin/grep -q '"'"'"edition":"chatbird-nt"'"'"' "$HEALTH"'
-check "健康文件 petID 正确" '[[ -s "$HEALTH" ]] && /usr/bin/grep -q '"'"'"petID":"chatbird-nt"'"'"' "$HEALTH"'
-check "健康文件 Codex 周额度配置正确" '[[ -s "$HEALTH" ]] && /usr/bin/grep -q '"'"'"codexWeeklyQuotaOnly":true'"'"' "$HEALTH"'
-check "健康文件 Claude 三项额度配置正确" '[[ -s "$HEALTH" ]] && /usr/bin/grep -q '"'"'"claudeQuotaPeriods":\["5h","weekly","fable"\]'"'"' "$HEALTH"'
+check "登录启动项存在" launch-agent-exists
+check "登录启动项标签正确" launch-agent-label
+check "额度面板进程正在运行" panel-running
+check "健康文件 edition 正确" health-edition
+check "健康文件 petID 正确" health-pet-id
+check "健康文件 Codex 周额度配置正确" health-codex-weekly
+check "健康文件 Claude 三项额度配置正确" health-claude-periods
 if [[ -s "$NATIVE_NOTIFICATION_BACKUP" ]]; then
   echo "✓ Codex 原生气泡恢复点存在"
 elif /usr/bin/pgrep -x Codex >/dev/null 2>&1 \

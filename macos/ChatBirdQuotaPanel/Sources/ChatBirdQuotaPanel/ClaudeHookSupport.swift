@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Darwin
+import Security
 
 enum ClaudeHookConstants {
     static let host = "127.0.0.1"
@@ -10,6 +11,8 @@ enum ClaudeHookConstants {
     static let timeoutSeconds = 600
     static let requestTimeoutSeconds: TimeInterval = 590
     static let maximumBodyBytes = 256 * 1_024
+    static let maximumPendingRequests = 16
+    static let authenticationHeader = "X-ChatBird-Hook-Token"
 }
 
 enum ClaudePermissionInteractionKind {
@@ -378,15 +381,12 @@ enum ClaudePermissionProtocol {
 
 enum ClaudeHookConfigurationError: LocalizedError {
     case invalidSettings
-    case conflictingPermissionHooks([String])
     case writeFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidSettings:
             return "Claude settings.json 不是有效的 JSON 对象"
-        case .conflictingPermissionHooks(let descriptions):
-            return "发现其他 PermissionRequest Hook：\(descriptions.joined(separator: "；"))"
         case .writeFailed(let reason):
             return "写入 Claude Hook 配置失败：\(reason)"
         }
@@ -397,6 +397,29 @@ enum ClaudeHookConfigurationStatus: Equatable {
     case installed
     case missing
     case conflict([String])
+}
+
+enum ClaudeHookInstallDisposition: Equatable {
+    case installed
+    case alreadyInstalled
+    case skippedClaudeUnavailable
+    case skippedConflict([String])
+    case failedMissing
+}
+
+func classifyClaudeHookInstall(
+    changed: Bool,
+    status: ClaudeHookConfigurationStatus,
+    claudeAvailable: Bool
+) -> ClaudeHookInstallDisposition {
+    switch status {
+    case .installed:
+        return changed ? .installed : .alreadyInstalled
+    case .conflict(let handlers):
+        return .skippedConflict(handlers)
+    case .missing:
+        return claudeAvailable ? .failedMissing : .skippedClaudeUnavailable
+    }
 }
 
 enum ClaudeHookConfiguration {
@@ -423,14 +446,20 @@ enum ClaudeHookConfiguration {
         if !conflicts.isEmpty {
             return .conflict(conflicts)
         }
-        if handlers.contains(where: isManagedHandler) {
+        if handlers.contains(where: authenticatedManagedHandler) {
             return .installed
         }
         return .missing
     }
 
     @discardableResult
-    static func install(at settingsURL: URL = defaultSettingsURL()) throws -> Bool {
+    static func install(
+        at settingsURL: URL = defaultSettingsURL(),
+        isClaudeAvailable: () -> Bool = { locateClaudeExecutable() != nil }
+    ) throws -> Bool {
+        guard isClaudeAvailable() else {
+            return false
+        }
         var settings = try loadSettings(at: settingsURL)
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
         var permissionEntries = hooks["PermissionRequest"] as? [[String: Any]] ?? []
@@ -438,10 +467,22 @@ enum ClaudeHookConfiguration {
 
         let conflicts = handlers.compactMap(conflictDescription)
         guard conflicts.isEmpty else {
-            throw ClaudeHookConfigurationError.conflictingPermissionHooks(conflicts)
-        }
-        if handlers.contains(where: isManagedHandler) {
             return false
+        }
+        if handlers.contains(where: authenticatedManagedHandler) {
+            return false
+        }
+
+        let token = makeAuthenticationToken()
+
+        if permissionEntries.contains(where: permissionEntryContainsManagedHandler) {
+            permissionEntries = permissionEntries.map {
+                authenticatedPermissionEntry($0, token: token)
+            }
+            hooks["PermissionRequest"] = permissionEntries
+            settings["hooks"] = hooks
+            try writeSettings(settings, to: settingsURL, makeBackup: true)
+            return true
         }
 
         permissionEntries.append([
@@ -451,6 +492,7 @@ enum ClaudeHookConfiguration {
                 "url": ClaudeHookConstants.url,
                 "timeout": ClaudeHookConstants.timeoutSeconds,
                 "statusMessage": "等待 ChatBird 确认…",
+                "headers": [ClaudeHookConstants.authenticationHeader: token],
             ]],
         ])
         hooks["PermissionRequest"] = permissionEntries
@@ -539,6 +581,65 @@ enum ClaudeHookConfiguration {
               let url = handler["url"] as? String
         else { return false }
         return url == ClaudeHookConstants.url
+    }
+
+    private static func authenticatedManagedHandler(_ handler: [String: Any]) -> Bool {
+        isManagedHandler(handler) && authenticationToken(handler) != nil
+    }
+
+    private static func permissionEntryContainsManagedHandler(_ entry: [String: Any]) -> Bool {
+        if isManagedHandler(entry) { return true }
+        guard let nested = entry["hooks"] as? [[String: Any]] else { return false }
+        return nested.contains(where: isManagedHandler)
+    }
+
+    private static func authenticatedPermissionEntry(
+        _ entry: [String: Any],
+        token: String
+    ) -> [String: Any] {
+        if isManagedHandler(entry) {
+            return authenticatedHandler(entry, token: token)
+        }
+        guard let nested = entry["hooks"] as? [[String: Any]] else { return entry }
+        var updated = entry
+        updated["hooks"] = nested.map { handler in
+            isManagedHandler(handler)
+                ? authenticatedHandler(handler, token: token)
+                : handler
+        }
+        return updated
+    }
+
+    private static func authenticatedHandler(
+        _ handler: [String: Any],
+        token: String
+    ) -> [String: Any] {
+        var updated = handler
+        var headers = updated["headers"] as? [String: Any] ?? [:]
+        headers[ClaudeHookConstants.authenticationHeader] = token
+        updated["headers"] = headers
+        return updated
+    }
+
+    static func authenticationToken(at settingsURL: URL = defaultSettingsURL()) -> String? {
+        guard let settings = try? loadSettings(at: settingsURL) else { return nil }
+        return permissionHandlers(in: settings)
+            .first(where: isManagedHandler)
+            .flatMap(authenticationToken)
+    }
+
+    private static func authenticationToken(_ handler: [String: Any]) -> String? {
+        guard let headers = handler["headers"] as? [String: Any] else { return nil }
+        return headers[ClaudeHookConstants.authenticationHeader] as? String
+    }
+
+    private static func makeAuthenticationToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status == errSecSuccess {
+            return Data(bytes).base64EncodedString()
+        }
+        return UUID().uuidString + UUID().uuidString
     }
 
     private static func conflictDescription(_ handler: [String: Any]) -> String? {
@@ -775,18 +876,105 @@ func runClaudeHookSelfTest() -> Never {
         isDirectory: true
     )
     let settingsURL = temporaryRoot.appendingPathComponent("settings.json")
+    let missingClaudeSettingsURL = temporaryRoot.appendingPathComponent(
+        "missing-claude-settings.json"
+    )
+    let conflictingSettingsURL = temporaryRoot.appendingPathComponent(
+        "conflicting-settings.json"
+    )
     do {
         try manager.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+        guard try !ClaudeHookConfiguration.install(
+            at: missingClaudeSettingsURL,
+            isClaudeAvailable: { false }
+        ), !manager.fileExists(atPath: missingClaudeSettingsURL.path)
+        else {
+            fail("缺少 Claude CLI 时不应写入 settings.json")
+        }
+
         try Data(#"{"model":"test"}"#.utf8).write(to: settingsURL)
-        guard try ClaudeHookConfiguration.install(at: settingsURL) else {
+        guard try ClaudeHookConfiguration.install(
+            at: settingsURL,
+            isClaudeAvailable: { true }
+        ) else {
             fail("配置安装没有产生修改")
         }
         guard try ClaudeHookConfiguration.status(at: settingsURL) == .installed else {
             fail("配置安装状态")
         }
-        guard try !ClaudeHookConfiguration.install(at: settingsURL) else {
+        guard let hookToken = ClaudeHookConfiguration.authenticationToken(
+            at: settingsURL
+        ), hookToken.count >= 32,
+           ClaudePermissionHookServer.isAuthenticated(
+                headers: [ClaudeHookConstants.authenticationHeader.lowercased(): hookToken],
+                expectedToken: hookToken
+           ), !ClaudePermissionHookServer.isAuthenticated(
+                headers: [ClaudeHookConstants.authenticationHeader.lowercased(): "wrong"],
+                expectedToken: hookToken
+           ), !ClaudePermissionHookServer.isAuthenticated(
+                headers: [:],
+                expectedToken: hookToken
+           )
+        else {
+            fail("Hook 鉴权 token 或请求校验")
+        }
+        guard ClaudePermissionHookServer.canAcceptRequest(
+                pendingCount: ClaudeHookConstants.maximumPendingRequests - 1
+              ), !ClaudePermissionHookServer.canAcceptRequest(
+                pendingCount: ClaudeHookConstants.maximumPendingRequests
+              )
+        else {
+            fail("Hook 待处理队列上限")
+        }
+        guard try !ClaudeHookConfiguration.install(
+            at: settingsURL,
+            isClaudeAvailable: { true }
+        ) else {
             fail("配置安装不具备幂等性")
         }
+
+        let conflictingSettings = """
+        {"hooks":{"PermissionRequest":[{"matcher":"","hooks":[{"type":"command","command":"echo external"}]}]}}
+        """
+        try Data(conflictingSettings.utf8).write(to: conflictingSettingsURL)
+        let originalConflictData = try Data(contentsOf: conflictingSettingsURL)
+        guard try !ClaudeHookConfiguration.install(
+            at: conflictingSettingsURL,
+            isClaudeAvailable: { true }
+        ), try Data(contentsOf: conflictingSettingsURL) == originalConflictData,
+           case .conflict = try ClaudeHookConfiguration.status(at: conflictingSettingsURL)
+        else {
+            fail("已有 PermissionRequest Hook 应保留并跳过安装")
+        }
+        guard classifyClaudeHookInstall(
+            changed: true,
+            status: .installed,
+            claudeAvailable: true
+        ) == .installed,
+        classifyClaudeHookInstall(
+            changed: false,
+            status: .installed,
+            claudeAvailable: true
+        ) == .alreadyInstalled,
+        classifyClaudeHookInstall(
+            changed: false,
+            status: .missing,
+            claudeAvailable: false
+        ) == .skippedClaudeUnavailable,
+        classifyClaudeHookInstall(
+            changed: false,
+            status: .conflict(["external"]),
+            claudeAvailable: true
+        ) == .skippedConflict(["external"]),
+        classifyClaudeHookInstall(
+            changed: false,
+            status: .missing,
+            claudeAvailable: true
+        ) == .failedMissing
+        else {
+            fail("Hook 安装结果分类")
+        }
+
         guard try ClaudeHookConfiguration.uninstall(at: settingsURL) else {
             fail("配置卸载没有产生修改")
         }
@@ -808,7 +996,8 @@ func runClaudeHookSelfTest() -> Never {
     print(
         "claude-hook-self-test: protocol=3/3; question-panel=620pt+paging; "
             + "question-detail=2/2; terminal-handoff=matched+hidden+released; "
-            + "privacy=pass; config=install+idempotent+uninstall"
+            + "privacy=pass; auth=header; queue=bounded; "
+            + "config=optional+install+conflict-preserved+idempotent+uninstall"
     )
     exit(0)
 }

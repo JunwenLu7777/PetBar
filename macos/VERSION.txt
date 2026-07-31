@@ -5,5 +5,5 @@ Architecture: Universal 2 (arm64 + x86_64)
 Variant: Weekly quota and task status only
 Pet: chatbird-nt
 LaunchAgent: dev.chatbird.codex-quota-panel
-Panel: landscape 356x208 baseline; clickable Codex task deep links
+Panel: landscape 388x226 baseline; clickable Codex task deep links
 Native activity pills: existing tasks muted at install; new tasks are user-controlled

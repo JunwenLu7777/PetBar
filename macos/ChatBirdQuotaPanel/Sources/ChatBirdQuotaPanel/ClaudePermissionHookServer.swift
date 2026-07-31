@@ -18,6 +18,7 @@ final class ClaudePermissionHookServer {
     var onPrompt: PromptHandler?
     var onRequestExpired: ((UUID) -> Void)?
 
+    private let expectedAuthenticationToken: String?
     private let queue = DispatchQueue(
         label: "dev.chatbird.claude-permission-hook",
         qos: .userInitiated
@@ -25,6 +26,38 @@ final class ClaudePermissionHookServer {
     private var listener: NWListener?
     private var pendingRequests: [UUID: PendingRequest] = [:]
     private(set) var state: State = .stopped
+
+    init(
+        expectedAuthenticationToken: String? = ClaudeHookConfiguration
+            .authenticationToken()
+    ) {
+        self.expectedAuthenticationToken = expectedAuthenticationToken
+    }
+
+    static func isAuthenticated(
+        headers: [String: String],
+        expectedToken: String?
+    ) -> Bool {
+        guard let expectedToken, !expectedToken.isEmpty,
+              let actualToken = headers[ClaudeHookConstants.authenticationHeader.lowercased()]
+        else { return false }
+        return constantTimeEquals(actualToken, expectedToken)
+    }
+
+    static func canAcceptRequest(pendingCount: Int) -> Bool {
+        pendingCount < ClaudeHookConstants.maximumPendingRequests
+    }
+
+    private static func constantTimeEquals(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsBytes = Array(lhs.utf8)
+        let rhsBytes = Array(rhs.utf8)
+        guard lhsBytes.count == rhsBytes.count else { return false }
+        var difference: UInt8 = 0
+        for index in lhsBytes.indices {
+            difference |= lhsBytes[index] ^ rhsBytes[index]
+        }
+        return difference == 0
+    }
 
     func start() throws {
         guard listener == nil else { return }
@@ -122,6 +155,29 @@ final class ClaudePermissionHookServer {
             sendHTTPResponse(
                 status: 404,
                 reason: "Not Found",
+                body: Data(),
+                connection: connection
+            )
+            return
+        }
+
+        guard Self.isAuthenticated(
+            headers: request.headers,
+            expectedToken: expectedAuthenticationToken
+        ) else {
+            sendHTTPResponse(
+                status: 403,
+                reason: "Forbidden",
+                body: Data(),
+                connection: connection
+            )
+            return
+        }
+
+        guard Self.canAcceptRequest(pendingCount: pendingRequests.count) else {
+            sendHTTPResponse(
+                status: 503,
+                reason: "Service Unavailable",
                 body: Data(),
                 connection: connection
             )

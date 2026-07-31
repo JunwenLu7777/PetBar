@@ -66,29 +66,6 @@ enum QuotaClientError: LocalizedError {
     }
 }
 
-enum CodexResetCreditsClientError: LocalizedError {
-    case credentialsUnavailable
-    case invalidEndpoint
-    case requestFailed
-    case unauthorized
-    case invalidResponse
-
-    var errorDescription: String? {
-        switch self {
-        case .credentialsUnavailable:
-            return "Codex 登录信息暂不可用"
-        case .invalidEndpoint:
-            return "重置额度服务地址无效"
-        case .requestFailed:
-            return "重置额度服务暂不可用"
-        case .unauthorized:
-            return "Codex 登录已过期"
-        case .invalidResponse:
-            return "无法识别重置额度数据"
-        }
-    }
-}
-
 struct QuotaFailurePresentation: Equatable {
     let errorText: String?
     let statusText: String
@@ -418,7 +395,7 @@ final class CodexQuotaClient {
     }
 
     private func fetchSynchronously() -> Result<RateLimitsResult, Error> {
-        guard let codexURL = locateCodex() else {
+        guard let codexURL = locateCodexExecutable() else {
             return .failure(QuotaClientError.codexNotFound)
         }
 
@@ -500,149 +477,6 @@ final class CodexQuotaClient {
         }
 
         return .failure(QuotaClientError.noResponse)
-    }
-
-    private func locateCodex() -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let candidates = [
-            ProcessInfo.processInfo.environment["CODEX_BIN"],
-            home.appendingPathComponent(".local/bin/codex").path,
-            home.appendingPathComponent(".codex/packages/standalone/current/bin/codex").path,
-            home.appendingPathComponent("Applications/Codex.app/Contents/Resources/codex").path,
-            home.appendingPathComponent("Applications/ChatGPT.app/Contents/Resources/codex").path,
-            "/Applications/Codex.app/Contents/Resources/codex",
-            "/Applications/ChatGPT.app/Contents/Resources/codex",
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex",
-        ].compactMap { $0 }
-
-        return candidates.first(where: {
-            FileManager.default.isExecutableFile(atPath: $0)
-        }).map(URL.init(fileURLWithPath:))
-    }
-}
-
-final class CodexResetCreditsClient {
-    private struct Credentials {
-        let accessToken: String
-        let accountID: String?
-    }
-
-    func fetch(
-        completion: @escaping (Result<CodexResetCreditsSnapshot, Error>) -> Void
-    ) {
-        let credentials: Credentials
-        do {
-            credentials = try loadCredentials()
-        } catch {
-            completion(.failure(error))
-            return
-        }
-        guard let endpoint = URL(
-            string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
-        ) else {
-            completion(.failure(CodexResetCreditsClientError.invalidEndpoint))
-            return
-        }
-
-        var request = URLRequest(
-            url: endpoint,
-            cachePolicy: .reloadIgnoringLocalCacheData,
-            timeoutInterval: 4
-        )
-        request.httpMethod = "GET"
-        request.setValue(
-            "Bearer \(credentials.accessToken)",
-            forHTTPHeaderField: "Authorization"
-        )
-        request.setValue("ChatBirdQuotaPanel", forHTTPHeaderField: "User-Agent")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
-        request.setValue("Codex Desktop", forHTTPHeaderField: "originator")
-        if let accountID = credentials.accountID, !accountID.isEmpty {
-            request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-ID")
-        }
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if error != nil {
-                completion(.failure(CodexResetCreditsClientError.requestFailed))
-                return
-            }
-            guard let response = response as? HTTPURLResponse else {
-                completion(.failure(CodexResetCreditsClientError.requestFailed))
-                return
-            }
-            if response.statusCode == 401 || response.statusCode == 403 {
-                completion(.failure(CodexResetCreditsClientError.unauthorized))
-                return
-            }
-            guard (200...299).contains(response.statusCode), let data else {
-                completion(.failure(CodexResetCreditsClientError.requestFailed))
-                return
-            }
-            do {
-                let decoder = JSONDecoder()
-                decoder.dateDecodingStrategy = .custom { decoder in
-                    try Self.decodeISO8601Date(from: decoder)
-                }
-                let payload = try decoder.decode(
-                    CodexResetCreditsResponse.self,
-                    from: data
-                )
-                guard payload.availableCount >= 0 else {
-                    throw CodexResetCreditsClientError.invalidResponse
-                }
-                completion(.success(CodexResetCreditsSnapshot(
-                    credits: payload.credits,
-                    reportedAvailableCount: payload.availableCount,
-                    updatedAt: Date()
-                )))
-            } catch {
-                completion(.failure(CodexResetCreditsClientError.invalidResponse))
-            }
-        }.resume()
-    }
-
-    private func loadCredentials() throws -> Credentials {
-        let environment = ProcessInfo.processInfo.environment
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let codexHome: URL
-        if let configuredHome = environment["CODEX_HOME"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !configuredHome.isEmpty
-        {
-            codexHome = URL(fileURLWithPath: configuredHome, isDirectory: true)
-        } else {
-            codexHome = home.appendingPathComponent(".codex", isDirectory: true)
-        }
-        let authURL = codexHome.appendingPathComponent("auth.json")
-        guard let data = try? Data(contentsOf: authURL),
-              let object = try? JSONSerialization.jsonObject(with: data)
-                  as? [String: Any],
-              let tokens = object["tokens"] as? [String: Any],
-              let accessToken = (
-                  tokens["access_token"] as? String
-                      ?? tokens["accessToken"] as? String
-              ),
-              !accessToken.isEmpty
-        else {
-            throw CodexResetCreditsClientError.credentialsUnavailable
-        }
-        let accountID = tokens["account_id"] as? String
-            ?? tokens["accountId"] as? String
-        return Credentials(accessToken: accessToken, accountID: accountID)
-    }
-
-    private static func decodeISO8601Date(from decoder: Decoder) throws -> Date {
-        let value = try decoder.singleValueContainer().decode(String.self)
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let seconds = ISO8601DateFormatter()
-        seconds.formatOptions = [.withInternetDateTime]
-        if let date = fractional.date(from: value) ?? seconds.date(from: value) {
-            return date
-        }
-        throw CodexResetCreditsClientError.invalidResponse
     }
 }
 

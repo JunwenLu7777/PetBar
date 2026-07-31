@@ -9,8 +9,10 @@
 
 ## 运行时数据
 
-- ChatBird 额度面板读取本机 Codex app-server 提供的周额度，并通过已安装的 Claude CLI `/usage` 读取 Claude Code 的 5h、周额度与 Fable 周额度。
+- ChatBird 额度面板读取本机 Codex app-server 提供的周额度，以及 `rateLimitResetCredits` 中的可用重置次数与到期时间；并通过已安装的 Claude CLI `/usage` 读取 Claude Code 的 5h、周额度与 Fable 周额度。
+- Claude CLI 未安装时，安装器会跳过 Claude Code 权限确认 Hook，不创建或改写 `~/.claude/settings.json`；如果 `PermissionRequest` 已经配置了其他 Hook，安装器会保留原配置并继续完成 Codex 核心安装。
 - Claude 额度探针禁用工具、使用固定隔离会话和独立缓存目录，并清理探针自己生成的 transcript；面板不记录或展示探针原始终端输出。
+- 启用 Claude Code 权限确认 Hook 时，ChatBird 会在 `~/.claude/settings.json` 的 ChatBird HTTP Hook 条目中写入一个随机安装 token，并要求本机 `127.0.0.1:27841/chatbird/claude/permission` 请求携带 `X-ChatBird-Hook-Token` header。该 token 只用于本机 Hook 请求鉴权，不写入面板日志、不上传，也不会包含在返回给 Claude 的 Hook 响应中。Hook 服务只监听 `127.0.0.1`，单次请求正文上限为 256 KiB，待处理请求队列上限为 16 个。
 - 任务状态在本机读取 Codex 会话状态，以及 Claude CLI `agents --json` 与 `~/.claude/projects` 下的顶层会话 transcript，用于显示执行中、等待确认、已完成和执行失败。
 - Claude 任务只提取公开的 assistant `text` 作为悬停预览；不读取或展示 thinking、工具参数和原始工具输出，也会排除 subagent 与 ChatBird 额度探针 transcript。
 - 任务名称、任务文字、已读状态、额度百分比和重置时间不写入面板日志，也不上传。
@@ -19,8 +21,8 @@
 - 若用户已经授予辅助功能权限，运行中的面板会查找 Codex 暴露的固定辅助功能标签“显示活动，N 项 / Show activity, N item(s)”“打开通知 / Open notification”和“静音任务 / Mute task”。它只把同时具有固定窗口标题和计数按钮的透明角标窗口移到所有活动显示器之外，并调用 Codex 自带的菜单动作关闭新任务气泡；同名的任务列表窗口不会移动。读取到的其他辅助功能字符串不保留、不记录、不上传；面板不生成鼠标或键盘事件，也不会主动弹出授权请求。未授权时只检查授权状态，不访问 Codex 的辅助功能树、不移动窗口、不执行菜单动作，仍在 Codex 完全退出后同步任务 ID。
 - 面板不会修改 `ChatGPT.app`、`Codex.app`、`app.asar` 或应用签名。
 - 宠物像素探针只在用户已经授予屏幕录制权限时工作；面板不会为定位主动弹出屏幕录制授权。截图像素只在内存中用于计算宠物边界，不落盘、不上传。
-- 面板不显示 Token、Credits 或行情模块，也不发起远程第三方行情请求。
-- Claude 额度读取由用户已登录的 Claude CLI 完成，CLI 可能像正常使用 Claude Code 一样连接 Anthropic；ChatBird 不读取 Claude 凭据，也不直接调用 Anthropic OAuth API。
+- 面板不显示 Token 或行情模块，也不发起远程第三方行情请求；只展示 Codex app-server 返回的重置额度次数与到期时间，不直接读取登录凭据。
+- Claude 额度读取与 Claude Hook 请求由用户已登录的 Claude CLI 完成，CLI 可能像正常使用 Claude Code 一样连接 Anthropic；ChatBird 不读取 Claude 凭据，也不直接调用 Anthropic OAuth API。
 - Mac 日志位于当前用户的 `~/Library/Logs/ChatBird额度面板.log`。
 
 ## macOS 权限

@@ -15,10 +15,8 @@ import Foundation
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let quotaClient = CodexQuotaClient()
-    private let codexResetCreditsClient = CodexResetCreditsClient()
     private let claudeQuotaClient = ClaudeQuotaClient()
     private let quotaProviderPreference = QuotaProviderPreference()
-    private let taskProgressReader = CombinedTaskProgressReader()
     private let locator = PetWindowLocator()
     private let healthWriter = RuntimeHealthWriter()
     private let petSelectionStore = ChatBirdPetSelectionStore()
@@ -34,8 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var globalMouseMonitor: Any?
     private var isRefreshing = false
     private var quotaRowsByProvider: [QuotaProvider: [QuotaRow]] = [:]
-    private var codexResetCreditsSnapshot: CodexResetCreditsSnapshot?
-    private var isRefreshingTaskProgress = false
+    private var currentCodexResetCreditsSnapshot: CodexResetCreditsSnapshot?
+    private var taskProgressRefreshGate = TaskProgressRefreshGate(
+        timeout: taskProgressRefreshInterval * 2
+    )
     private var lastLocatedPet: LocatedPet?
     private var lastLocatedAt: CFAbsoluteTime = 0
     private var lastPetLocationPollAt: CFAbsoluteTime = 0
@@ -98,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        _ = petSelectionStore.selectChatBird()
+        selectChatBirdAtStartup(using: petSelectionStore)
         let availableProviders = synchronizeQuotaProviderAvailability()
         makePanel()
         startCodexDesktopMonitoring()
@@ -624,7 +624,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if quotaView.selectedQuotaProvider != resolvedProvider {
             quotaView.selectedQuotaProvider = resolvedProvider
             quotaView.rows = quotaRowsByProvider[resolvedProvider] ?? []
-            quotaView.codexResetCredits = codexResetCreditsSnapshot
+            quotaView.codexResetCredits = currentCodexResetCreditsSnapshot
             quotaView.errorText = nil
             quotaView.statusText = quotaView.rows.isEmpty
                 ? "正在读取额度…"
@@ -650,23 +650,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch provider {
         case .codex:
-            refreshCodexResetCredits()
             quotaClient.fetch { [weak self] result in
-                let rowsResult = result.map(Self.makeRows(from:))
+                let payloadResult = result.map { response in
+                    QuotaRefreshPayload(
+                        rows: Self.makeRows(from: response),
+                        resetCredits: makeCodexResetCreditsSnapshot(
+                            from: response,
+                            now: Date()
+                        )
+                    )
+                }
                 DispatchQueue.main.async {
                     self?.completeQuotaRefresh(
                         provider: provider,
-                        result: rowsResult
+                        result: payloadResult
                     )
                 }
             }
         case .claudeCode:
             claudeQuotaClient.fetch { [weak self] result in
-                let rowsResult = result.map(\.rows)
+                let payloadResult = result.map {
+                    QuotaRefreshPayload(rows: $0.rows, resetCredits: nil)
+                }
                 DispatchQueue.main.async {
                     self?.completeQuotaRefresh(
                         provider: provider,
-                        result: rowsResult
+                        result: payloadResult
                     )
                 }
             }
@@ -675,7 +684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func completeQuotaRefresh(
         provider: QuotaProvider,
-        result: Result<[QuotaRow], Error>
+        result: Result<QuotaRefreshPayload, Error>
     ) {
         isRefreshing = false
         guard quotaView.selectedQuotaProvider == provider else {
@@ -685,9 +694,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quotaView.isQuotaRefreshing = false
 
         switch result {
-        case .success(let rows):
+        case .success(let payload):
             let updatedAt = Date()
+            let rows = payload.rows
             cacheQuotaRows(rows, for: provider)
+            if provider == .codex {
+                currentCodexResetCreditsSnapshot = payload.resetCredits
+                quotaView.codexResetCredits = payload.resetCredits
+            }
             quotaView.rows = rows
             quotaView.errorText = rows.isEmpty
                 ? (provider == .codex
@@ -711,6 +725,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             quotaView.errorText = presentation.errorText
             quotaView.statusText = presentation.statusText
+            if provider == .codex {
+                currentCodexResetCreditsSnapshot = nil
+                quotaView.codexResetCredits = nil
+            }
         }
     }
 
@@ -719,7 +737,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quotaProviderPreference.selectedProvider = provider
         quotaView.selectedQuotaProvider = provider
         quotaView.rows = quotaRowsByProvider[provider] ?? []
-        quotaView.codexResetCredits = codexResetCreditsSnapshot
+        quotaView.codexResetCredits = currentCodexResetCreditsSnapshot
         quotaView.errorText = nil
         quotaView.statusText = quotaView.rows.isEmpty
             ? "正在读取额度…"
@@ -731,39 +749,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func cacheQuotaRows(_ rows: [QuotaRow], for provider: QuotaProvider) {
         quotaRowsByProvider[provider] = rows
-        guard let remaining = rows.first(where: {
-            $0.name == provider.summaryRowName
-        })?.remainingPercent else { return }
-        var summaries = quotaView.providerRemainingPercents
-        summaries[provider] = remaining
-        quotaView.providerRemainingPercents = summaries
-    }
-
-    private func refreshCodexResetCredits() {
-        codexResetCreditsClient.fetch { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                switch result {
-                case .success(let snapshot):
-                    self.codexResetCreditsSnapshot = snapshot
-                    self.quotaView.codexResetCredits = snapshot
-                case .failure:
-                    self.codexResetCreditsSnapshot = nil
-                    self.quotaView.codexResetCredits = nil
-                }
-            }
-        }
+        quotaView.providerRemainingPercents = quotaProviderRemainingPercents(
+            afterCaching: rows,
+            for: provider,
+            existing: quotaView.providerRemainingPercents
+        )
     }
 
     private func refreshBackgroundQuotaSummary(for provider: QuotaProvider) {
         switch provider {
         case .codex:
-            refreshCodexResetCredits()
             quotaClient.fetch { [weak self] result in
                 guard case .success(let response) = result else { return }
                 let rows = Self.makeRows(from: response)
+                let resetCredits = makeCodexResetCreditsSnapshot(
+                    from: response,
+                    now: Date()
+                )
                 DispatchQueue.main.async {
-                    self?.cacheQuotaRows(rows, for: provider)
+                    guard let self else { return }
+                    self.cacheQuotaRows(rows, for: provider)
+                    self.currentCodexResetCreditsSnapshot = resetCredits
+                    self.quotaView.codexResetCredits = resetCredits
                 }
             }
         case .claudeCode:
@@ -777,17 +784,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshTaskProgress() {
-        guard !isRefreshingTaskProgress else { return }
-        isRefreshingTaskProgress = true
+        guard let generation = taskProgressRefreshGate.begin(
+            now: CFAbsoluteTimeGetCurrent()
+        ) else { return }
         let claudeCodeAvailable = synchronizeQuotaProviderAvailability()
             .contains(.claudeCode)
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let snapshot = self.taskProgressReader.read(
+            let snapshot = CombinedTaskProgressReader().read(
                 claudeCodeAvailable: claudeCodeAvailable
             )
             DispatchQueue.main.async {
-                self.isRefreshingTaskProgress = false
+                guard self.taskProgressRefreshGate.complete(
+                    generation: generation
+                ) else { return }
                 self.quotaView.taskProgress = snapshot
                 let nextBaseSize = panelSizeForTaskRows(snapshot.rowCount)
                 if nextBaseSize != self.currentBasePanelSize {
@@ -812,4 +822,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return []
     }
 
+}
+
+private struct QuotaRefreshPayload {
+    let rows: [QuotaRow]
+    let resetCredits: CodexResetCreditsSnapshot?
+}
+
+func quotaProviderRemainingPercents(
+    afterCaching rows: [QuotaRow],
+    for provider: QuotaProvider,
+    existing: [QuotaProvider: Int]
+) -> [QuotaProvider: Int] {
+    var summaries = existing
+    if let remaining = rows.first(where: {
+        $0.name == provider.summaryRowName
+    })?.remainingPercent {
+        summaries[provider] = remaining
+    } else {
+        summaries.removeValue(forKey: provider)
+    }
+    return summaries
+}
+
+struct TaskProgressRefreshGate {
+    private let timeout: TimeInterval
+    private let maximumConcurrentReads: Int
+    private var activeStartedAtByGeneration: [Int: CFAbsoluteTime] = [:]
+    private var latestGeneration: Int?
+    private var nextGeneration = 0
+
+    init(
+        timeout: TimeInterval,
+        maximumConcurrentReads: Int = 2
+    ) {
+        self.timeout = max(0.1, timeout)
+        self.maximumConcurrentReads = max(1, maximumConcurrentReads)
+    }
+
+    mutating func begin(now: CFAbsoluteTime) -> Int? {
+        if let latestGeneration,
+           let startedAt = activeStartedAtByGeneration[latestGeneration],
+           now - startedAt < timeout {
+            return nil
+        }
+        guard activeStartedAtByGeneration.count < maximumConcurrentReads else {
+            return nil
+        }
+        nextGeneration += 1
+        latestGeneration = nextGeneration
+        activeStartedAtByGeneration[nextGeneration] = now
+        return nextGeneration
+    }
+
+    mutating func complete(generation: Int) -> Bool {
+        guard activeStartedAtByGeneration.removeValue(forKey: generation) != nil,
+              latestGeneration == generation
+        else {
+            return false
+        }
+        latestGeneration = nil
+        return true
+    }
 }

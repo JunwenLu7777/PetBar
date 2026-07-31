@@ -38,7 +38,8 @@ func runChatBirdEditionSelfTest() -> Never {
             throw NSError(domain: "ChatBirdEditionSelfTest", code: 1)
         }
         let chatBirdText = try String(contentsOf: config, encoding: .utf8)
-        guard chatBirdText.components(separatedBy: "selected-avatar-id").count - 1 == 1,
+        guard chatBirdText.components(separatedBy: "selected-avatar-id").count - 1 == 2,
+              chatBirdText.contains("selected-avatar-id = \"codex\""),
               chatBirdText.contains("selected-avatar-id = \"custom:chatbird-nt\"")
         else {
             throw NSError(domain: "ChatBirdEditionSelfTest", code: 2)
@@ -50,12 +51,26 @@ func runChatBirdEditionSelfTest() -> Never {
         guard missingDesktop.contains("[desktop]\nselected-avatar-id = \"custom:chatbird-nt\"") else {
             throw NSError(domain: "ChatBirdEditionSelfTest", code: 3)
         }
+        let blockedParent = directory.appendingPathComponent("not-a-directory")
+        try Data("blocked".utf8).write(to: blockedParent)
+        let blockedStore = ChatBirdPetSelectionStore(
+            configURL: blockedParent.appendingPathComponent("config.toml")
+        )
+        var startupMessages: [String] = []
+        guard !selectChatBirdAtStartup(
+            using: blockedStore,
+            logError: { startupMessages.append($0) }
+        ), startupMessages.count == 1,
+           startupMessages[0].contains("无法在 Codex 中选中 ChatBird")
+        else {
+            throw NSError(domain: "ChatBirdEditionSelfTest", code: 4)
+        }
     } catch {
         fputs("ChatBird edition self-test failed: \(error)\n", stderr)
         exit(1)
     }
 
-    print("chatbird-edition-self-test: edition=chatbird-nt pet=chatbird-nt persistence=pass duplicate-key=pass")
+    print("chatbird-edition-self-test: edition=chatbird-nt pet=chatbird-nt persistence=pass section-scope=pass startup-failure=logged")
     exit(0)
 }
 
@@ -198,6 +213,20 @@ func runWeeklyQuotaSelfTest() -> Never {
         )],
         updatedAt: statusUpdatedAt
     )
+    let summaryClearedAfterEmptyRows = quotaProviderRemainingPercents(
+        afterCaching: [],
+        for: .codex,
+        existing: [.codex: 82, .claudeCode: 93]
+    )
+    let summaryClearedAfterSummarylessRows = quotaProviderRemainingPercents(
+        afterCaching: [QuotaRow(
+            name: "周额度",
+            remainingPercent: 91,
+            resetsAt: nil
+        )],
+        for: .claudeCode,
+        existing: [.codex: 82, .claudeCode: 93]
+    )
 
     guard weeklyRateLimitWindow(from: legacy)?.usedPercent == 42,
           weeklyRateLimitWindow(from: current)?.usedPercent == 25,
@@ -222,12 +251,14 @@ func runWeeklyQuotaSelfTest() -> Never {
           weeklyResetStatus == "8月7日 08:59 重置 · 1分钟",
           missingResetStatus == "10:38 更新 · 1分钟",
           claudeStatus == "10:38 更新 · 1分钟",
+          summaryClearedAfterEmptyRows == [.claudeCode: 93],
+          summaryClearedAfterSummarylessRows == [.codex: 82],
           refreshInterval == 60
     else {
         fputs("weekly quota self-test failed\n", stderr)
         exit(1)
     }
-    print("weekly-quota-self-test: legacy-secondary=pass current-primary=pass retired-short-window=ignored metadata-free=ignored spend-control=ignored thresholds=7/7 reset-credits=available-only weekly-reset-status=dated+fallback failure-copy=pass stale-row=preserved refresh=60s")
+    print("weekly-quota-self-test: legacy-secondary=pass current-primary=pass retired-short-window=ignored metadata-free=ignored spend-control=ignored thresholds=7/7 reset-credits=available-only weekly-reset-status=dated+fallback failure-copy=pass stale-row=preserved provider-summary-clear=2/2 refresh=60s")
     exit(0)
 }
 

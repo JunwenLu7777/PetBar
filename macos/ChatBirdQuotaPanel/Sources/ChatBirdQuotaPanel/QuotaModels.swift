@@ -34,6 +34,7 @@ struct RateLimitSnapshot: Decodable {
 struct RateLimitsResult: Decodable {
     let rateLimits: RateLimitSnapshot
     let rateLimitsByLimitId: [String: RateLimitSnapshot]?
+    let rateLimitResetCredits: CodexResetCreditsResponse?
 }
 
 enum CodexResetCreditStatus: Equatable, Decodable {
@@ -54,7 +55,30 @@ struct CodexResetCredit: Equatable, Decodable {
     private enum CodingKeys: String, CodingKey {
         case id
         case status
-        case expiresAt = "expires_at"
+        case expiresAt
+        case legacyExpiresAt = "expires_at"
+    }
+
+    init(
+        id: String,
+        status: CodexResetCreditStatus,
+        expiresAt: Date?
+    ) {
+        self.id = id
+        self.status = status
+        self.expiresAt = expiresAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        status = try container.decode(CodexResetCreditStatus.self, forKey: .status)
+
+        if let timestamp = try container.decodeIfPresent(Int64.self, forKey: .expiresAt) {
+            expiresAt = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        } else {
+            expiresAt = try container.decodeIfPresent(Date.self, forKey: .legacyExpiresAt)
+        }
     }
 }
 
@@ -86,13 +110,38 @@ struct CodexResetCreditsSnapshot: Equatable {
 }
 
 struct CodexResetCreditsResponse: Decodable {
-    let credits: [CodexResetCredit]
+    let credits: [CodexResetCredit]?
     let availableCount: Int
 
     private enum CodingKeys: String, CodingKey {
         case credits
-        case availableCount = "available_count"
+        case availableCount
+        case legacyAvailableCount = "available_count"
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        credits = try container.decodeIfPresent([CodexResetCredit].self, forKey: .credits)
+        if let count = try container.decodeIfPresent(Int.self, forKey: .availableCount) {
+            availableCount = count
+        } else {
+            availableCount = try container.decode(Int.self, forKey: .legacyAvailableCount)
+        }
+    }
+}
+
+func makeCodexResetCreditsSnapshot(
+    from response: RateLimitsResult,
+    now: Date = Date()
+) -> CodexResetCreditsSnapshot? {
+    guard let summary = response.rateLimitResetCredits,
+          summary.availableCount >= 0
+    else { return nil }
+    return CodexResetCreditsSnapshot(
+        credits: summary.credits ?? [],
+        reportedAvailableCount: summary.availableCount,
+        updatedAt: now
+    )
 }
 
 struct RPCError: Decodable {
@@ -179,8 +228,13 @@ func locateClaudeExecutable(
         FileManager.default.isExecutableFile(atPath: $0)
     }
 ) -> URL? {
+    let pathCandidates = executablePaths(
+        named: "claude",
+        pathEnvironment: environment["PATH"]
+    )
     let candidatePaths: [String?] = [
         environment["CLAUDE_BIN"],
+    ] + pathCandidates.map(Optional.some) + [
         homeDirectory.appendingPathComponent(".local/bin/claude").path,
         "/opt/homebrew/bin/claude",
         "/usr/local/bin/claude",
@@ -191,6 +245,57 @@ func locateClaudeExecutable(
     }
     return candidates.first(where: isExecutableFile)
         .map(URL.init(fileURLWithPath:))
+}
+
+func locateCodexExecutable(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+    isExecutableFile: (String) -> Bool = {
+        FileManager.default.isExecutableFile(atPath: $0)
+    }
+) -> URL? {
+    let pathCandidates = executablePaths(
+        named: "codex",
+        pathEnvironment: environment["PATH"]
+    )
+    let candidatePaths: [String?] = [
+        environment["CODEX_BIN"],
+    ] + pathCandidates.map(Optional.some) + [
+        homeDirectory.appendingPathComponent(".local/bin/codex").path,
+        homeDirectory
+            .appendingPathComponent(".codex/packages/standalone/current/bin/codex")
+            .path,
+        homeDirectory
+            .appendingPathComponent("Applications/Codex.app/Contents/Resources/codex")
+            .path,
+        homeDirectory
+            .appendingPathComponent("Applications/ChatGPT.app/Contents/Resources/codex")
+            .path,
+        "/Applications/Codex.app/Contents/Resources/codex",
+        "/Applications/ChatGPT.app/Contents/Resources/codex",
+        "/opt/homebrew/bin/codex",
+        "/usr/local/bin/codex",
+    ]
+    let candidates = candidatePaths.compactMap { path -> String? in
+        guard let path, !path.isEmpty else { return nil }
+        return path
+    }
+    return candidates.first(where: isExecutableFile)
+        .map(URL.init(fileURLWithPath:))
+}
+
+private func executablePaths(
+    named executableName: String,
+    pathEnvironment: String?
+) -> [String] {
+    guard let pathEnvironment, !pathEnvironment.isEmpty else { return [] }
+    return pathEnvironment
+        .split(separator: ":", omittingEmptySubsequences: true)
+        .map {
+            URL(fileURLWithPath: String($0), isDirectory: true)
+                .appendingPathComponent(executableName)
+                .path
+        }
 }
 
 final class QuotaProviderPreference {

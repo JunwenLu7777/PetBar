@@ -114,7 +114,7 @@ struct TaskProgressItem: Equatable {
     }
 
     var deduplicationKey: String {
-        "\(source.rawValue):\(normalizedTitle)"
+        identityKey
     }
 
     var canOpen: Bool {
