@@ -155,6 +155,49 @@ func runWeeklyQuotaSelfTest() -> Never {
         snapshot: resetCredits,
         now: resetReferenceDate
     )
+    var statusCalendar = Calendar(identifier: .gregorian)
+    statusCalendar.timeZone = .current
+    let statusUpdatedAt = statusCalendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 31,
+        hour: 10,
+        minute: 38
+    ))!
+    let weeklyResetAt = statusCalendar.date(from: DateComponents(
+        year: 2026,
+        month: 8,
+        day: 7,
+        hour: 8,
+        minute: 59
+    ))!
+    let weeklyResetStatus = quotaSuccessStatusText(
+        provider: .codex,
+        rows: [QuotaRow(
+            name: "周额度",
+            remainingPercent: 82,
+            resetsAt: weeklyResetAt
+        )],
+        updatedAt: statusUpdatedAt
+    )
+    let missingResetStatus = quotaSuccessStatusText(
+        provider: .codex,
+        rows: [QuotaRow(
+            name: "周额度",
+            remainingPercent: 82,
+            resetsAt: nil
+        )],
+        updatedAt: statusUpdatedAt
+    )
+    let claudeStatus = quotaSuccessStatusText(
+        provider: .claudeCode,
+        rows: [QuotaRow(
+            name: "周额度",
+            remainingPercent: 82,
+            resetsAt: weeklyResetAt
+        )],
+        updatedAt: statusUpdatedAt
+    )
 
     guard weeklyRateLimitWindow(from: legacy)?.usedPercent == 42,
           weeklyRateLimitWindow(from: current)?.usedPercent == 25,
@@ -176,12 +219,15 @@ func runWeeklyQuotaSelfTest() -> Never {
           resetCreditsPresentation.availableText == "1 次可用",
           resetCreditsPresentation.hasAvailableCredits,
           resetCreditsPresentation.expiryLines.count == 1,
+          weeklyResetStatus == "8月7日 08:59 重置 · 1分钟",
+          missingResetStatus == "10:38 更新 · 1分钟",
+          claudeStatus == "10:38 更新 · 1分钟",
           refreshInterval == 60
     else {
         fputs("weekly quota self-test failed\n", stderr)
         exit(1)
     }
-    print("weekly-quota-self-test: legacy-secondary=pass current-primary=pass retired-short-window=ignored metadata-free=ignored spend-control=ignored thresholds=7/7 reset-credits=available-only failure-copy=pass stale-row=preserved refresh=60s")
+    print("weekly-quota-self-test: legacy-secondary=pass current-primary=pass retired-short-window=ignored metadata-free=ignored spend-control=ignored thresholds=7/7 reset-credits=available-only weekly-reset-status=dated+fallback failure-copy=pass stale-row=preserved refresh=60s")
     exit(0)
 }
 

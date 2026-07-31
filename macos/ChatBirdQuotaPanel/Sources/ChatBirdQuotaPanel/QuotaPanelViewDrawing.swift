@@ -274,19 +274,22 @@ extension QuotaPanelView {
             )
             let remainingText = providerRemainingPercents[provider]
                 .map { "\($0)%" } ?? "--"
+            let font = NSFont.monospacedDigitSystemFont(
+                ofSize: 9.2,
+                weight: isSelected ? .semibold : .medium
+            )
+            let textHeight = ceil(font.ascender - font.descender)
             drawText(
                 "\(remainingText) · \(provider.summaryWindowName)",
                 in: NSRect(
-                    x: iconRect.maxX + 5,
-                    y: rect.minY + 3,
-                    width: rect.width - 29,
-                    height: 17
+                    x: rect.minX,
+                    y: floor(rect.midY - textHeight / 2),
+                    width: rect.width,
+                    height: textHeight
                 ),
-                font: .monospacedDigitSystemFont(
-                    ofSize: 9.2,
-                    weight: isSelected ? .semibold : .medium
-                ),
-                color: NSColor.white.withAlphaComponent(isSelected ? 0.96 : 0.64)
+                font: font,
+                color: NSColor.white.withAlphaComponent(isSelected ? 0.96 : 0.64),
+                alignment: .center
             )
         }
     }

@@ -71,6 +71,14 @@ let quotaResetCalendarFormatter: DateFormatter = {
     return formatter
 }()
 
+let quotaUpdateClockFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "zh_CN")
+    formatter.timeZone = .current
+    formatter.dateFormat = "HH:mm"
+    return formatter
+}()
+
 func quotaResetTimeDescription(
     _ date: Date,
     now: Date = Date()
@@ -85,6 +93,22 @@ func quotaResetTimeDescription(
         return "明天 \(quotaResetClockFormatter.string(from: date))"
     }
     return quotaResetCalendarFormatter.string(from: date)
+}
+
+func quotaSuccessStatusText(
+    provider: QuotaProvider,
+    rows: [QuotaRow],
+    updatedAt: Date
+) -> String {
+    let refreshMinutes = max(1, Int(refreshInterval / 60))
+    if provider == .codex,
+       let resetAt = rows.first(where: {
+           $0.name == provider.summaryRowName
+       })?.resetsAt
+    {
+        return "\(quotaResetTimeDescription(resetAt, now: updatedAt)) 重置 · \(refreshMinutes)分钟"
+    }
+    return "\(quotaUpdateClockFormatter.string(from: updatedAt)) 更新 · \(refreshMinutes)分钟"
 }
 
 struct CodexResetCreditsPresentation: Equatable {

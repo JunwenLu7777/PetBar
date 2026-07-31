@@ -686,6 +686,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch result {
         case .success(let rows):
+            let updatedAt = Date()
             cacheQuotaRows(rows, for: provider)
             quotaView.rows = rows
             quotaView.errorText = rows.isEmpty
@@ -695,7 +696,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 : nil
             quotaView.statusText = rows.isEmpty
                 ? "没有可确认的额度数据"
-                : "\(Self.timeFormatter.string(from: Date())) 更新 · 1分钟"
+                : quotaSuccessStatusText(
+                    provider: provider,
+                    rows: rows,
+                    updatedAt: updatedAt
+                )
         case .failure(let error):
             let existingRows = quotaRowsByProvider[provider] ?? []
             quotaView.rows = existingRows
@@ -807,11 +812,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return []
     }
 
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = .current
-        formatter.dateFormat = "HH:mm"
-        return formatter
-    }()
 }

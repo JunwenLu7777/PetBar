@@ -159,7 +159,11 @@ func renderPreviewOnce(to outputPath: String) -> Never {
             resetsAt: Calendar.current.date(byAdding: .day, value: 7, to: Date())
         )]
     }
-    view.statusText = "12:43 更新 · 1分钟"
+    view.statusText = quotaSuccessStatusText(
+        provider: view.selectedQuotaProvider,
+        rows: view.rows,
+        updatedAt: previewNow
+    )
     view.taskProgress = previewTasks
     view.layoutSubtreeIfNeeded()
 
