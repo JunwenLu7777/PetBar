@@ -387,6 +387,22 @@ enum ClaudeQuotaParser {
 
 final class CodexQuotaClient {
     private let decoder = JSONDecoder()
+    private let executableLocator: () -> URL?
+    private let timeout: TimeInterval
+    private let terminationGracePeriod: TimeInterval
+    private let maximumOutputBytes = 1_048_576
+
+    init(
+        executableLocator: @escaping () -> URL? = {
+            locateCodexExecutable()
+        },
+        timeout: TimeInterval = 15,
+        terminationGracePeriod: TimeInterval = 0.25
+    ) {
+        self.executableLocator = executableLocator
+        self.timeout = max(0.01, timeout)
+        self.terminationGracePeriod = max(0.01, terminationGracePeriod)
+    }
 
     func fetch(completion: @escaping (Result<RateLimitsResult, Error>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
@@ -395,18 +411,17 @@ final class CodexQuotaClient {
     }
 
     private func fetchSynchronously() -> Result<RateLimitsResult, Error> {
-        guard let codexURL = locateCodexExecutable() else {
+        guard let codexURL = executableLocator() else {
             return .failure(QuotaClientError.codexNotFound)
         }
 
         let process = Process()
         let stdout = Pipe()
-        let stderr = Pipe()
         let stdin = Pipe()
         process.executableURL = codexURL
         process.arguments = ["app-server", "--stdio"]
         process.standardOutput = stdout
-        process.standardError = stderr
+        process.standardError = FileHandle.nullDevice
         process.standardInput = stdin
 
         do {
@@ -414,31 +429,36 @@ final class CodexQuotaClient {
         } catch {
             return .failure(QuotaClientError.launchFailed(error.localizedDescription))
         }
+        defer { try? stdin.fileHandleForWriting.close() }
 
-        func writeLines(_ lines: [String]) {
+        func writeLines(_ lines: [String]) -> Bool {
             let text = lines.joined(separator: "\n") + "\n"
-            if let data = text.data(using: .utf8) {
-                stdin.fileHandleForWriting.write(data)
+            guard let data = text.data(using: .utf8) else { return false }
+            do {
+                try stdin.fileHandleForWriting.write(contentsOf: data)
+                return true
+            } catch {
+                return false
             }
         }
 
-        writeLines([
+        guard writeLines([
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"chatbird-quota-panel\",\"version\":\"\(panelVersion)\"},\"capabilities\":{\"experimentalApi\":true}}}",
-        ])
-
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 15) {
-            if process.isRunning {
-                process.terminate()
-            }
+        ]) else {
+            _ = stopProcess(process, gracePeriod: terminationGracePeriod)
+            return .failure(QuotaClientError.noResponse)
         }
 
         var buffer = Data()
         var didSendReadRequest = false
         var finalResponse: RPCResponse?
-
-        readLoop: while process.isRunning {
-            let chunk = stdout.fileHandleForReading.availableData
-            if chunk.isEmpty { break }
+        _ = captureProcessOutput(
+            process: process,
+            output: stdout.fileHandleForReading,
+            timeout: timeout,
+            terminationGracePeriod: terminationGracePeriod,
+            maximumOutputBytes: maximumOutputBytes
+        ) { chunk in
             buffer.append(chunk)
 
             while let newline = buffer.firstIndex(of: 0x0A) {
@@ -451,23 +471,25 @@ final class CodexQuotaClient {
 
                 if id == 1 && !didSendReadRequest {
                     didSendReadRequest = true
-                    writeLines([
+                    guard writeLines([
                         #"{"jsonrpc":"2.0","method":"initialized"}"#,
                         #"{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read","params":null}"#,
-                    ])
+                    ]) else {
+                        return false
+                    }
                     continue
                 }
 
                 if id == 2 {
-                    finalResponse = try? decoder.decode(RPCResponse.self, from: line)
-                    break readLoop
+                    finalResponse = try? self.decoder.decode(
+                        RPCResponse.self,
+                        from: line
+                    )
+                    return false
                 }
             }
+            return true
         }
-
-        try? stdin.fileHandleForWriting.close()
-        if process.isRunning { process.terminate() }
-        process.waitUntilExit()
 
         if let result = finalResponse?.result {
             return .success(result)

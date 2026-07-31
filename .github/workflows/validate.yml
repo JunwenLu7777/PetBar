@@ -29,12 +29,12 @@ jobs:
           "$BIN" --self-test-placement | grep 'activity-pill-segmentation=2/2.*gap=14.0; centerError=0.0'
           "$BIN" --self-test-lifecycle | grep 'pet-click-restore=5/5.*no-input-injection=2/2'
           "$BIN" --self-test-native-notification-state | grep 'prepare=pass reinstall=pass restore=pass file-lifecycle=pass user-values=preserved'
-          "$BIN" --self-test-task-progress | grep 'lifecycle=7/7.*refresh-gate=expired-prune+generation.*refresh-reader=reuse+isolation.*claude-terminal-focus=pid-chain+3-hosts.*claude-iterm-resume=2/2.*claude-otty=3/3.*claude-resume=2/2'
+          "$BIN" --self-test-task-progress | grep 'lifecycle=7/7.*refresh-gate=single-flight+generation.*refresh-reader=reuse.*claude-agents-timeout=bounded.*claude-terminal-focus=pid-chain+3-hosts.*claude-iterm-resume=2/2.*claude-otty=3/3.*claude-resume=2/2'
           "$BIN" --self-test-chatbird-edition | grep 'edition=chatbird-nt pet=chatbird-nt persistence=pass section-scope=pass startup-failure=logged'
           "$BIN" --self-test-weekly-quota | grep 'legacy-secondary=pass.*thresholds=7/7.*legacy-expires-at=iso+date-fallback+invalid-fails.*refresh=60s'
           "$BIN" --self-test-claude-quota | grep 'left-percent=3/3 used-percent=3/3 windows=5h+weekly+fable.*click-hit=pass.*provider-visibility=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass'
           "$BIN" --self-test-claude-hook | grep 'protocol=4/4.*privacy=pass.*auth=header.*queue=bounded.*config=optional+install+conflict-preserved+idempotent+uninstall+crlf+strict-json'
-          "$BIN" --self-test-client-contract | grep 'app-server-reset-credits=pass path-discovery=codex+claude count-only-credits=pass'
+          "$BIN" --self-test-client-contract | grep 'app-server-reset-credits=pass path-discovery=codex+claude count-only-credits=pass process-timeout=term+kill inherited-pipe=nonblocking codex-timeout=completion'
           SELECTION_ROOT="$(mktemp -d)"
           trap 'rm -rf "$SELECTION_ROOT"' EXIT
           SELECTION_CONFIG="$SELECTION_ROOT/config.toml"

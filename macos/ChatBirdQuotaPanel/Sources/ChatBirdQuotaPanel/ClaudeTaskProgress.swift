@@ -35,6 +35,54 @@ func shouldRefreshClaudeAgents(
     cachedAgentCount > 0 || hasRecentlyModifiedTranscript
 }
 
+func claudeTaskProgressLaunchEnvironment() -> [String: String] {
+    var environment = ProcessInfo.processInfo.environment
+    let standardPath = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ].joined(separator: ":")
+    environment["PATH"] = "\(standardPath):\(environment["PATH"] ?? "")"
+    environment["DISABLE_AUTOUPDATER"] = "1"
+    return environment
+}
+
+func captureClaudeAgentsJSON(
+    executableURL: URL,
+    timeout: TimeInterval = 2,
+    terminationGracePeriod: TimeInterval = 0.25
+) -> Data? {
+    let process = Process()
+    let stdout = Pipe()
+    process.executableURL = executableURL
+    process.arguments = ["agents", "--json"]
+    process.standardOutput = stdout
+    process.standardError = FileHandle.nullDevice
+    process.environment = claudeTaskProgressLaunchEnvironment()
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+
+    let capture = captureProcessOutput(
+        process: process,
+        output: stdout.fileHandleForReading,
+        timeout: timeout,
+        terminationGracePeriod: terminationGracePeriod,
+        maximumOutputBytes: 1_048_576
+    )
+    guard capture.termination == .exited,
+          process.terminationStatus == 0
+    else {
+        return nil
+    }
+    return capture.data
+}
+
 func isLiveProcess(_ processID: Int32) -> Bool {
     guard processID > 1 else { return false }
     if Darwin.kill(processID, 0) == 0 {
@@ -536,29 +584,11 @@ final class ClaudeTaskProgressReader {
     }
 
     private func readAgents() -> [ClaudeAgentSnapshot] {
-        guard let claudeURL = locateClaudeExecutable() else { return [] }
-        let process = Process()
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.executableURL = claudeURL
-        process.arguments = ["agents", "--json"]
-        process.standardOutput = stdout
-        process.standardError = stderr
-        process.environment = launchEnvironment()
-        do {
-            try process.run()
-        } catch {
+        guard let claudeURL = locateClaudeExecutable(),
+              let data = captureClaudeAgentsJSON(executableURL: claudeURL)
+        else {
             return []
         }
-
-        let deadline = Date().addingTimeInterval(2)
-        while process.isRunning, Date() < deadline {
-            usleep(20_000)
-        }
-        if process.isRunning {
-            process.terminate()
-        }
-        let data = stdout.fileHandleForReading.readDataToEndOfFile()
         guard let values = try? JSONSerialization.jsonObject(with: data)
             as? [[String: Any]]
         else { return [] }
@@ -710,21 +740,6 @@ final class ClaudeTaskProgressReader {
         } catch {
             return nil
         }
-    }
-
-    private func launchEnvironment() -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
-        let standardPath = [
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin",
-        ].joined(separator: ":")
-        environment["PATH"] = "\(standardPath):\(environment["PATH"] ?? "")"
-        environment["DISABLE_AUTOUPDATER"] = "1"
-        return environment
     }
 
     private static func sessionID(from url: URL) -> String? {

@@ -24,42 +24,79 @@ func runTaskProgressSelfTest() -> Never {
         fputs("task progress refresh reader stability failed\n", stderr)
         exit(1)
     }
+    runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
-    print("task-progress-self-test: lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; click-hit=pass; scroll-hit=pass; refresh-hit=pass; hover-live=pass; completed-unread=pass; read-state=6/6; top-level-filter=5/5; task-dedup=pass; refresh-gate=expired-prune+generation; refresh-reader=reuse+isolation; runtime-health-failure=logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
+    print("task-progress-self-test: lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; click-hit=pass; scroll-hit=pass; refresh-hit=pass; hover-live=pass; completed-unread=pass; read-state=6/6; top-level-filter=5/5; task-dedup=pass; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-agents-timeout=bounded; runtime-health-failure=logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
     exit(0)
 }
 
 private func runTaskProgressRefreshGateSelfTest() {
-    var gate = TaskProgressRefreshGate(
-        timeout: 1,
-        maximumConcurrentReads: 2
-    )
-    guard let slowGeneration = gate.begin(now: 10) else {
+    var gate = TaskProgressRefreshGate()
+    guard let slowGeneration = gate.begin() else {
         fputs("task progress refresh gate did not start first read\n", stderr)
         exit(1)
     }
-    guard gate.begin(now: 10.5) == nil else {
-        fputs("task progress refresh gate allowed overlapping read before timeout\n", stderr)
+    guard gate.begin() == nil else {
+        fputs("task progress refresh gate allowed an overlapping read\n", stderr)
         exit(1)
     }
-    guard let freshGeneration = gate.begin(now: 11.1),
+    guard gate.begin() == nil else {
+        fputs("task progress refresh gate replaced a still-running read\n", stderr)
+        exit(1)
+    }
+    guard gate.complete(generation: slowGeneration),
+          let freshGeneration = gate.begin(),
           freshGeneration != slowGeneration
     else {
-        fputs("task progress refresh gate did not recover after timeout\n", stderr)
-        exit(1)
-    }
-    guard let newestGeneration = gate.begin(now: 12.2),
-          newestGeneration != freshGeneration
-    else {
-        fputs("task progress refresh gate did not prune expired reads\n", stderr)
+        fputs("task progress refresh gate did not resume after completion\n", stderr)
         exit(1)
     }
     guard !gate.complete(generation: slowGeneration),
-          !gate.complete(generation: freshGeneration),
-          gate.complete(generation: newestGeneration),
-          gate.begin(now: 12.4) != nil
+          gate.complete(generation: freshGeneration),
+          gate.begin() != nil
     else {
-        fputs("task progress refresh gate did not release stale read capacity\n", stderr)
+        fputs("task progress refresh gate accepted a stale completion\n", stderr)
+        exit(1)
+    }
+}
+
+private func runClaudeAgentsCommandTimeoutSelfTest() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "chatbird-claude-agents-timeout-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let executable = directory.appendingPathComponent("claude")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    do {
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            #!/bin/sh
+            trap '' TERM
+            printf '[{"sessionId":"00000000-0000-0000-0000-000000000001"}]'
+            exec /bin/sleep 30
+            """.utf8
+        ).write(to: executable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executable.path
+        )
+    } catch {
+        fputs("Claude agents timeout fixture failed\n", stderr)
+        exit(1)
+    }
+
+    let startedAt = Date()
+    let output = captureClaudeAgentsJSON(
+        executableURL: executable,
+        timeout: 0.1,
+        terminationGracePeriod: 0.1
+    )
+    guard output == nil, Date().timeIntervalSince(startedAt) < 1 else {
+        fputs("Claude agents command did not stop after timeout\n", stderr)
         exit(1)
     }
 }
