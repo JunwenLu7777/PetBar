@@ -108,59 +108,6 @@ assert_package_is_complete() {
     || fail "登录启动项模板无效。"
 }
 
-select_chatbird_in_codex() {
-  mkdir -p "${CONFIG:h}"
-  [[ -f "$CONFIG" ]] || /usr/bin/touch "$CONFIG"
-  /bin/cp -p "$CONFIG" "$CONFIG.chatbird-backup-$(date +%Y%m%d-%H%M%S)"
-
-  local tmp_config
-  tmp_config="$(/usr/bin/mktemp "$CONFIG.tmp.XXXXXX")"
-  /usr/bin/awk '
-    BEGIN {
-      section = ""
-      desktop_seen = 0
-      desktop_has_value = 0
-      value = "selected-avatar-id = \"custom:chatbird-nt\""
-    }
-    function add_desktop_value() {
-      if (!desktop_has_value) {
-        print value
-        desktop_has_value = 1
-      }
-    }
-    /^[[:space:]]*\[[^]]+\]/ {
-      if (section == "desktop") add_desktop_value()
-      if ($0 ~ /^[[:space:]]*\[desktop\][[:space:]]*($|#)/) {
-        section = "desktop"
-        desktop_seen = 1
-        desktop_has_value = 0
-      } else {
-        section = "other"
-      }
-      print
-      next
-    }
-    {
-      if (section == "" && $0 ~ /^[[:space:]]*selected-avatar-id[[:space:]]*=/) next
-      if (section == "desktop" && $0 ~ /^[[:space:]]*selected-avatar-id[[:space:]]*=/) {
-        if (!desktop_has_value) print value
-        desktop_has_value = 1
-        next
-      }
-      print
-    }
-    END {
-      if (section == "desktop") add_desktop_value()
-      if (!desktop_seen) {
-        print ""
-        print "[desktop]"
-        print value
-      }
-    }
-  ' "$CONFIG" > "$tmp_config"
-  /bin/mv "$tmp_config" "$CONFIG"
-}
-
 echo "正在校验 ChatBird 安装包…"
 assert_package_is_complete
 if [[ "$VERIFY_ONLY" == "true" ]]; then
@@ -208,6 +155,11 @@ done
 /usr/bin/codesign --force --deep --sign - "$APP_DEST" >/dev/null
 /usr/bin/codesign --verify --deep --strict "$APP_DEST" \
   || fail "额度面板自动签名失败，请重新下载分享包。"
+mkdir -p "${CONFIG:h}"
+[[ -f "$CONFIG" ]] || /usr/bin/touch "$CONFIG"
+/bin/cp -p "$CONFIG" "$CONFIG.chatbird-backup-$(date +%Y%m%d-%H%M%S)"
+"$APP_BINARY" --select-chatbird "$CONFIG" \
+  || fail "无法在 Codex 配置中选中 ChatBird。"
 CLAUDE_HOOK_STATUS="warning"
 if ! "$APP_BINARY" --install-claude-hook; then
   echo "警告：Claude Code 权限确认 Hook 安装命令失败；Codex 核心安装将继续。" >&2
@@ -258,8 +210,6 @@ if ! wait_for_panel_health; then
   wait_for_panel_health \
     || fail "额度面板进程没有保持运行。请把上面的日志发给维护者。"
 fi
-
-select_chatbird_in_codex
 
 echo ""
 echo "安装完成："

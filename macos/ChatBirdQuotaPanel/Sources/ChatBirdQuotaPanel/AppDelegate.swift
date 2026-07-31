@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var taskProgressTimer: Timer?
     private var followTimer: Timer?
     private var globalMouseMonitor: Any?
+    private let taskProgressReaderStore = TaskProgressRefreshReaderStore()
     private var isRefreshing = false
     private var quotaRowsByProvider: [QuotaProvider: [QuotaRow]] = [:]
     private var currentCodexResetCreditsSnapshot: CodexResetCreditsSnapshot?
@@ -789,15 +790,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) else { return }
         let claudeCodeAvailable = synchronizeQuotaProviderAvailability()
             .contains(.claudeCode)
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self else { return }
-            let snapshot = CombinedTaskProgressReader().read(
+        let readerStore = taskProgressReaderStore
+        readerStore.discardActiveReaders(except: generation)
+        let reader = readerStore.leaseReader(for: generation)
+        DispatchQueue.global(qos: .utility).async { [weak self, readerStore] in
+            let snapshot = reader.read(
                 claudeCodeAvailable: claudeCodeAvailable
             )
             DispatchQueue.main.async {
-                guard self.taskProgressRefreshGate.complete(
+                guard let self else {
+                    readerStore.releaseReader(for: generation, reuse: false)
+                    return
+                }
+                let shouldApply = self.taskProgressRefreshGate.complete(
                     generation: generation
-                ) else { return }
+                )
+                readerStore.releaseReader(for: generation, reuse: shouldApply)
+                guard shouldApply else { return }
                 self.quotaView.taskProgress = snapshot
                 let nextBaseSize = panelSizeForTaskRows(snapshot.rowCount)
                 if nextBaseSize != self.currentBasePanelSize {
@@ -845,6 +854,44 @@ func quotaProviderRemainingPercents(
     return summaries
 }
 
+final class TaskProgressRefreshReaderStore {
+    private let lock = NSLock()
+    private var idleReaders: [CombinedTaskProgressReader] = [
+        CombinedTaskProgressReader()
+    ]
+    private var activeReadersByGeneration: [Int: CombinedTaskProgressReader] = [:]
+
+    func leaseReader(for generation: Int) -> CombinedTaskProgressReader {
+        lock.lock()
+        defer { lock.unlock() }
+        if let reader = activeReadersByGeneration[generation] {
+            return reader
+        }
+        let reader = idleReaders.popLast() ?? CombinedTaskProgressReader()
+        activeReadersByGeneration[generation] = reader
+        return reader
+    }
+
+    func releaseReader(for generation: Int, reuse: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let reader = activeReadersByGeneration.removeValue(
+            forKey: generation
+        ) else { return }
+        if reuse {
+            idleReaders.append(reader)
+        }
+    }
+
+    func discardActiveReaders(except generation: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        activeReadersByGeneration = activeReadersByGeneration.filter {
+            $0.key == generation
+        }
+    }
+}
+
 struct TaskProgressRefreshGate {
     private let timeout: TimeInterval
     private let maximumConcurrentReads: Int
@@ -861,6 +908,7 @@ struct TaskProgressRefreshGate {
     }
 
     mutating func begin(now: CFAbsoluteTime) -> Int? {
+        pruneExpiredGenerations(now: now)
         if let latestGeneration,
            let startedAt = activeStartedAtByGeneration[latestGeneration],
            now - startedAt < timeout {
@@ -876,12 +924,72 @@ struct TaskProgressRefreshGate {
     }
 
     mutating func complete(generation: Int) -> Bool {
-        guard activeStartedAtByGeneration.removeValue(forKey: generation) != nil,
-              latestGeneration == generation
-        else {
+        guard activeStartedAtByGeneration.removeValue(forKey: generation) != nil else {
             return false
         }
+        guard latestGeneration == generation else {
+            latestGeneration = activeStartedAtByGeneration.keys.max()
+            return false
+        }
+        activeStartedAtByGeneration.removeAll()
         latestGeneration = nil
         return true
     }
+
+    private mutating func pruneExpiredGenerations(now: CFAbsoluteTime) {
+        activeStartedAtByGeneration = activeStartedAtByGeneration.filter {
+            now - $0.value < timeout
+        }
+        if let latestGeneration,
+           activeStartedAtByGeneration[latestGeneration] == nil
+        {
+            self.latestGeneration = activeStartedAtByGeneration.keys.max()
+        }
+    }
+}
+
+func runTaskProgressRefreshStabilityRegressionSelfTest() -> Bool {
+    let readerStore = TaskProgressRefreshReaderStore()
+    let completedReader = readerStore.leaseReader(for: 1)
+    readerStore.releaseReader(for: 1, reuse: true)
+    let reusedReader = readerStore.leaseReader(for: 2)
+    guard ObjectIdentifier(completedReader) == ObjectIdentifier(reusedReader) else {
+        return false
+    }
+    let concurrentReader = readerStore.leaseReader(for: 3)
+    guard ObjectIdentifier(reusedReader) != ObjectIdentifier(concurrentReader) else {
+        return false
+    }
+    let thirdHungReader = readerStore.leaseReader(for: 4)
+    guard ObjectIdentifier(reusedReader) != ObjectIdentifier(thirdHungReader),
+          ObjectIdentifier(concurrentReader) != ObjectIdentifier(thirdHungReader)
+    else {
+        return false
+    }
+    readerStore.discardActiveReaders(except: 4)
+    readerStore.releaseReader(for: 2, reuse: true)
+    guard ObjectIdentifier(readerStore.leaseReader(for: 5))
+            != ObjectIdentifier(reusedReader)
+    else {
+        return false
+    }
+
+    var gate = TaskProgressRefreshGate(
+        timeout: 1,
+        maximumConcurrentReads: 2
+    )
+    guard let firstGeneration = gate.begin(now: 10),
+          gate.begin(now: 10.5) == nil,
+          let secondGeneration = gate.begin(now: 11.1),
+          firstGeneration != secondGeneration,
+          let thirdGeneration = gate.begin(now: 12.2),
+          thirdGeneration != secondGeneration,
+          !gate.complete(generation: firstGeneration),
+          !gate.complete(generation: secondGeneration),
+          gate.complete(generation: thirdGeneration),
+          gate.begin(now: 12.3) != nil
+    else {
+        return false
+    }
+    return true
 }

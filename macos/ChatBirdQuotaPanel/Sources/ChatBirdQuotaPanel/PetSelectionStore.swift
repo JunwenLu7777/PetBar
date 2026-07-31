@@ -320,3 +320,13 @@ func selectChatBirdAtStartup(
         return false
     }
 }
+
+func selectChatBirdOnce(configURL: URL? = nil) -> Never {
+    if selectChatBirdAtStartup(
+        using: ChatBirdPetSelectionStore(configURL: configURL)
+    ) {
+        print("已在 Codex 中选中 ChatBird")
+        exit(0)
+    }
+    exit(1)
+}

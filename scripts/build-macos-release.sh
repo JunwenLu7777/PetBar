@@ -84,10 +84,6 @@ verify_inputs() {
   /bin/zsh -n "$INSTALL_COMMAND" "$CHECK_COMMAND" "$UNINSTALL_COMMAND"
 }
 
-verify_release_build_inputs() {
-  require_dir "$APP_BUILD"
-}
-
 path_has_forbidden_marker() {
   local candidate_path="${1:l}"
   local component token
@@ -192,6 +188,10 @@ stage_release() {
 }
 
 release_input_paths() {
+  local -a input_roots
+  input_roots=("$PET_SOURCE" "$PREVIEW_QA_SOURCE")
+  [[ -d "$APP_BUILD" ]] && input_roots+=("$APP_BUILD")
+
   print -r -- "$SCRIPT_PATH"
   print -r -- "$ROOT/macos/README.md"
   print -r -- "$ROOT/macos/VERSION.txt"
@@ -202,7 +202,7 @@ release_input_paths() {
   print -r -- "$INSTALL_COMMAND"
   print -r -- "$CHECK_COMMAND"
   print -r -- "$UNINSTALL_COMMAND"
-  find "$PET_SOURCE" "$PREVIEW_QA_SOURCE" "$APP_BUILD" -type f -print
+  find "${input_roots[@]}" -type f -print
 }
 
 newest_release_input_mtime() {
@@ -220,7 +220,9 @@ verify_dist_checksum() {
   ) || fail "release archive checksum is invalid: $CHECKSUM_OUT"
 }
 
-verify_dist_is_fresh() {
+verify_dist_is_fresh_against_local_build() {
+  [[ -d "$APP_BUILD" ]] || return 0
+
   local newest archive_mtime
   newest="$(newest_release_input_mtime)"
   archive_mtime="$(/usr/bin/stat -f "%m" "$OUT")"
@@ -228,11 +230,49 @@ verify_dist_is_fresh() {
   (( archive_mtime >= newest )) || fail "release archive is stale relative to release inputs: $OUT"
 }
 
+verify_release_file_matches() {
+  local source="$1"
+  local packaged="$2"
+  /usr/bin/cmp -s "$source" "$packaged" \
+    || fail "release payload differs from current source: $packaged"
+}
+
+verify_release_directory_matches() {
+  local source="$1"
+  local packaged="$2"
+  /usr/bin/diff -qr "$source" "$packaged" >/dev/null \
+    || fail "release payload differs from current source: $packaged"
+}
+
+verify_stage_matches_current_sources() {
+  local target="$1"
+  verify_release_directory_matches "$PET_SOURCE" "$target/pet/chatbird-nt"
+  verify_release_directory_matches "$PREVIEW_QA_SOURCE" "$target/preview-qa"
+  verify_release_file_matches \
+    "$PLIST_TEMPLATE" \
+    "$target/quota-panel/$LABEL.plist.in"
+  verify_release_file_matches "$INSTALL_COMMAND" "$target/安装ChatBird.command"
+  verify_release_file_matches "$CHECK_COMMAND" "$target/检查ChatBird.command"
+  verify_release_file_matches "$UNINSTALL_COMMAND" "$target/卸载ChatBird.command"
+  verify_release_file_matches "$ROOT/macos/README.md" "$target/README.md"
+  verify_release_file_matches "$ROOT/macos/VERSION.txt" "$target/VERSION.txt"
+  verify_release_file_matches "$ROOT/LICENSE" "$target/LICENSE"
+  verify_release_file_matches "$ROOT/PRIVACY.md" "$target/PRIVACY.md"
+  verify_release_file_matches "$ROOT/ASSET-NOTICE.md" "$target/ASSET-NOTICE.md"
+
+  if [[ -d "$APP_BUILD" ]]; then
+    verify_release_directory_matches \
+      "$APP_BUILD" \
+      "$target/quota-panel/ChatBird 额度面板.app"
+  fi
+}
+
 verify_dist_payload() {
   local unpack_root
   unpack_root="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/chatbird-release-verify.XXXXXX")"
   /usr/bin/ditto -x -k "$OUT" "$unpack_root"
   verify_stage "$unpack_root/$RELEASE_ID"
+  verify_stage_matches_current_sources "$unpack_root/$RELEASE_ID"
   /bin/rm -rf "$unpack_root"
 }
 
@@ -244,13 +284,13 @@ run_repository_checks() {
 verify_inputs
 
 if [[ "$VERIFY_ONLY" == true ]]; then
-  verify_release_build_inputs
   run_repository_checks
   verify_dist_checksum
-  verify_dist_is_fresh
+  verify_dist_is_fresh_against_local_build
   verify_dist_payload
   if [[ -d "$STAGE" ]]; then
     verify_stage "$STAGE"
+    verify_stage_matches_current_sources "$STAGE"
   fi
   /bin/echo "verify-only passed"
   exit 0
@@ -260,6 +300,7 @@ fi
 require_dir "$APP_BUILD"
 stage_release
 verify_stage "$STAGE"
+verify_stage_matches_current_sources "$STAGE"
 mkdir -p "$ROOT/dist"
 /bin/rm -f "$OUT"
 /usr/bin/ditto -c -k --norsrc --keepParent "$STAGE" "$OUT"

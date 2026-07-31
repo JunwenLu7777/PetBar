@@ -77,9 +77,43 @@ struct CodexResetCredit: Equatable, Decodable {
         if let timestamp = try container.decodeIfPresent(Int64.self, forKey: .expiresAt) {
             expiresAt = Date(timeIntervalSince1970: TimeInterval(timestamp))
         } else {
-            expiresAt = try container.decodeIfPresent(Date.self, forKey: .legacyExpiresAt)
+            expiresAt = try Self.decodeLegacyExpiresAt(from: container)
         }
     }
+
+    private static func decodeLegacyExpiresAt(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> Date? {
+        guard container.contains(.legacyExpiresAt) else { return nil }
+        if let value = try? container.decode(String.self, forKey: .legacyExpiresAt) {
+            if let date = Self.iso8601DateFormatter.date(from: value)
+                ?? Self.fractionalISO8601DateFormatter.date(from: value)
+            {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(
+                forKey: .legacyExpiresAt,
+                in: container,
+                debugDescription: "expires_at must be an ISO8601 date string"
+            )
+        }
+        return try container.decodeIfPresent(Date.self, forKey: .legacyExpiresAt)
+    }
+
+    private static let iso8601DateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private static let fractionalISO8601DateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds,
+        ]
+        return formatter
+    }()
 }
 
 struct CodexResetCreditsSnapshot: Equatable {

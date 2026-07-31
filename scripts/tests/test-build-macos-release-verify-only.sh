@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="${0:A:h:h:h}"
 FIXTURE="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/chatbird-release-test.XXXXXX")"
+VERIFY_OUTPUT="$FIXTURE/.git/chatbird-test-output/verify.out"
+VERIFY_ERROR="$FIXTURE/.git/chatbird-test-output/verify.err"
 trap '/bin/rm -rf "$FIXTURE"' EXIT
 
 fail() {
@@ -14,7 +16,8 @@ run_verify() {
   CHATBIRD_RELEASE_ROOT="$FIXTURE" \
   CHATBIRD_SKIP_STRICT_PET_MEDIA_CHECKS=true \
   CHATBIRD_SKIP_APP_BINARY_CHECKS=true \
-    "$FIXTURE/scripts/build-macos-release.sh" --verify-only >/tmp/chatbird-release-verify.out 2>/tmp/chatbird-release-verify.err
+    "$FIXTURE/scripts/build-macos-release.sh" --verify-only \
+      >"$VERIFY_OUTPUT" 2>"$VERIFY_ERROR"
 }
 
 expect_fail() {
@@ -27,11 +30,11 @@ expect_fail() {
 expect_pass() {
   local label="$1"
   if ! run_verify; then
-    /bin/cat /tmp/chatbird-release-verify.err >&2 || true
+    /bin/cat "$VERIFY_ERROR" >&2 || true
     fail "$label unexpectedly failed"
   fi
-  if [[ -s /tmp/chatbird-release-verify.err ]]; then
-    /bin/cat /tmp/chatbird-release-verify.err >&2
+  if [[ -s "$VERIFY_ERROR" ]]; then
+    /bin/cat "$VERIFY_ERROR" >&2
     fail "$label wrote unexpected stderr"
   fi
 }
@@ -48,6 +51,7 @@ write_command() {
 
 make_stage() {
   local stage="$FIXTURE/build/release/ChatBird-NT-macOS-Universal-1.0.0"
+  local local_app="$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app"
   /bin/rm -rf "$stage"
   mkdir -p \
     "$stage/pet/chatbird-nt" \
@@ -58,8 +62,13 @@ make_stage() {
   /bin/cp "$FIXTURE/shared/preview/chatbird-nt/panel-preview.png" "$stage/preview-qa/panel-preview.png"
   /bin/cp "$FIXTURE/macos/ChatBirdQuotaPanel/Resources/dev.chatbird.codex-quota-panel.plist.in" \
     "$stage/quota-panel/dev.chatbird.codex-quota-panel.plist.in"
-  write_file "$stage/quota-panel/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel" "fake binary"
-  /bin/chmod +x "$stage/quota-panel/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel"
+  if [[ -d "$local_app" ]]; then
+    /bin/rm -rf "$stage/quota-panel/ChatBird 额度面板.app"
+    /usr/bin/ditto "$local_app" "$stage/quota-panel/ChatBird 额度面板.app"
+  else
+    write_file "$stage/quota-panel/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel" "fake binary"
+    /bin/chmod +x "$stage/quota-panel/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel"
+  fi
   /bin/cp "$FIXTURE/macos/package/安装ChatBird.command" "$stage/安装ChatBird.command"
   /bin/cp "$FIXTURE/macos/package/检查ChatBird.command" "$stage/检查ChatBird.command"
   /bin/cp "$FIXTURE/macos/package/卸载ChatBird.command" "$stage/卸载ChatBird.command"
@@ -93,7 +102,6 @@ mkdir -p "$FIXTURE/scripts" "$FIXTURE/macos/package" \
   "$FIXTURE/macos/ChatBirdQuotaPanel/Resources" \
   "$FIXTURE/macos/ChatBirdQuotaPanel/Sources/ChatBirdQuotaPanel" \
   "$FIXTURE/macos/ChatBirdQuotaPanel/scripts" \
-  "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app" \
   "$FIXTURE/shared/pet/chatbird-nt" \
   "$FIXTURE/shared/preview/chatbird-nt"
 
@@ -120,6 +128,7 @@ write_command "$FIXTURE/macos/package/检查ChatBird.command"
 write_command "$FIXTURE/macos/package/卸载ChatBird.command"
 
 git -C "$FIXTURE" init -q
+mkdir -p "${VERIFY_OUTPUT:h}"
 git -C "$FIXTURE" add -A
 
 expect_fail "missing dist archive"
@@ -129,14 +138,30 @@ sleep 1
 make_dist_from_stage
 /bin/rm -rf "$FIXTURE/build/release"
 git -C "$FIXTURE" add -A
-expect_pass "valid archive without staging"
+expect_pass "valid archive without staging or local app build"
 
-sleep 1
 write_file "$FIXTURE/macos/README.md" "newer macOS README"
-expect_fail "stale archive"
+expect_fail "stale source payload without local app build"
 
 make_stage
-sleep 1
+make_dist_from_stage
+/bin/rm -rf "$FIXTURE/build/release"
+expect_pass "refreshed source payload without local app build"
+
+/bin/sleep 1
+mkdir -p "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app/Contents/MacOS"
+write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel" "fake binary"
+/bin/chmod +x "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel"
+expect_fail "archive older than matching local app build"
+
+make_stage
+make_dist_from_stage
+expect_pass "matching local app build"
+
+write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel" "newer local binary"
+expect_fail "stale archive relative to local app build"
+
+make_stage
 make_dist_from_stage
 git -C "$FIXTURE" add dist
 write_file "$FIXTURE/dist/ChatBird-NT-macOS-Universal-1.0.0.zip.sha256" "bad  ChatBird-NT-macOS-Universal-1.0.0.zip\n"

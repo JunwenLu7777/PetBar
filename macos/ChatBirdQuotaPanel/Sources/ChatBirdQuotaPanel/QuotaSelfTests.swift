@@ -170,6 +170,78 @@ func runWeeklyQuotaSelfTest() -> Never {
         snapshot: resetCredits,
         now: resetReferenceDate
     )
+    let legacyResetCreditPayload = """
+    {
+      "rateLimits": {
+        "primary": {
+          "usedPercent": 25,
+          "windowDurationMins": 10080
+        }
+      },
+      "rateLimitResetCredits": {
+        "available_count": 1,
+        "credits": [{
+          "id": "legacy-iso",
+          "status": "available",
+          "expires_at": "2027-01-15T08:00:00Z"
+        }]
+      }
+    }
+    """
+    let legacyResetCreditExpiry = ISO8601DateFormatter().date(
+        from: "2027-01-15T08:00:00Z"
+    )
+    let legacyResetCreditSnapshot = legacyResetCreditPayload.data(using: .utf8)
+        .flatMap {
+            try? JSONDecoder().decode(RateLimitsResult.self, from: $0)
+        }
+        .flatMap {
+            makeCodexResetCreditsSnapshot(from: $0, now: resetReferenceDate)
+        }
+    let numericLegacyResetCreditPayload = """
+    {
+      "rateLimits": {
+        "primary": {
+          "usedPercent": 25,
+          "windowDurationMins": 10080
+        }
+      },
+      "rateLimitResetCredits": {
+        "available_count": 1,
+        "credits": [{
+          "id": "legacy-numeric",
+          "status": "available",
+          "expires_at": 3600
+        }]
+      }
+    }
+    """
+    let numericLegacyResetCreditSnapshot = numericLegacyResetCreditPayload.data(
+        using: .utf8
+    ).flatMap {
+        try? JSONDecoder().decode(RateLimitsResult.self, from: $0)
+    }.flatMap {
+        makeCodexResetCreditsSnapshot(from: $0, now: resetReferenceDate)
+    }
+    let invalidLegacyResetCreditPayload = """
+    {
+      "rateLimits": {
+        "primary": {
+          "usedPercent": 25,
+          "windowDurationMins": 10080
+        }
+      },
+      "rateLimitResetCredits": {
+        "available_count": 1,
+        "credits": [{
+          "id": "invalid-legacy",
+          "status": "available",
+          "expires_at": "not-a-date"
+        }]
+      }
+    }
+    """
+    let invalidLegacyResetCreditData = Data(invalidLegacyResetCreditPayload.utf8)
     var statusCalendar = Calendar(identifier: .gregorian)
     statusCalendar.timeZone = .current
     let statusUpdatedAt = statusCalendar.date(from: DateComponents(
@@ -248,6 +320,15 @@ func runWeeklyQuotaSelfTest() -> Never {
           resetCreditsPresentation.availableText == "1 次可用",
           resetCreditsPresentation.hasAvailableCredits,
           resetCreditsPresentation.expiryLines.count == 1,
+          legacyResetCreditSnapshot?.reportedAvailableCount == 1,
+          legacyResetCreditSnapshot?.credits.first?.id == "legacy-iso",
+          legacyResetCreditSnapshot?.credits.first?.expiresAt == legacyResetCreditExpiry,
+          numericLegacyResetCreditSnapshot?.credits.first?.expiresAt
+              == Date(timeIntervalSinceReferenceDate: 3600),
+          (try? JSONDecoder().decode(
+              RateLimitsResult.self,
+              from: invalidLegacyResetCreditData
+          )) == nil,
           weeklyResetStatus == "8月7日 08:59 重置 · 1分钟",
           missingResetStatus == "10:38 更新 · 1分钟",
           claudeStatus == "10:38 更新 · 1分钟",
@@ -258,7 +339,7 @@ func runWeeklyQuotaSelfTest() -> Never {
         fputs("weekly quota self-test failed\n", stderr)
         exit(1)
     }
-    print("weekly-quota-self-test: legacy-secondary=pass current-primary=pass retired-short-window=ignored metadata-free=ignored spend-control=ignored thresholds=7/7 reset-credits=available-only weekly-reset-status=dated+fallback failure-copy=pass stale-row=preserved provider-summary-clear=2/2 refresh=60s")
+    print("weekly-quota-self-test: legacy-secondary=pass current-primary=pass retired-short-window=ignored metadata-free=ignored spend-control=ignored thresholds=7/7 reset-credits=available-only legacy-expires-at=iso+date-fallback+invalid-fails weekly-reset-status=dated+fallback failure-copy=pass stale-row=preserved provider-summary-clear=2/2 refresh=60s")
     exit(0)
 }
 

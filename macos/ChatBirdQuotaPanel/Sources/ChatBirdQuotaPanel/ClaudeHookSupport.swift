@@ -668,6 +668,7 @@ enum ClaudeHookConfiguration {
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
+            let lineEnding = settingsLineEnding(at: url)
             if makeBackup, manager.fileExists(atPath: url.path) {
                 let formatter = DateFormatter()
                 formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -683,6 +684,7 @@ enum ClaudeHookConfiguration {
                 options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             )
             data.append(0x0A)
+            data = lineEnding.apply(to: data)
             let temporaryURL = url.deletingLastPathComponent().appendingPathComponent(
                 ".\(url.lastPathComponent).chatbird-\(UUID().uuidString).tmp"
             )
@@ -701,6 +703,33 @@ enum ClaudeHookConfiguration {
         } catch {
             throw ClaudeHookConfigurationError.writeFailed(error.localizedDescription)
         }
+    }
+
+    private enum SettingsLineEnding {
+        case lf
+        case crlf
+
+        func apply(to data: Data) -> Data {
+            guard self == .crlf,
+                  let string = String(data: data, encoding: .utf8)
+            else { return data }
+            return Data(string.replacingOccurrences(of: "\n", with: "\r\n").utf8)
+        }
+    }
+
+    private static func settingsLineEnding(at url: URL) -> SettingsLineEnding {
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return .lf }
+        return data.containsCRLF ? .crlf : .lf
+    }
+}
+
+private extension Data {
+    var containsCRLF: Bool {
+        guard count >= 2 else { return false }
+        for index in indices.dropLast() where self[index] == 0x0D && self[index + 1] == 0x0A {
+            return true
+        }
+        return false
     }
 }
 
@@ -833,6 +862,42 @@ func runClaudeHookSelfTest() -> Never {
         fail("AskUserQuestion 响应")
     }
 
+    let multiSelectFixture = """
+    {
+      "tool_name": "AskUserQuestion",
+      "tool_input": {
+        "questions": [{
+          "question": "需要执行哪些验证？",
+          "options": [
+            {"label": "单元测试"},
+            {"label": "构建检查"}
+          ],
+          "multiSelect": true
+        }]
+      }
+    }
+    """
+    guard let multiSelectPrompt = try? ClaudePermissionProtocol.decodePrompt(
+        from: Data(multiSelectFixture.utf8)
+    ), multiSelectPrompt.questions.first?.allowsMultipleSelection == true,
+       let multiSelectAnswerBody = ClaudePermissionProtocol.responseBody(
+            for: .submitAnswers(["需要执行哪些验证？": "单元测试, 构建检查"]),
+            prompt: multiSelectPrompt
+       ),
+       let multiSelectAnswerJSON = try? JSONSerialization.jsonObject(
+            with: multiSelectAnswerBody
+       ) as? [String: Any],
+       let multiSelectHookOutput = multiSelectAnswerJSON["hookSpecificOutput"]
+            as? [String: Any],
+       let multiSelectDecision = multiSelectHookOutput["decision"] as? [String: Any],
+       let multiSelectUpdatedInput = multiSelectDecision["updatedInput"]
+            as? [String: Any],
+       let multiSelectAnswers = multiSelectUpdatedInput["answers"] as? [String: String],
+       multiSelectAnswers["需要执行哪些验证？"] == "单元测试, 构建检查"
+    else {
+        fail("AskUserQuestion 多选响应格式")
+    }
+
     let planFixture = """
     {
       "tool_name": "ExitPlanMode",
@@ -878,6 +943,12 @@ func runClaudeHookSelfTest() -> Never {
     let settingsURL = temporaryRoot.appendingPathComponent("settings.json")
     let missingClaudeSettingsURL = temporaryRoot.appendingPathComponent(
         "missing-claude-settings.json"
+    )
+    let crlfSettingsURL = temporaryRoot.appendingPathComponent(
+        "crlf-settings.json"
+    )
+    let jsoncSettingsURL = temporaryRoot.appendingPathComponent(
+        "jsonc-settings.json"
     )
     let conflictingSettingsURL = temporaryRoot.appendingPathComponent(
         "conflicting-settings.json"
@@ -931,6 +1002,31 @@ func runClaudeHookSelfTest() -> Never {
             isClaudeAvailable: { true }
         ) else {
             fail("配置安装不具备幂等性")
+        }
+
+        try Data("{\r\n  \"model\": \"test\"\r\n}\r\n".utf8).write(to: crlfSettingsURL)
+        guard try ClaudeHookConfiguration.install(
+            at: crlfSettingsURL,
+            isClaudeAvailable: { true }
+        ) else {
+            fail("CRLF 配置安装没有产生修改")
+        }
+        let crlfSettingsData = try Data(contentsOf: crlfSettingsURL)
+        guard crlfSettingsData.containsCRLF,
+              (try JSONSerialization.jsonObject(with: crlfSettingsData) as? [String: Any])
+                != nil
+        else {
+            fail("CRLF 配置写回格式")
+        }
+
+        try Data("{\n  // Claude settings is strict JSON\n  \"model\": \"test\"\n}\n".utf8)
+            .write(to: jsoncSettingsURL)
+        do {
+            _ = try ClaudeHookConfiguration.status(at: jsoncSettingsURL)
+            fail("JSONC 配置不应被当作有效 Claude settings.json")
+        } catch ClaudeHookConfigurationError.invalidSettings {
+        } catch {
+            fail("JSONC 配置错误类型")
         }
 
         let conflictingSettings = """
@@ -994,10 +1090,10 @@ func runClaudeHookSelfTest() -> Never {
     try? manager.removeItem(at: temporaryRoot)
 
     print(
-        "claude-hook-self-test: protocol=3/3; question-panel=620pt+paging; "
+        "claude-hook-self-test: protocol=4/4; question-panel=620pt+paging; "
             + "question-detail=2/2; terminal-handoff=matched+hidden+released; "
             + "privacy=pass; auth=header; queue=bounded; "
-            + "config=optional+install+conflict-preserved+idempotent+uninstall"
+            + "config=optional+install+conflict-preserved+idempotent+uninstall+crlf+strict-json"
     )
     exit(0)
 }
