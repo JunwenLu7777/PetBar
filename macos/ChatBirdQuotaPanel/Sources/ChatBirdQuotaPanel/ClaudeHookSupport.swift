@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Darwin
 
@@ -608,6 +609,11 @@ func runClaudeHookSelfTest() -> Never {
         exit(1)
     }
 
+    func descendantButtons(in view: NSView) -> [NSButton] {
+        let current = (view as? NSButton).map { [$0] } ?? []
+        return current + view.subviews.flatMap(descendantButtons)
+    }
+
     let questionFixture = """
     {
       "tool_name": "AskUserQuestion",
@@ -640,6 +646,76 @@ func runClaudeHookSelfTest() -> Never {
        clampedClaudeQuestionPageIndex(8, count: 0) == 0
     else {
         fail("AskUserQuestion 解析或分页布局")
+    }
+
+    _ = NSApplication.shared
+    let questionController = ClaudePermissionPromptViewController(
+        prompt: questionPrompt
+    )
+    questionController.view.frame = NSRect(
+        origin: .zero,
+        size: questionController.preferredPanelSize
+    )
+    questionController.view.layoutSubtreeIfNeeded()
+    let renderedChoiceCopy = descendantButtons(
+        in: questionController.view
+    ).map(\.attributedTitle.string)
+    guard renderedChoiceCopy.contains(where: {
+        $0.contains("简洁") && $0.contains("只给结论")
+    }), renderedChoiceCopy.contains(where: {
+        $0.contains("详细") && $0.contains("包含解释")
+    })
+    else {
+        fail("AskUserQuestion 选项说明未直接显示")
+    }
+
+    var openedPromptID: UUID?
+    var panelWasHiddenBeforeTerminalOpen = false
+    var hookWasReleasedBeforeTerminalOpen = false
+    var completedWithNativeFallback = false
+    let panelController = ClaudePermissionPanelController(
+        anchorWindowProvider: { nil },
+        openTerminal: {
+            openedPromptID = $0.requestID
+            hookWasReleasedBeforeTerminalOpen = completedWithNativeFallback
+            panelWasHiddenBeforeTerminalOpen = NSApp.windows.allSatisfy {
+                !($0 is ClaudePermissionPanel) || !$0.isVisible
+            }
+        }
+    )
+    panelController.enqueue(prompt: questionPrompt) { decision in
+        if case .nativeFallback = decision {
+            completedWithNativeFallback = true
+        }
+    }
+    let unrelatedTask = TaskProgressItem(
+        title: "另一个 Claude 会话",
+        kind: .waitingForInput,
+        source: .claudeCode,
+        sessionID: "87654321-4321-4321-4321-cba987654321",
+        workingDirectory: "/tmp/chatbird"
+    )
+    let matchingTask = TaskProgressItem(
+        title: "当前 Claude 会话",
+        kind: .waitingForInput,
+        source: .claudeCode,
+        sessionID: questionPrompt.sessionID?.uppercased(),
+        workingDirectory: "/tmp/chatbird"
+    )
+    guard panelController.handoffToTerminalIfPresenting(unrelatedTask) == false,
+          NSApp.windows.contains(where: {
+              $0 is ClaudePermissionPanel && $0.isVisible
+          }),
+          panelController.handoffToTerminalIfPresenting(matchingTask),
+          openedPromptID == questionPrompt.requestID,
+          panelWasHiddenBeforeTerminalOpen,
+          hookWasReleasedBeforeTerminalOpen,
+          completedWithNativeFallback,
+          NSApp.windows.allSatisfy({
+              !($0 is ClaudePermissionPanel) || !$0.isVisible
+          })
+    else {
+        fail("任务列表恢复终端没有关闭同会话问题弹窗")
     }
 
     guard let answerBody = ClaudePermissionProtocol.responseBody(
@@ -729,6 +805,10 @@ func runClaudeHookSelfTest() -> Never {
     }
     try? manager.removeItem(at: temporaryRoot)
 
-    print("claude-hook-self-test: protocol=3/3; question-panel=620pt+paging; privacy=pass; config=install+idempotent+uninstall")
+    print(
+        "claude-hook-self-test: protocol=3/3; question-panel=620pt+paging; "
+            + "question-detail=2/2; terminal-handoff=matched+hidden+released; "
+            + "privacy=pass; config=install+idempotent+uninstall"
+    )
     exit(0)
 }

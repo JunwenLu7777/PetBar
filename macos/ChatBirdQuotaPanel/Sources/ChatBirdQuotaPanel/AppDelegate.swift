@@ -190,7 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 anchorRect: anchorRect
             )
         }
-        quotaView.onOpenTask = { item in
+        quotaView.onOpenTask = { [weak self] item in
             switch item.source {
             case .codex:
                 guard let threadID = item.threadID,
@@ -198,6 +198,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 else { return }
                 NSWorkspace.shared.open(url)
             case .claudeCode:
+                if self?.claudePermissionPanelController?
+                    .handoffToTerminalIfPresenting(item) == true
+                {
+                    return
+                }
                 openClaudeTerminal(
                     request: claudeTerminalOpenRequest(for: item)
                 )

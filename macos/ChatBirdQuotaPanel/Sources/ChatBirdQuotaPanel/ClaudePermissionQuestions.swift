@@ -12,6 +12,9 @@ import AppKit
 private final class ClaudeChoiceButton: NSButton {
     let optionIndex: Int
     let allowsMultipleSelection: Bool
+    let preferredHeight: CGFloat
+
+    private let option: ClaudeQuestionOption
 
     init(
         option: ClaudeQuestionOption,
@@ -22,6 +25,8 @@ private final class ClaudeChoiceButton: NSButton {
     ) {
         optionIndex = index
         self.allowsMultipleSelection = allowsMultipleSelection
+        self.option = option
+        preferredHeight = option.detail == nil ? 32 : 50
         super.init(frame: .zero)
         title = option.label
         toolTip = option.detail
@@ -34,6 +39,9 @@ private final class ClaudeChoiceButton: NSButton {
         imageHugsTitle = true
         alignment = .left
         font = .systemFont(ofSize: 12, weight: .medium)
+        cell?.usesSingleLineMode = false
+        cell?.wraps = true
+        cell?.lineBreakMode = .byTruncatingTail
         wantsLayer = true
         layer?.cornerRadius = 8
         layer?.borderWidth = 0.8
@@ -63,13 +71,25 @@ private final class ClaudeChoiceButton: NSButton {
             ? ClaudePanelPalette.primaryText
             : ClaudePanelPalette.secondaryText
         contentTintColor = selected ? ClaudePanelPalette.cyan : ClaudePanelPalette.mutedText
-        attributedTitle = NSAttributedString(
-            string: title,
+        let copy = NSMutableAttributedString(
+            string: option.label,
             attributes: [
-                .font: font ?? NSFont.systemFont(ofSize: 12),
+                .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
                 .foregroundColor: foreground,
             ]
         )
+        if let detail = option.detail {
+            copy.append(NSAttributedString(
+                string: "\n\(detail)",
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 10.5, weight: .regular),
+                    .foregroundColor: selected
+                        ? ClaudePanelPalette.secondaryText
+                        : ClaudePanelPalette.mutedText,
+                ]
+            ))
+        }
+        attributedTitle = copy
         layer?.backgroundColor = (
             selected
                 ? ClaudePanelPalette.blue.withAlphaComponent(0.13)
@@ -135,7 +155,7 @@ final class ClaudeQuestionInput: NSObject {
             stack.addArrangedSubview(button)
             NSLayoutConstraint.activate([
                 button.widthAnchor.constraint(equalTo: stack.widthAnchor),
-                button.heightAnchor.constraint(equalToConstant: 28),
+                button.heightAnchor.constraint(equalToConstant: button.preferredHeight),
             ])
             choiceButtons.append(button)
         }

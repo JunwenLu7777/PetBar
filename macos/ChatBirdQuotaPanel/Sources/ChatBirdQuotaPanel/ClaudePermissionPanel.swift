@@ -52,6 +52,20 @@ final class ClaudePermissionPanelController {
         entries.removeAll { $0.prompt.requestID == requestID }
     }
 
+    @discardableResult
+    func handoffToTerminalIfPresenting(_ task: TaskProgressItem) -> Bool {
+        guard let entry = currentEntry,
+              claudeTaskItem(
+                  forSessionID: entry.prompt.sessionID,
+                  in: [task]
+              ) != nil
+        else {
+            return false
+        }
+        completeCurrent(with: .nativeFallback)
+        return true
+    }
+
     func reposition() {
         guard let panel, panel.isVisible else { return }
         let anchorFrame = anchorWindowProvider()?.frame
@@ -136,11 +150,11 @@ final class ClaudePermissionPanelController {
     private func completeCurrent(with decision: ClaudePermissionUserDecision) {
         guard let entry = currentEntry else { return }
         currentEntry = nil
+        hidePanel()
+        entry.completion(decision)
         if case .nativeFallback = decision {
             openTerminal(entry.prompt)
         }
-        hidePanel()
-        entry.completion(decision)
         showNextIfNeeded()
     }
 
