@@ -10,9 +10,9 @@ fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 README="$ROOT/README.md"
 CURRENT_VERSION="$(
-  grep -oE 'ChatBird-NT-macOS-Universal-[0-9]+\.[0-9]+\.[0-9]+\.zip' "$README" \
+  grep -oE 'ChatBird-NT-macOS-arm64-[0-9]+\.[0-9]+\.[0-9]+\.zip' "$README" \
     | head -n 1 \
-    | sed -E 's/^ChatBird-NT-macOS-Universal-([0-9]+\.[0-9]+\.[0-9]+)\.zip$/\1/'
+    | sed -E 's/^ChatBird-NT-macOS-arm64-([0-9]+\.[0-9]+\.[0-9]+)\.zip$/\1/'
 )"
 
 [[ "$CURRENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
@@ -27,7 +27,7 @@ fi
 
 TEMP_FILE="$(mktemp)"
 trap 'rm -f "$TEMP_FILE"' EXIT
-sed "s/ChatBird-NT-macOS-Universal-$CURRENT_VERSION\\.zip/ChatBird-NT-macOS-Universal-$VERSION.zip/g; s/当前发行版本为 \\*\\*$CURRENT_VERSION\\*\\*/当前发行版本为 **$VERSION**/g" \
+sed "s/ChatBird-NT-macOS-arm64-$CURRENT_VERSION\\.zip/ChatBird-NT-macOS-arm64-$VERSION.zip/g; s/当前发行版本为 \\*\\*$CURRENT_VERSION\\*\\*/当前发行版本为 **$VERSION**/g" \
   "$README" > "$TEMP_FILE"
 mv "$TEMP_FILE" "$README"
 trap - EXIT

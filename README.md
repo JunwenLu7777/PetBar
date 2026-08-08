@@ -3,10 +3,10 @@
 ChatBird NT 是一个原创 Codex 桌面宠物和本机额度面板发行包。当前发行版本为 **1.0.0**，输出文件名为：
 
 ```text
-ChatBird-NT-macOS-Universal-1.0.0.zip
+ChatBird-NT-macOS-arm64-1.0.0.zip
 ```
 
-该发行只面向 macOS 12.3+，支持 Apple 芯片与 Intel Mac。包内只包含 ChatBird NT 宠物、ChatBird 额度面板、LaunchAgent 模板、三个安装检查命令、预览/QA 文件、License、隐私说明和资产说明。
+该发行只面向 macOS 12.3+ 的 Apple 芯片（arm64），暂不支持 Intel Mac。包内只包含 ChatBird NT 宠物、ChatBird 额度面板、LaunchAgent 模板、三个安装检查命令、预览/QA 文件、License、隐私说明和资产说明。
 
 ## 官方仓库
 
@@ -29,7 +29,7 @@ ChatBird NT 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Ju
 
 ## 安装
 
-1. 完整解压 `ChatBird-NT-macOS-Universal-1.0.0.zip`。
+1. 完整解压 `ChatBird-NT-macOS-arm64-1.0.0.zip`。
 2. 双击 `安装ChatBird.command`。
 3. 如果 macOS 提示无法验证开发者，点“完成”，不要移到废纸篓。
 4. 打开“系统设置”里的“隐私与安全”，选择“仍要打开”或 “Open Anyway”，输入 Mac 登录密码确认。
@@ -79,7 +79,7 @@ CHATBIRD_PREVIEW_QA_SOURCE=/path/to/preview-qa \
 ./scripts/build-macos-release.sh --verify-only
 ```
 
-构建成功后会生成 `dist/ChatBird-NT-macOS-Universal-1.0.0.zip`，并在 staging 目录内生成 `CHECKSUMS-SHA256.txt`。
+构建成功后会生成 `dist/ChatBird-NT-macOS-arm64-1.0.0.zip`，并在 staging 目录内生成 `CHECKSUMS-SHA256.txt`。
 
 ## 源码目录
 

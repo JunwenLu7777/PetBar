@@ -513,7 +513,7 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
               startingAt: 4_242,
               commandLine: { candidate in
                   candidate == 4_242
-                      ? "/Users/example/Applications/ChatBird 额度面板.app"
+                      ? "/Applications/ChatBird 额度面板.app"
                           + "/Contents/MacOS/ChatBirdQuotaPanel"
                       : nil
               },

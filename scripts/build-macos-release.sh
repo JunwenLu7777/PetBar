@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_PATH="${0:A}"
 ROOT="${CHATBIRD_RELEASE_ROOT:-${SCRIPT_PATH:h:h}}"
 VERSION="1.0.0"
-RELEASE_ID="ChatBird-NT-macOS-Universal-$VERSION"
+RELEASE_ID="ChatBird-NT-macOS-arm64-$VERSION"
 STAGE="$ROOT/build/release/$RELEASE_ID"
 OUT="$ROOT/dist/$RELEASE_ID.zip"
 CHECKSUM_OUT="$OUT.sha256"
@@ -146,8 +146,9 @@ verify_stage() {
 
   local binary="$target/quota-panel/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel"
   if [[ "$SKIP_APP_BINARY_CHECKS" != true ]]; then
+    # 本发行只面向 Apple 芯片：要求 arm64，并拒收混入其他架构的胖二进制。
     /usr/bin/lipo "$binary" -verify_arch arm64
-    /usr/bin/lipo "$binary" -verify_arch x86_64
+    [[ "$(/usr/bin/lipo -archs "$binary")" == "arm64" ]]
     /usr/bin/codesign --verify --deep --strict "$target/quota-panel/ChatBird 额度面板.app"
   fi
   scan_release_for_forbidden_terms "$target"

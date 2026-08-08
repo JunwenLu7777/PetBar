@@ -42,7 +42,7 @@ jobs:
         shell: bash
         run: |
           ASSETS="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
-          ARCHIVE="ChatBird-NT-macOS-Universal-$VERSION.zip"
+          ARCHIVE="ChatBird-NT-macOS-arm64-$VERSION.zip"
           CHECKSUM="$ARCHIVE.sha256"
           if ! grep -Fxq "$ARCHIVE" <<< "$ASSETS"; then
             echo "Release $TAG 不是 ChatBird 发布，跳过 README 更新。"

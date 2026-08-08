@@ -43,10 +43,11 @@ run_check() {
     panel-installed)
       [[ -x "$BIN" ]]
       ;;
-    panel-universal)
+    panel-arm64)
+      # 只面向 Apple 芯片：要求 arm64，且不接受混入其他架构。
       [[ -x "$BIN" ]] \
         && /usr/bin/lipo "$BIN" -verify_arch arm64 \
-        && /usr/bin/lipo "$BIN" -verify_arch x86_64
+        && [[ "$(/usr/bin/lipo -archs "$BIN")" == "arm64" ]]
       ;;
     panel-current-arch)
       [[ -x "$BIN" ]] && /usr/bin/lipo "$BIN" -verify_arch "$(/usr/bin/uname -m)"
@@ -96,7 +97,7 @@ check "pet.json id 正确" pet-id
 check "pet.json spriteVersionNumber 为 2" pet-sprite-version
 check "宠物图集为 1536x2288" pet-atlas-size
 check "额度面板已安装" panel-installed
-check "额度面板为 Universal 2" panel-universal
+check "额度面板为 arm64" panel-arm64
 check "额度面板支持当前 Mac" panel-current-arch
 check "额度面板签名正常" panel-signature
 if [[ -x "$BIN" ]] && "$BIN" --check-accessibility >/dev/null 2>&1; then

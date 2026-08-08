@@ -100,8 +100,6 @@ assert_package_is_complete() {
     || fail "额度面板文件不完整，请重新解压整个分享包。"
   /usr/bin/lipo "$SOURCE_BINARY" -verify_arch arm64 \
     || fail "额度面板不包含 arm64 架构。"
-  /usr/bin/lipo "$SOURCE_BINARY" -verify_arch x86_64 \
-    || fail "额度面板不包含 x86_64 架构。"
   /usr/bin/codesign --verify --deep --strict "$APP_SOURCE" >/dev/null 2>&1 \
     || fail "额度面板签名校验失败，请重新解压整个分享包。"
   /usr/bin/plutil -lint "$PLIST_SOURCE" >/dev/null \
@@ -124,8 +122,9 @@ if (( MACOS_MAJOR < 12 || (MACOS_MAJOR == 12 && MACOS_MINOR < 3) )); then
   fail "需要 macOS 12.3 或更高版本，当前版本为 $MACOS_VERSION。"
 fi
 ARCH="$(/usr/bin/uname -m)"
-[[ "$ARCH" == "arm64" || "$ARCH" == "x86_64" ]] \
-  || fail "不支持当前 Mac 架构：$ARCH。"
+# 只面向 Apple 芯片：在 Intel Mac 上直接说明原因，而不是让用户以为分享包损坏。
+[[ "$ARCH" == "arm64" ]] \
+  || fail "当前版本只支持 Apple 芯片（arm64）；本机架构为 $ARCH。"
 /usr/bin/lipo "$SOURCE_BINARY" -verify_arch "$ARCH" \
   || fail "额度面板不包含 $ARCH 架构。"
 

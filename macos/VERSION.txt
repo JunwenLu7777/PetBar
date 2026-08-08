@@ -1,7 +1,7 @@
 Package: ChatBird NT macOS
 Version: 1.0.0
 System: macOS 12.3+
-Architecture: Universal 2 (arm64 + x86_64)
+Architecture: arm64 (Apple silicon only)
 Variant: Weekly quota and task status only
 Pet: chatbird-nt
 LaunchAgent: dev.chatbird.codex-quota-panel

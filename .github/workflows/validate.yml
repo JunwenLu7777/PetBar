@@ -15,15 +15,16 @@ jobs:
       - name: Validate ChatBird repository layout
         run: python3 scripts/validate-repository-layout.py
       - run: ./macos/ChatBirdQuotaPanel/scripts/build.sh
-      - name: Verify ChatBird macOS Universal 2 app and behavior
+      - name: Verify ChatBird macOS arm64 app and behavior
         run: |
           set -euo pipefail
           APP='macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app'
           BIN="$APP/Contents/MacOS/ChatBirdQuotaPanel"
-          lipo "$BIN" -verify_arch arm64 x86_64
+          lipo "$BIN" -verify_arch arm64
+          test "$(lipo -archs "$BIN")" = "arm64"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")" = "12.3"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")" = "1"
-          test "$(vtool -show-build "$BIN" | grep -c 'minos 12.3')" -eq 2
+          test "$(vtool -show-build "$BIN" | grep -c 'minos 12.3')" -eq 1
           codesign --verify --deep --strict "$APP"
           "$BIN" --print-panel-config | grep 'version=1.0.0 edition=chatbird-nt petID=chatbird-nt codexWeeklyQuotaOnly=true claudeQuotaPeriods=5h,weekly,fable width=388 height=226'
           "$BIN" --self-test-placement | grep 'activity-pill-segmentation=2/2.*gap=14.0; centerError=0.0'
@@ -52,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/build-macos-release.sh
-          RELEASE='ChatBird-NT-macOS-Universal-1.0.0'
+          RELEASE='ChatBird-NT-macOS-arm64-1.0.0'
           test -f "dist/$RELEASE.zip"
           test -f "dist/$RELEASE.zip.sha256"
           test -e "build/release/$RELEASE/pet/chatbird-nt/spritesheet.webp"
@@ -65,5 +66,5 @@ jobs:
           name: chatbird-nt-macos-1.0.0
           if-no-files-found: error
           path: |
-            dist/ChatBird-NT-macOS-Universal-1.0.0.zip
-            dist/ChatBird-NT-macOS-Universal-1.0.0.zip.sha256
+            dist/ChatBird-NT-macOS-arm64-1.0.0.zip
+            dist/ChatBird-NT-macOS-arm64-1.0.0.zip.sha256

@@ -50,7 +50,7 @@ write_command() {
 }
 
 make_stage() {
-  local stage="$FIXTURE/build/release/ChatBird-NT-macOS-Universal-1.0.0"
+  local stage="$FIXTURE/build/release/ChatBird-NT-macOS-arm64-1.0.0"
   local local_app="$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app"
   /bin/rm -rf "$stage"
   mkdir -p \
@@ -86,15 +86,15 @@ make_stage() {
 
 make_dist_from_stage() {
   mkdir -p "$FIXTURE/dist"
-  /bin/rm -f "$FIXTURE/dist/ChatBird-NT-macOS-Universal-1.0.0.zip" \
-    "$FIXTURE/dist/ChatBird-NT-macOS-Universal-1.0.0.zip.sha256"
+  /bin/rm -f "$FIXTURE/dist/ChatBird-NT-macOS-arm64-1.0.0.zip" \
+    "$FIXTURE/dist/ChatBird-NT-macOS-arm64-1.0.0.zip.sha256"
   /usr/bin/ditto -c -k --norsrc --keepParent \
-    "$FIXTURE/build/release/ChatBird-NT-macOS-Universal-1.0.0" \
-    "$FIXTURE/dist/ChatBird-NT-macOS-Universal-1.0.0.zip"
+    "$FIXTURE/build/release/ChatBird-NT-macOS-arm64-1.0.0" \
+    "$FIXTURE/dist/ChatBird-NT-macOS-arm64-1.0.0.zip"
   (
     cd "$FIXTURE/dist"
-    /usr/bin/shasum -a 256 ChatBird-NT-macOS-Universal-1.0.0.zip \
-      > ChatBird-NT-macOS-Universal-1.0.0.zip.sha256
+    /usr/bin/shasum -a 256 ChatBird-NT-macOS-arm64-1.0.0.zip \
+      > ChatBird-NT-macOS-arm64-1.0.0.zip.sha256
   )
 }
 
@@ -164,12 +164,12 @@ expect_fail "stale archive relative to local app build"
 make_stage
 make_dist_from_stage
 git -C "$FIXTURE" add dist
-write_file "$FIXTURE/dist/ChatBird-NT-macOS-Universal-1.0.0.zip.sha256" "bad  ChatBird-NT-macOS-Universal-1.0.0.zip\n"
+write_file "$FIXTURE/dist/ChatBird-NT-macOS-arm64-1.0.0.zip.sha256" "bad  ChatBird-NT-macOS-arm64-1.0.0.zip\n"
 expect_fail "bad archive checksum"
 
 make_dist_from_stage
 git -C "$FIXTURE" add dist
-/bin/rm "$FIXTURE/build/release/ChatBird-NT-macOS-Universal-1.0.0/README.md"
+/bin/rm "$FIXTURE/build/release/ChatBird-NT-macOS-arm64-1.0.0/README.md"
 expect_fail "invalid staged payload"
 
 /bin/echo "build macOS release verify-only tests passed"

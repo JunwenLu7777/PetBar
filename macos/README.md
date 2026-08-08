@@ -2,7 +2,7 @@
 
 ## 安装
 
-1. 完整解压 `ChatBird-NT-macOS-Universal-1.0.0.zip`。
+1. 完整解压 `ChatBird-NT-macOS-arm64-1.0.0.zip`。
 2. 双击 `安装ChatBird.command`。
 3. 如果出现“Apple 无法验证”提示，点“完成”，不要点“移到废纸篓”。
 4. 打开“系统设置”中的“隐私与安全”。
@@ -17,7 +17,7 @@
 ## 要求
 
 - macOS 12.3+
-- Apple 芯片或 Intel Mac
+- Apple 芯片（arm64）；暂不支持 Intel Mac
 - 已安装并登录 Codex
 - Claude Code 额度与任务兼容为可选功能；未安装时面板自动隐藏相关入口和任务，使用时需安装并登录 Claude Code
 
@@ -50,5 +50,5 @@
 
 ## 检查与卸载
 
-- `检查ChatBird.command`：检查宠物、Universal 2 架构、签名、面板进程、运行状态、Codex 周额度、可选 Claude 三项额度和任务状态。
+- `检查ChatBird.command`：检查宠物、arm64 架构、签名、面板进程、运行状态、Codex 周额度、可选 Claude 三项额度和任务状态。
 - `卸载ChatBird.command`：完全退出 Codex 后，移除 ChatBird NT 宠物和本项目面板，并只恢复本项目添加的 Codex 原生气泡设置；Codex 仍运行时会停止卸载并保留恢复文件。

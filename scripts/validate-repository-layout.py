@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST_ARCHIVE = re.compile(
-    r"^dist/ChatBird-NT-macOS-Universal-\d+\.\d+\.\d+\.zip$"
+    r"^dist/ChatBird-NT-macOS-arm64-\d+\.\d+\.\d+\.zip$"
 )
 ALLOWED_TOP_LEVEL = {
     ".gitattributes",
