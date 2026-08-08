@@ -504,6 +504,8 @@ final class CodexQuotaClient {
 
 final class ClaudeQuotaClient {
     private static let timeout: TimeInterval = 24
+    // 非交互式读取直接打印后退出，用不上交互式探测那样的长等待。
+    private static let nonInteractiveTimeout: TimeInterval = 12
     private static let maximumOutputBytes = 1_048_576
     static let probeSessionID =
         UUID(uuidString: "7ea8629d-a05f-4dc2-a0e1-b9cf8e81e407")!
@@ -518,6 +520,20 @@ final class ClaudeQuotaClient {
         guard let claudeURL = locateClaudeExecutable() else {
             return .failure(ClaudeQuotaError.claudeNotFound)
         }
+
+        // 先走非交互式读取：`claude /usage` 一次输出全部额度行，包含 Fable
+        // 周额度。交互式探测要靠向界面发方向键把 Fable 行滚出来，滚不出来时
+        // 会在三秒后降级成两行，Fable 额度就此丢失。认证问题直接上报，其余
+        // 失败仍回退交互式路径，避免依赖单一读取方式。
+        if let rawText = try? nonInteractiveUsageText(from: claudeURL) {
+            if ClaudeQuotaParser.requiresAuthentication(rawText) {
+                return .failure(ClaudeQuotaError.authenticationRequired)
+            }
+            if let snapshot = try? ClaudeQuotaParser.parse(rawText) {
+                return .success(snapshot)
+            }
+        }
+
         do {
             let rawText = try captureUsage(from: claudeURL)
             if ClaudeQuotaParser.requiresAuthentication(rawText) {
@@ -529,6 +545,43 @@ final class ClaudeQuotaClient {
         } catch {
             return .failure(ClaudeQuotaError.captureFailed)
         }
+    }
+
+    private func nonInteractiveUsageText(from executableURL: URL) throws -> String {
+        let workingDirectory = try prepareProbeWorkingDirectory()
+        defer { cleanupProbeTranscripts() }
+
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = ["/usage"]
+        process.currentDirectoryURL = workingDirectory
+        process.environment = launchEnvironment(workingDirectory: workingDirectory)
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        // stdin 接空设备：没有终端可读时 Claude 直接打印用量并退出，
+        // 不会停在等待输入的交互界面上。
+        process.standardInput = FileHandle.nullDevice
+
+        do {
+            try process.run()
+        } catch {
+            throw ClaudeQuotaError.captureFailed
+        }
+
+        let result = captureProcessOutput(
+            process: process,
+            output: pipe.fileHandleForReading,
+            timeout: Self.nonInteractiveTimeout,
+            maximumOutputBytes: Self.maximumOutputBytes
+        )
+        guard let text = String(data: result.data, encoding: .utf8),
+              !text.isEmpty
+        else {
+            throw ClaudeQuotaError.captureFailed
+        }
+        return text
     }
 
     private func captureUsage(from executableURL: URL) throws -> String {

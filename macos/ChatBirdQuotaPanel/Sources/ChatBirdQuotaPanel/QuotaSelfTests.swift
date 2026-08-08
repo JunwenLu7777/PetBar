@@ -376,6 +376,14 @@ func runClaudeQuotaSelfTest() -> Never {
     7% used
     Resets Jul 30 at 12pm
     """
+    // 非交互式 `claude /usage` 的输出形态：标签、百分比与重置时间同处一行。
+    // 这是额度读取的首选路径，格式必须能解析出包含 Fable 的全部三行。
+    let nonInteractiveFixture = """
+    Settings: Usage
+    Current session: 39% used · resets Aug 8 at 9:59pm (Asia/Singapore)
+    Current week (all models): 38% used · resets Aug 13 at 11:59am (Asia/Singapore)
+    Current week (Fable): 39% used · resets Aug 13 at 11:59am (Asia/Singapore)
+    """
     let authenticationFixture = """
     Claude Code is not logged in.
     Run /login to continue.
@@ -457,6 +465,10 @@ func runClaudeQuotaSelfTest() -> Never {
     guard let remaining = try? ClaudeQuotaParser.parse(remainingFixture),
           let used = try? ClaudeQuotaParser.parse(usedFixture),
           let withoutFable = try? ClaudeQuotaParser.parse(withoutFableFixture),
+          let nonInteractive = try? ClaudeQuotaParser.parse(nonInteractiveFixture),
+          nonInteractive.rows.map(\.name) == ["5 小时", "周额度", "Fable"],
+          nonInteractive.rows.map(\.remainingPercent) == [61, 62, 61],
+          nonInteractive.rows.allSatisfy({ $0.resetsAt != nil }),
           remaining.rows.map(\.name) == ["5 小时", "周额度", "Fable"],
           remaining.rows.map(\.remainingPercent) == [91, 93, 97],
           used.rows.map(\.remainingPercent) == [91, 93, 97],
@@ -488,6 +500,6 @@ func runClaudeQuotaSelfTest() -> Never {
         exit(1)
     }
 
-    print("claude-quota-self-test: left-percent=3/3 used-percent=3/3 windows=5h+weekly+fable legacy-without-fable=pass provider-buttons=2/2 click-hit=pass provider-visibility=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass")
+    print("claude-quota-self-test: left-percent=3/3 used-percent=3/3 non-interactive=3/3 windows=5h+weekly+fable legacy-without-fable=pass provider-buttons=2/2 click-hit=pass provider-visibility=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass")
     exit(0)
 }
