@@ -744,6 +744,11 @@ func runClaudeHookSelfTest() -> Never {
         return current + view.subviews.flatMap(descendantButtons)
     }
 
+    func descendantCards(in view: NSView) -> [ClaudeInsetCardView] {
+        let current = (view as? ClaudeInsetCardView).map { [$0] } ?? []
+        return current + view.subviews.flatMap(descendantCards)
+    }
+
     let questionFixture = """
     {
       "tool_name": "AskUserQuestion",
@@ -797,6 +802,74 @@ func runClaudeHookSelfTest() -> Never {
     })
     else {
         fail("AskUserQuestion 选项说明未直接显示")
+    }
+
+    // 尺寸契约：长选项文本与满额选项数都不得改变面板尺寸。真实展示路径
+    // （ClaudePermissionPanelController.showNextIfNeeded）把控制器交给
+    // contentViewController，窗口会按 view 的 fittingSize 定尺，所以这里
+    // 刻意不预设 frame，直接校验 fittingSize 与卡片是否溢出各自容器。
+    let longChoiceFixture = """
+    {
+      "tool_name": "AskUserQuestion",
+      "session_id": "12345678-1234-1234-1234-123456789abc",
+      "cwd": "/tmp/chatbird",
+      "tool_input": {
+        "questions": [{
+          "question": "extended_offline 那 7 个红，这次要我做到哪一步？",
+          "header": "范围",
+          "options": [
+            {
+              "label": "先只做诊断，不改代码",
+              "description": "实施 suite 拿到真实红名单，逐个定位夹具与新 planning-inputs 契约的差异点，输出分组与工作量评估。改不改、怎么改由你决定。"
+            },
+            {
+              "label": "诊断 + 直接修夹具",
+              "description": "定位后直接把夹具迁到新 planning-inputs 契约，修到 suite 全绿，再做负向回归验证。工作量可能较大且会改动多个 fixture。"
+            },
+            {
+              "label": "暂时不动 extended_offline",
+              "description": "这轮不碰，我转去处理清单里第 5 项（业务仓重挂）或第 6 项（gate 口径对齐）。"
+            },
+            {
+              "label": "只补回归测试",
+              "description": "先把红名单固化成回归测试，等契约稳定后再统一迁移夹具，避免重复返工。"
+            }
+          ],
+          "multiSelect": false
+        }]
+      }
+    }
+    """
+    guard let longChoicePrompt = try? ClaudePermissionProtocol.decodePrompt(
+        from: Data(longChoiceFixture.utf8)
+    ) else {
+        fail("长选项 fixture 解析")
+    }
+    let longChoiceController = ClaudePermissionPromptViewController(
+        prompt: longChoicePrompt
+    )
+    let expectedPanelSize = longChoiceController.preferredPanelSize
+    longChoiceController.view.layoutSubtreeIfNeeded()
+    let longChoiceFitting = longChoiceController.view.fittingSize
+    guard longChoiceFitting.width == expectedPanelSize.width,
+          longChoiceFitting.height == expectedPanelSize.height
+    else {
+        fail(
+            "长选项文本改变了面板尺寸：fittingSize "
+                + "\(Int(longChoiceFitting.width))x\(Int(longChoiceFitting.height))"
+                + " 期望 \(Int(expectedPanelSize.width))x\(Int(expectedPanelSize.height))"
+        )
+    }
+
+    longChoiceController.view.frame = NSRect(origin: .zero, size: expectedPanelSize)
+    longChoiceController.view.layoutSubtreeIfNeeded()
+    if let overflowing = descendantCards(in: longChoiceController.view).first(where: {
+        $0.frame.height > 0 && $0.fittingSize.height > $0.frame.height + 0.5
+    }) {
+        fail(
+            "选项卡片内容溢出容器：需要 \(Int(overflowing.fittingSize.height))"
+                + " 可用 \(Int(overflowing.frame.height))"
+        )
     }
 
     var openedPromptID: UUID?

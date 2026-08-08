@@ -210,6 +210,13 @@ final class ClaudePermissionPromptViewController: NSViewController {
     override func loadView() {
         let chrome = ClaudePermissionChromeView()
         chrome.translatesAutoresizingMaskIntoConstraints = false
+        // 面板尺寸由 preferredPanelSize 单方面决定：窗口在 contentViewController
+        // 赋值时会按 view 的 fittingSize 定尺，缺少绝对锚点时长选项文本的内在
+        // 宽度会把面板撑宽。这两条约束让内容适配面板，而不是面板迁就内容。
+        NSLayoutConstraint.activate([
+            chrome.widthAnchor.constraint(equalToConstant: preferredPanelSize.width),
+            chrome.heightAnchor.constraint(equalToConstant: preferredPanelSize.height),
+        ])
 
         let bodySurface = NSView()
         bodySurface.translatesAutoresizingMaskIntoConstraints = false
@@ -519,7 +526,10 @@ final class ClaudePermissionPromptViewController: NSViewController {
         stack.addArrangedSubview(pageContainer)
         NSLayoutConstraint.activate([
             pageContainer.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            pageContainer.heightAnchor.constraint(equalToConstant: 292),
+            // 面板总高固定 620，这里用掉 content 区剩余额度的绝大部分，让常见的
+            // 2~3 个带说明选项连同"其他回答"输入框一次性显示完；选项更多时由
+            // 卡片内的滚动视图兜底。
+            pageContainer.heightAnchor.constraint(equalToConstant: 316),
         ])
 
         let validation = makeValidationLabel()

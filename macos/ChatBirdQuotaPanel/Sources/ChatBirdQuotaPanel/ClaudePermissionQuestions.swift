@@ -118,12 +118,35 @@ final class ClaudeQuestionInput: NSObject {
         stack.alignment = .leading
         stack.spacing = 7
         stack.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(stack)
+
+        // 卡片高度由面板固定分配，而选项数量与说明长度都是可变的，所以内容放在
+        // 滚动视图里：选项装得下时与原先完全一致（滚动条自动隐藏），装不下时可
+        // 滚动，而不是把问题文本挤出可见区域。
+        let document = FlippedDocumentView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
-            stack.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -11),
+            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: document.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+        ])
+
+        let scroll = NSScrollView()
+        scroll.documentView = document
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
+            scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
+            scroll.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
+            scroll.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -11),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
         ])
 
         if let header = question.header {
