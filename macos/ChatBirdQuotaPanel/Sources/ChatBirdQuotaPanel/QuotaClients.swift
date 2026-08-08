@@ -553,6 +553,9 @@ final class ClaudeQuotaClient {
 
         let process = Process()
         process.executableURL = executableURL
+        // 这里不传 --session-id：Claude 处理 /usage 时会忽略它，仍按新会话号
+        // 落盘。探测会话改为按工作目录识别（probeWorkingDirectoryPath），
+        // 任务列表据此排除，收尾按同一目录清理。
         process.arguments = ["/usage"]
         process.currentDirectoryURL = workingDirectory
         process.environment = launchEnvironment(workingDirectory: workingDirectory)
@@ -744,14 +747,31 @@ final class ClaudeQuotaClient {
         return text
     }
 
-    private func prepareProbeWorkingDirectory() throws -> URL {
-        let directory = FileManager.default.homeDirectoryForCurrentUser
+    // 额度探测的专用工作目录。任务列表按它排除探测会话：/usage 会以随机会话号
+    // 落盘，只认固定 probeSessionID 的话，探测就会冒充成用户任务显示出来。
+    static var probeWorkingDirectoryPath: String {
+        probeWorkingDirectoryURL.path
+    }
+
+    // Claude 把项目目录编码进 ~/.claude/projects 的子目录名：/ 与 . 均换成 -。
+    static var probeProjectDirectoryName: String {
+        probeWorkingDirectoryPath
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ".", with: "-")
+    }
+
+    private static var probeWorkingDirectoryURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Caches", isDirectory: true)
             .appendingPathComponent(
                 "dev.chatbird.codex-quota-panel",
                 isDirectory: true
             )
             .appendingPathComponent("ClaudeProbe", isDirectory: true)
+    }
+
+    private func prepareProbeWorkingDirectory() throws -> URL {
+        let directory = Self.probeWorkingDirectoryURL
         let settingsDirectory = directory
             .appendingPathComponent(".claude", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -800,6 +820,7 @@ final class ClaudeQuotaClient {
 
     private func cleanupProbeTranscripts() {
         let fileName = "\(Self.probeSessionID.uuidString.lowercased()).jsonl"
+        let probeProjectDirectory = Self.probeProjectDirectoryName
         let home = FileManager.default.homeDirectoryForCurrentUser
         let roots = [
             home.appendingPathComponent(".claude/projects", isDirectory: true),
@@ -814,8 +835,15 @@ final class ClaudeQuotaClient {
                 includingPropertiesForKeys: [.isRegularFileKey],
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
             ) else { continue }
+            // 固定会话号来自交互式探测；非交互式 /usage 会用随机会话号落进探测
+            // 项目目录，所以那个目录下的记录一并清掉，避免逐次堆积。
             for case let url as URL in enumerator
-                where url.lastPathComponent == fileName
+                where url.pathExtension == "jsonl"
+                    && (
+                        url.lastPathComponent == fileName
+                            || url.deletingLastPathComponent()
+                                .lastPathComponent == probeProjectDirectory
+                    )
             {
                 try? FileManager.default.removeItem(at: url)
             }

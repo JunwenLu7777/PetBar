@@ -600,7 +600,10 @@ final class ClaudeTaskProgressReader {
                   rawSessionID.lowercased()
                     != ClaudeQuotaClient.probeSessionID.uuidString.lowercased(),
                   let cwd = value["cwd"] as? String,
-                  cwd.hasPrefix("/")
+                  cwd.hasPrefix("/"),
+                  // 额度探测的 /usage 会以随机会话号出现，只能按工作目录排除，
+                  // 否则它会冒充成一条用户任务显示在面板上。
+                  cwd != ClaudeQuotaClient.probeWorkingDirectoryPath
             else { return nil }
             let rawStatus = (
                 value["status"] as? String
@@ -691,6 +694,9 @@ final class ClaudeTaskProgressReader {
                       let sessionID = Self.sessionID(from: url),
                       sessionID
                         != ClaudeQuotaClient.probeSessionID.uuidString.lowercased(),
+                      // 同上：探测项目目录下的记录一律不算用户任务。
+                      url.deletingLastPathComponent().lastPathComponent
+                        != ClaudeQuotaClient.probeProjectDirectoryName,
                       let values = try? url.resourceValues(
                           forKeys: [
                               .contentModificationDateKey,
