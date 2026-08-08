@@ -503,7 +503,22 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
           ) == true,
           isClaudeCodeCommandLine("/bin/zsh") == false,
           currentProcessStartIdentity(forProcessID: selfProcessID) != nil,
-          isLiveClaudeProcess(selfProcessID) == false,
+          // isLiveClaudeProcess 沿父进程链查找 claude，所以自测进程不能当样本：
+          // 自测往往就是从 Claude Code 会话里启动的，父链上必然有 claude，断言
+          // 必失败。面板真实运行时由 LaunchAgent 拉起，父链是 launchd。改为按
+          // 注入的进程链验证同一性质——面板自身的命令行不算 Claude 进程——
+          // 并单独验证非活进程直接判否。
+          isLiveClaudeProcess(1) == false,
+          processChainContainsClaude(
+              startingAt: 4_242,
+              commandLine: { candidate in
+                  candidate == 4_242
+                      ? "/Users/example/Applications/ChatBird 额度面板.app"
+                          + "/Contents/MacOS/ChatBirdQuotaPanel"
+                      : nil
+              },
+              parentPID: { _ in nil }
+          ) == false,
           iTermTTYFocus?.contains(
               #"if (tty of aSession as text) is "/dev/ttys003" then"#
           ) == true,
