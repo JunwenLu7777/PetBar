@@ -13,3 +13,4 @@ panel-health.json
 __MACOSX/
 __pycache__/
 *.py[cod]
+.superpowers/
