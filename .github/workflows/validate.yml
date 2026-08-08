@@ -10,6 +10,9 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - name: Install ripgrep for the privacy audit
+        # The runner image ships no rg, and the audit needs it to scan at all.
+        run: brew list ripgrep >/dev/null 2>&1 || brew install ripgrep
       - name: Reject unresolved merge markers
         run: "! git grep -n -E '^(<<<<<<<|=======|>>>>>>>)( |$)'"
       - name: Validate ChatBird repository layout
@@ -33,7 +36,7 @@ jobs:
           "$BIN" --self-test-task-progress | grep 'lifecycle=7/7.*refresh-gate=single-flight+generation.*refresh-reader=reuse.*claude-agents-timeout=bounded.*claude-terminal-focus=pid-chain+3-hosts.*claude-iterm-resume=2/2.*claude-otty=3/3.*claude-resume=2/2'
           "$BIN" --self-test-chatbird-edition | grep 'edition=chatbird-nt pet=chatbird-nt persistence=pass section-scope=pass startup-failure=logged'
           "$BIN" --self-test-weekly-quota | grep 'legacy-secondary=pass.*thresholds=7/7.*legacy-expires-at=iso+date-fallback+invalid-fails.*refresh=60s'
-          "$BIN" --self-test-claude-quota | grep 'left-percent=3/3 used-percent=3/3 windows=5h+weekly+fable.*click-hit=pass.*provider-visibility=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass'
+          "$BIN" --self-test-claude-quota | grep 'left-percent=3/3 used-percent=3/3.*non-interactive=3/3.*windows=5h+weekly+fable.*click-hit=pass.*provider-visibility=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass'
           "$BIN" --self-test-claude-hook | grep 'protocol=4/4.*privacy=pass.*auth=header.*queue=bounded.*config=optional+install+conflict-preserved+idempotent+uninstall+crlf+strict-json'
           "$BIN" --self-test-client-contract | grep 'app-server-reset-credits=pass path-discovery=codex+claude count-only-credits=pass process-timeout=term+kill inherited-pipe=nonblocking codex-timeout=completion'
           SELECTION_ROOT="$(mktemp -d)"
