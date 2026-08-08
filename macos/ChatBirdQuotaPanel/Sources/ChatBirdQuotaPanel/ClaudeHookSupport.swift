@@ -921,6 +921,62 @@ func runClaudeHookSelfTest() -> Never {
         fail("任务列表恢复终端没有关闭同会话问题弹窗")
     }
 
+    // 在终端里直接回答时 Claude 既不关闭 hook 连接也不再读响应，弹窗必须靠会话
+    // 状态自动收起，否则要挂到请求超时。等待输入时必须保持；读不到该会话时也必须
+    // 保持，避免读取抖动关掉正要回答的弹窗；只有明确不再等待才收起，且不拉起终端。
+    var terminalOpenedForAutoDismiss = false
+    var autoDismissReleasedHook = false
+    let autoDismissController = ClaudePermissionPanelController(
+        anchorWindowProvider: { nil },
+        openTerminal: { _ in terminalOpenedForAutoDismiss = true }
+    )
+    autoDismissController.enqueue(prompt: questionPrompt) { decision in
+        if case .nativeFallback = decision {
+            autoDismissReleasedHook = true
+        }
+    }
+    let stillWaitingTask = TaskProgressItem(
+        title: "当前 Claude 会话",
+        kind: .waitingForInput,
+        source: .claudeCode,
+        sessionID: questionPrompt.sessionID?.uppercased(),
+        workingDirectory: "/tmp/chatbird"
+    )
+    let answeredTask = TaskProgressItem(
+        title: "当前 Claude 会话",
+        kind: .running,
+        source: .claudeCode,
+        sessionID: questionPrompt.sessionID?.uppercased(),
+        workingDirectory: "/tmp/chatbird"
+    )
+    guard autoDismissController.dismissIfAnsweredInTerminal(in: []) == false,
+          // 弹窗刚弹出时 Claude 仍在执行工具调用，会话是 running。此时收起会
+          // 让弹窗一出现就消失，所以在观察到等待输入之前必须拒绝收起。
+          autoDismissController.dismissIfAnsweredInTerminal(
+              in: [answeredTask]
+          ) == false,
+          NSApp.windows.contains(where: {
+              $0 is ClaudePermissionPanel && $0.isVisible
+          }),
+          autoDismissController.dismissIfAnsweredInTerminal(
+              in: [stillWaitingTask]
+          ) == false,
+          autoDismissController.dismissIfAnsweredInTerminal(
+              in: [unrelatedTask]
+          ) == false,
+          NSApp.windows.contains(where: {
+              $0 is ClaudePermissionPanel && $0.isVisible
+          }),
+          autoDismissController.dismissIfAnsweredInTerminal(in: [answeredTask]),
+          autoDismissReleasedHook,
+          !terminalOpenedForAutoDismiss,
+          NSApp.windows.allSatisfy({
+              !($0 is ClaudePermissionPanel) || !$0.isVisible
+          })
+    else {
+        fail("终端内回答后问答弹窗没有自动收起")
+    }
+
     guard let answerBody = ClaudePermissionProtocol.responseBody(
         for: .submitAnswers(["选择输出格式": "简洁"]),
         prompt: questionPrompt
@@ -1165,6 +1221,8 @@ func runClaudeHookSelfTest() -> Never {
     print(
         "claude-hook-self-test: protocol=4/4; question-panel=620pt+paging; "
             + "question-detail=2/2; terminal-handoff=matched+hidden+released; "
+            + "auto-dismiss=prewait-kept+waiting-kept+unknown-kept"
+            + "+answered-dismissed; "
             + "privacy=pass; auth=header; queue=bounded; "
             + "config=optional+install+conflict-preserved+idempotent+uninstall+crlf+strict-json"
     )

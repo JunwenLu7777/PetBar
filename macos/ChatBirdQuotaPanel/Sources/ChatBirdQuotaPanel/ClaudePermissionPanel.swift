@@ -22,6 +22,8 @@ final class ClaudePermissionPanelController {
     private var currentEntry: Entry?
     private var panel: ClaudePermissionPanel?
     private var promptController: ClaudePermissionPromptViewController?
+    // 当前弹窗对应会话是否已被观察到处于等待输入，供自动收起判断真实状态跃迁。
+    private var currentEntryWasWaitingForInput = false
 
     init(
         anchorWindowProvider: @escaping () -> NSWindow?,
@@ -50,6 +52,35 @@ final class ClaudePermissionPanelController {
             return
         }
         entries.removeAll { $0.prompt.requestID == requestID }
+    }
+
+    // 在终端里直接回答时 Claude 不会关闭 hook 连接，也不会再读响应，弹窗因此
+    // 只能靠任务状态收起，否则要挂到请求超时。
+    //
+    // 收起前必须先观察到该会话处于等待输入：弹窗弹出的那一刻 Claude 还在执行
+    // 工具调用，会话是 running，直接按"非等待输入"判断会把刚弹出的窗立即关掉。
+    // 因此只认「先等待、后离开等待」这一次真实跃迁。读不到该会话同样不收起，
+    // 避免读取抖动关掉正要回答的弹窗。收起时不拉起终端——用户已经在终端里。
+    @discardableResult
+    func dismissIfAnsweredInTerminal(in tasks: [TaskProgressItem]) -> Bool {
+        guard let entry = currentEntry,
+              let task = claudeTaskItem(
+                  forSessionID: entry.prompt.sessionID,
+                  in: tasks
+              )
+        else {
+            return false
+        }
+        if task.kind == .waitingForInput {
+            currentEntryWasWaitingForInput = true
+            return false
+        }
+        guard currentEntryWasWaitingForInput else { return false }
+        currentEntry = nil
+        hidePanel()
+        entry.completion(.nativeFallback)
+        showNextIfNeeded()
+        return true
     }
 
     @discardableResult
@@ -108,6 +139,8 @@ final class ClaudePermissionPanelController {
         guard currentEntry == nil, !entries.isEmpty else { return }
         let entry = entries.removeFirst()
         currentEntry = entry
+        // 每个弹窗独立判断状态跃迁，不能沿用上一个会话的观察结果。
+        currentEntryWasWaitingForInput = false
 
         let controller = ClaudePermissionPromptViewController(
             prompt: entry.prompt,

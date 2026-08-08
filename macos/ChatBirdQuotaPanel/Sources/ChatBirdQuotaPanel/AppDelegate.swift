@@ -803,6 +803,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 readerStore.releaseReader(for: generation, reuse: shouldApply)
                 guard shouldApply else { return }
                 self.quotaView.taskProgress = snapshot
+                // 终端里直接回答后 Claude 不会关闭 hook 连接，靠这次刷新的会话
+                // 状态收起已经不需要的问答弹窗。
+                self.claudePermissionPanelController?
+                    .dismissIfAnsweredInTerminal(in: snapshot.items)
                 let nextBaseSize = panelSizeForTaskRows(snapshot.rowCount)
                 if nextBaseSize != self.currentBasePanelSize {
                     self.currentBasePanelSize = nextBaseSize
