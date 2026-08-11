@@ -32,6 +32,7 @@ enum DynamicIslandPreviewState: String, CaseIterable {
     case confirmPlan = "confirm-plan"
     case quotaCodex = "quota-codex"
     case quotaClaude = "quota-claude"
+    case quotaRefreshing = "quota-refreshing"
     case quotaLoading = "quota-loading"
     case quotaStale = "quota-stale"
     case quotaFirstFailure = "quota-first-failure"
@@ -58,6 +59,7 @@ func dynamicIslandPreviewSize(for state: DynamicIslandPreviewState) -> NSSize {
         return dynamicIslandConfirmationSize
     case .quotaCodex,
          .quotaClaude,
+         .quotaRefreshing,
          .quotaLoading,
          .quotaStale,
          .quotaFirstFailure,
@@ -142,6 +144,7 @@ private func dynamicIslandPreviewPresentationState(
         return .expanded(.confirmation)
     case .quotaCodex,
          .quotaClaude,
+         .quotaRefreshing,
          .quotaLoading,
          .quotaStale,
          .quotaFirstFailure,
@@ -173,7 +176,7 @@ private func dynamicIslandPreviewSnapshot(
     } ?? .empty
     let selectedProvider: QuotaProvider
     switch state {
-    case .quotaClaude, .quotaFirstFailure, .quotaUnavailable:
+    case .quotaClaude, .quotaRefreshing, .quotaFirstFailure, .quotaUnavailable:
         selectedProvider = .claudeCode
     default:
         selectedProvider = .codex
@@ -240,6 +243,15 @@ private func quotaStates(
     allStates: [QuotaProvider: QuotaProviderState]
 ) -> [QuotaProvider: QuotaProviderState] {
     switch state {
+    case .quotaRefreshing:
+        var refreshing = allStates[.claudeCode] ?? QuotaProviderState()
+        refreshing.statusText = "正在更新，继续显示上次数据"
+        refreshing.isRefreshing = true
+        refreshing.isStale = false
+        return [
+            .codex: allStates[.codex] ?? QuotaProviderState(),
+            .claudeCode: refreshing,
+        ]
     case .quotaLoading:
         return [
             .codex: QuotaProviderState(
@@ -303,9 +315,19 @@ private func dynamicIslandPreviewTasks(now: Date) -> (
         threadID: "thread-chatbird-dynamic-island",
         workingDirectory: dynamicIslandPreviewWorkingDirectory,
         events: [
-            event(5, "读取 Dynamic Island 计划"),
-            event(3, "运行构建检查"),
-            event(1, "整理本地验证摘要"),
+            event(9, "读取 Dynamic Island 计划"),
+            event(8, "核对 Codex 与 Claude 的公开活动事件映射"),
+            event(7, "更新任务筛选与运行状态识别"),
+            event(6, "运行构建检查"),
+            event(
+                4,
+                "验证长活动内容完整换行显示，不截断公开输出，并保留所有安全事件供滚动查看"
+            ),
+            event(2, "检查模型图标、按钮间距与额度页面布局"),
+            event(
+                1,
+                "正在整理本地验证摘要，核对构建、自测、隐私检查与界面预览结果；继续检查 Codex 与 Claude 最新公开输出是否及时替换；确认长内容不再按字符截断，并通过滚动区域保留全部细节；最后汇总任务状态、开始时间、持续时间和所有安全事件"
+            ),
         ]
     )
     let waiting = TaskProgressItem(

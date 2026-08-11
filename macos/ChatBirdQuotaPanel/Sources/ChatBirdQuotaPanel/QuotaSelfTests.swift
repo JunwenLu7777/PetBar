@@ -2,7 +2,7 @@
 //  QuotaSelfTests.swift
 //  ChatBirdQuotaPanel
 //
-//  模块职责：额度相关自测——--self-test-chatbird-edition（宠物选择持久化）、
+//  模块职责：额度相关自测——--self-test-chatbird-edition（独立 App 身份）、
 //  --self-test-weekly-quota（周额度窗口选择/阈值/重置额度/失败文案）、
 //  --self-test-claude-quota（Claude 解析器/提供者切换/可执行文件定位/
 //  任务来源过滤）。
@@ -15,62 +15,17 @@ import Darwin
 import Foundation
 
 func runChatBirdEditionSelfTest() -> Never {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("chatbird-edition-\(UUID().uuidString)", isDirectory: true)
-    let config = directory.appendingPathComponent("config.toml")
-    defer { try? FileManager.default.removeItem(at: directory) }
-
-    do {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let initial = """
-        selected-avatar-id = "codex"
-        [general]
-        model = "gpt"
-        [desktop]
-        avatar-overlay-mascot-width-px = 163
-        selected-avatar-id = "custom:old-pet"
-        [features]
-        test = true
-        """
-        try initial.data(using: .utf8)?.write(to: config, options: .atomic)
-        let store = ChatBirdPetSelectionStore(configURL: config)
-        guard store.selectChatBird(), store.chatBirdIsSelected() else {
-            throw NSError(domain: "ChatBirdEditionSelfTest", code: 1)
-        }
-        let chatBirdText = try String(contentsOf: config, encoding: .utf8)
-        guard chatBirdText.components(separatedBy: "selected-avatar-id").count - 1 == 2,
-              chatBirdText.contains("selected-avatar-id = \"codex\""),
-              chatBirdText.contains("selected-avatar-id = \"custom:chatbird-nt\"")
-        else {
-            throw NSError(domain: "ChatBirdEditionSelfTest", code: 2)
-        }
-        let missingDesktop = ChatBirdPetSelectionStore.updatingDesktopSelection(
-            in: "[general]\nmodel = \"gpt\"\n",
-            avatarID: chatBirdPetAvatarID
-        )
-        guard missingDesktop.contains("[desktop]\nselected-avatar-id = \"custom:chatbird-nt\"") else {
-            throw NSError(domain: "ChatBirdEditionSelfTest", code: 3)
-        }
-        let blockedParent = directory.appendingPathComponent("not-a-directory")
-        try Data("blocked".utf8).write(to: blockedParent)
-        let blockedStore = ChatBirdPetSelectionStore(
-            configURL: blockedParent.appendingPathComponent("config.toml")
-        )
-        var startupMessages: [String] = []
-        guard !selectChatBirdAtStartup(
-            using: blockedStore,
-            logError: { startupMessages.append($0) }
-        ), startupMessages.count == 1,
-           startupMessages[0].contains("无法在 Codex 中选中 ChatBird")
-        else {
-            throw NSError(domain: "ChatBirdEditionSelfTest", code: 4)
-        }
-    } catch {
-        fputs("ChatBird edition self-test failed: \(error)\n", stderr)
+    guard chatBirdBundleIdentifier == "dev.chatbird.app",
+          chatBirdLaunchAgentLabel == chatBirdBundleIdentifier,
+          legacyChatBirdBundleIdentifier == "dev.chatbird.codex-quota-panel",
+          panelEdition == "chatbird-nt",
+          chatBirdPetID == "chatbird-nt"
+    else {
+        fputs("ChatBird edition identity self-test failed\n", stderr)
         exit(1)
     }
 
-    print("chatbird-edition-self-test: edition=chatbird-nt pet=chatbird-nt persistence=pass section-scope=pass startup-failure=logged")
+    print("chatbird-edition-self-test: edition=chatbird-nt app-id=dev.chatbird.app pet=standalone")
     exit(0)
 }
 

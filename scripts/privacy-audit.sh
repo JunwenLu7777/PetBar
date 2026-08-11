@@ -36,7 +36,7 @@ while IFS= read -r -d '' file; do
   fi
 done < <(audit_candidates)
 
-for release in "$ROOT"/build/release/ChatBird-NT-macOS-arm64-*(N); do
+for release in "$ROOT"/build/release/ChatBird-macOS-arm64-*(N); do
   while IFS= read -r -d '' file; do
     case "$file" in
       *.png|*.gif|*.webp|*.jpg|*.icns|*.zip) continue ;;

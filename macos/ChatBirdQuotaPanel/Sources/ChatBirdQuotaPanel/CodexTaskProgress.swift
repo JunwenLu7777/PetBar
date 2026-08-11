@@ -16,7 +16,18 @@ import Foundation
 final class CodexTaskProgressReader {
     struct UnreadThreadState {
         let ids: Set<String>
+        let explicitlyVisibleIDs: Set<String>
         let isAvailable: Bool
+
+        init(
+            ids: Set<String>,
+            explicitlyVisibleIDs: Set<String> = [],
+            isAvailable: Bool
+        ) {
+            self.ids = ids
+            self.explicitlyVisibleIDs = explicitlyVisibleIDs
+            self.isAvailable = isAvailable
+        }
     }
 
     private struct RolloutCandidate {
@@ -29,17 +40,24 @@ final class CodexTaskProgressReader {
         let snapshot: TaskProgressSnapshot
     }
 
+    private struct RolloutSessionMetadata {
+        let firstLine: String?
+        let workingDirectory: String?
+    }
+
     private let fileManager = FileManager.default
     private let maximumTailBytes: UInt64 = 1_048_576
     private let rolloutRescanInterval: TimeInterval = codexTaskProgressRescanInterval
     private let activeTaskFreshness: TimeInterval = 30 * 60
-    private let completedTaskVisibility: TimeInterval = 2 * 60
+    private let completedTaskVisibility = completedTaskPanelRetention
     private var cachedRollouts: [RolloutCandidate] = []
     private var cachedRolloutVisibility: [String: Bool] = [:]
+    private var cachedSessionMetadata: [String: RolloutSessionMetadata] = [:]
     private var parsedCache: [String: ParsedCacheEntry] = [:]
     private var cachedThreadTitles: [String: String] = [:]
     private var cachedThreadIndexModificationDate: Date?
     private var cachedUnreadThreadIDs = Set<String>()
+    private var cachedExplicitlyVisibleThreadIDs = Set<String>()
     private var cachedUnreadStateModificationDate: Date?
     private var hasCachedUnreadState = false
     private var nextRolloutScanAt = Date.distantPast
@@ -49,8 +67,13 @@ final class CodexTaskProgressReader {
         let threadTitles = readThreadTitleIndex()
         let unreadState = readUnreadThreadState()
         var items: [TaskProgressItem] = []
-        for candidate in recentRollouts(at: now, unreadThreadIDs: unreadState.ids) {
+        for candidate in recentRollouts(
+            at: now,
+            unreadThreadIDs: unreadState.ids,
+            explicitlyVisibleThreadIDs: unreadState.explicitlyVisibleIDs
+        ) {
             let cacheKey = candidate.url.path
+            let sessionMetadata = readSessionMetadata(from: candidate.url)
             let snapshot: TaskProgressSnapshot
             if let cached = parsedCache[cacheKey],
                cached.modificationDate == candidate.modificationDate
@@ -83,7 +106,8 @@ final class CodexTaskProgressReader {
                 activityText: item.activityText,
                 statusOverride: item.statusOverride,
                 threadID: threadID,
-                workingDirectory: item.workingDirectory,
+                workingDirectory: item.workingDirectory
+                    ?? sessionMetadata.workingDirectory,
                 events: item.events
             )
             guard Self.shouldDisplay(
@@ -92,7 +116,9 @@ final class CodexTaskProgressReader {
                 modificationDate: candidate.modificationDate,
                 now: now,
                 unreadState: unreadState,
-                fallbackVisibility: completedTaskVisibility
+                fallbackVisibility: completedTaskVisibility,
+                activeVisibility: activeTaskFreshness,
+                terminalDate: item.updatedAt
             ) else { continue }
             items.append(item)
         }
@@ -167,6 +193,7 @@ final class CodexTaskProgressReader {
                     activeTaskTitle = latestUserTitle ?? activeTaskTitle
                     taskStartedAt = eventDate
                     lastUpdatedAt = eventDate
+                    events.removeAll(keepingCapacity: true)
                     events = appendingTaskActivityEvent(
                         TaskActivityEvent(
                             kind: .lifecycle,
@@ -202,7 +229,9 @@ final class CodexTaskProgressReader {
                         to: events
                     )
                 } else if payloadType == "agent_message",
-                          payload["phase"] as? String == "commentary",
+                          ["commentary", "final_answer"].contains(
+                              (payload["phase"] as? String)?.lowercased() ?? ""
+                          ),
                           let message = payload["message"] as? String,
                           let commentary = sanitizedPublicCommentary(message)
                 {
@@ -449,7 +478,10 @@ final class CodexTaskProgressReader {
         return indexedTitle
     }
 
-    static func isUserVisibleSessionMetadata(line: String) -> Bool {
+    static func isUserVisibleSessionMetadata(
+        line: String,
+        explicitlyVisible: Bool = false
+    ) -> Bool {
         guard let data = line.data(using: .utf8),
               let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               record["type"] as? String == "session_meta",
@@ -459,13 +491,25 @@ final class CodexTaskProgressReader {
         }
 
         let threadSource = (payload["thread_source"] as? String)?.lowercased()
-        if threadSource == "subagent" || threadSource == "automation" {
+        if threadSource == "automation" {
             return false
         }
-        if let source = payload["source"] as? [String: Any], source["subagent"] != nil {
-            return false
+        let isSubagent = threadSource == "subagent"
+            || (payload["source"] as? [String: Any])?["subagent"] != nil
+        if isSubagent {
+            return explicitlyVisible
         }
         return true
+    }
+
+    static func workingDirectoryFromSessionMetadata(line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              record["type"] as? String == "session_meta",
+              let payload = record["payload"] as? [String: Any],
+              let rawCwd = payload["cwd"] as? String
+        else { return nil }
+        return normalizedAbsolutePath(rawCwd)
     }
 
     static func shouldDisplay(
@@ -474,13 +518,32 @@ final class CodexTaskProgressReader {
         modificationDate: Date,
         now: Date,
         unreadState: UnreadThreadState,
-        fallbackVisibility: TimeInterval = 2 * 60
+        fallbackVisibility: TimeInterval = completedTaskPanelRetention,
+        activeVisibility: TimeInterval = 30 * 60,
+        terminalDate: Date? = nil
     ) -> Bool {
-        guard kind == .completed || kind == .failed else { return true }
-        if unreadState.isAvailable, let threadID {
-            return unreadState.ids.contains(threadID)
+        if kind == .completed || kind == .failed {
+            guard taskIsWithinTerminalPanelRetention(
+                kind: kind,
+                updatedAt: terminalDate ?? modificationDate,
+                now: now,
+                retention: fallbackVisibility
+            ) else { return false }
+            if unreadState.isAvailable, let threadID {
+                return unreadState.ids.contains(threadID)
+            }
+            return true
         }
-        return now.timeIntervalSince(modificationDate) <= fallbackVisibility
+        if kind == .running || kind == .waitingForInput || kind == .reading {
+            if unreadState.isAvailable,
+               let threadID,
+               unreadState.ids.contains(threadID)
+            {
+                return true
+            }
+            return now.timeIntervalSince(modificationDate) <= activeVisibility
+        }
+        return true
     }
 
     private func codexHomeURL() -> URL {
@@ -546,47 +609,76 @@ final class CodexTaskProgressReader {
         else {
             return UnreadThreadState(
                 ids: cachedUnreadThreadIDs,
+                explicitlyVisibleIDs: cachedExplicitlyVisibleThreadIDs,
                 isAvailable: hasCachedUnreadState
             )
         }
         if cachedUnreadStateModificationDate == modificationDate {
             return UnreadThreadState(
                 ids: cachedUnreadThreadIDs,
+                explicitlyVisibleIDs: cachedExplicitlyVisibleThreadIDs,
                 isAvailable: hasCachedUnreadState
             )
         }
 
         guard let data = try? Data(contentsOf: stateURL),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let atomState = root["electron-persisted-atom-state"] as? [String: Any],
-              let unreadByHost = atomState["unread-thread-ids-by-host-v1"] as? [String: Any]
+              let state = Self.threadState(from: data)
         else {
             return UnreadThreadState(
                 ids: cachedUnreadThreadIDs,
+                explicitlyVisibleIDs: cachedExplicitlyVisibleThreadIDs,
                 isAvailable: hasCachedUnreadState
             )
         }
-
-        var ids = Set<String>()
-        for value in unreadByHost.values {
-            guard let hostIDs = value as? [String] else { continue }
-            ids.formUnion(hostIDs.map { $0.lowercased() })
-        }
-        cachedUnreadThreadIDs = ids
+        cachedUnreadThreadIDs = state.ids
+        cachedExplicitlyVisibleThreadIDs = state.explicitlyVisibleIDs
         cachedUnreadStateModificationDate = modificationDate
-        hasCachedUnreadState = true
-        return UnreadThreadState(ids: ids, isAvailable: true)
+        hasCachedUnreadState = state.isAvailable
+        nextRolloutScanAt = .distantPast
+        return state
+    }
+
+    static func threadState(from data: Data) -> UnreadThreadState? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        let atomState = root["electron-persisted-atom-state"] as? [String: Any]
+        let unreadByHost = atomState?["unread-thread-ids-by-host-v1"] as? [String: Any]
+        var unreadIDs = Set<String>()
+        for value in unreadByHost?.values ?? Dictionary<String, Any>().values {
+            guard let hostIDs = value as? [String] else { continue }
+            unreadIDs.formUnion(hostIDs.map { $0.lowercased() })
+        }
+
+        var explicitlyVisibleIDs = Set<String>()
+        for key in ["pinned-thread-ids", "projectless-thread-ids"] {
+            guard let ids = root[key] as? [String] else { continue }
+            explicitlyVisibleIDs.formUnion(ids.map { $0.lowercased() })
+        }
+        if let assignments = root["thread-project-assignments"] as? [String: Any] {
+            explicitlyVisibleIDs.formUnion(assignments.keys.map { $0.lowercased() })
+        }
+
+        return UnreadThreadState(
+            ids: unreadIDs,
+            explicitlyVisibleIDs: explicitlyVisibleIDs,
+            isAvailable: unreadByHost != nil
+        )
     }
 
     private func recentRollouts(
         at now: Date,
-        unreadThreadIDs: Set<String>
+        unreadThreadIDs: Set<String>,
+        explicitlyVisibleThreadIDs: Set<String>
     ) -> [RolloutCandidate] {
         if let override = ProcessInfo.processInfo.environment["CHATBIRD_TASK_ROLLOUT_FILE"],
            !override.isEmpty
         {
             let url = URL(fileURLWithPath: override)
-            guard isUserVisibleRollout(url) else { return [] }
+            guard isUserVisibleRollout(
+                url,
+                explicitlyVisibleThreadIDs: explicitlyVisibleThreadIDs
+            ) else { return [] }
             let modified = (try? url.resourceValues(
                 forKeys: [.contentModificationDateKey]
             ).contentModificationDate) ?? now
@@ -621,8 +713,15 @@ final class CodexTaskProgressReader {
             else { continue }
             let threadID = Self.threadID(from: url)
             let isUnread = threadID.map { unreadThreadIDs.contains($0) } ?? false
-            guard now.timeIntervalSince(modified) <= activeTaskFreshness || isUnread,
-                  isUserVisibleRollout(url)
+            let scanVisibility = max(
+                activeTaskFreshness,
+                completedTaskVisibility
+            )
+            guard now.timeIntervalSince(modified) <= scanVisibility || isUnread,
+                  isUserVisibleRollout(
+                      url,
+                      explicitlyVisibleThreadIDs: explicitlyVisibleThreadIDs
+                  )
             else {
                 continue
             }
@@ -637,21 +736,48 @@ final class CodexTaskProgressReader {
         return cachedRollouts
     }
 
-    private func isUserVisibleRollout(_ url: URL) -> Bool {
-        if let cached = cachedRolloutVisibility[url.path] { return cached }
+    private func isUserVisibleRollout(
+        _ url: URL,
+        explicitlyVisibleThreadIDs: Set<String>
+    ) -> Bool {
+        let explicitlyVisible = Self.threadID(from: url).map {
+            explicitlyVisibleThreadIDs.contains($0)
+        } ?? false
+        let cacheKey = "\(url.path)#\(explicitlyVisible ? "explicit" : "default")"
+        if let cached = cachedRolloutVisibility[cacheKey] { return cached }
 
         var isVisible = true
+        if let firstLine = readSessionMetadata(from: url).firstLine {
+            isVisible = Self.isUserVisibleSessionMetadata(
+                line: firstLine,
+                explicitlyVisible: explicitlyVisible
+            )
+        }
+        cachedRolloutVisibility[cacheKey] = isVisible
+        return isVisible
+    }
+
+    private func readSessionMetadata(from url: URL) -> RolloutSessionMetadata {
+        if let cached = cachedSessionMetadata[url.path] { return cached }
+
+        var firstLine: String?
         if let handle = try? FileHandle(forReadingFrom: url) {
             defer { try? handle.close() }
             if let data = try? handle.read(upToCount: 262_144),
                let text = String(data: data, encoding: .utf8),
-               let firstLine = text.split(separator: "\n", maxSplits: 1).first
+               let line = text.split(separator: "\n", maxSplits: 1).first
             {
-                isVisible = Self.isUserVisibleSessionMetadata(line: String(firstLine))
+                firstLine = String(line)
             }
         }
-        cachedRolloutVisibility[url.path] = isVisible
-        return isVisible
+        let metadata = RolloutSessionMetadata(
+            firstLine: firstLine,
+            workingDirectory: firstLine.flatMap(
+                Self.workingDirectoryFromSessionMetadata(line:)
+            )
+        )
+        cachedSessionMetadata[url.path] = metadata
+        return metadata
     }
 
     private func readTailLines(from url: URL) -> [String]? {

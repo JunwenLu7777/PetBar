@@ -2,9 +2,9 @@
 //  OverlayNotificationSync.swift
 //  ChatBirdQuotaPanel
 //
-//  模块职责：Codex 原生气泡静音状态的准备/恢复/磁盘同步。在 Codex 完全
-//  退出后改写其全局状态 JSON，为 ChatBird 注入首唤醒与静音通知偏好，
-//  并通过备份文件保证可恢复与写入边界安全。
+//  模块职责：Codex 原生任务气泡静音状态的准备/恢复/磁盘同步。在 Codex
+//  完全退出后改写其全局状态 JSON，为本地任务通知补齐静音偏好，并通过
+//  备份文件保证可恢复与写入边界安全。
 //
 
 import AppKit
@@ -20,7 +20,6 @@ struct PreparedCodexOverlayNotificationState {
 
 enum CodexOverlayNotificationState {
     private static let persistedAtomContainerKey = "electron-persisted-atom-state"
-    private static let firstAwakeKey = "first-awake-pet-notification-avatar-ids"
     private static let mutedNotificationKey = "avatar-overlay-muted-notification-ids-v1"
     private static let localThreadKeyPrefix = "thread-client-id-v1:local%3A"
     private static let localNotificationPrefix = "local:local:"
@@ -51,20 +50,6 @@ enum CodexOverlayNotificationState {
         var atoms = root[persistedAtomContainerKey] as? [String: Any] ?? [:]
         var backup = try backupObject(from: existingBackupData)
 
-        let firstAwakeKeyExisted = atoms[firstAwakeKey] != nil
-        var firstAwake = try stringArray(in: atoms, key: firstAwakeKey)
-        var addedFirstAwake = backupStringArray(
-            in: backup,
-            key: "addedFirstAwakeAvatarIDs"
-        )
-        if !firstAwake.contains(chatBirdPetAvatarID) {
-            firstAwake.append(chatBirdPetAvatarID)
-            if !addedFirstAwake.contains(chatBirdPetAvatarID) {
-                addedFirstAwake.append(chatBirdPetAvatarID)
-            }
-        }
-        atoms[firstAwakeKey] = firstAwake
-
         let mutedKeyExisted = atoms[mutedNotificationKey] != nil
         var muted = try stringArray(in: atoms, key: mutedNotificationKey)
         var addedMuted = backupStringArray(
@@ -86,11 +71,8 @@ enum CodexOverlayNotificationState {
         atoms[mutedNotificationKey] = muted
 
         backup["version"] = 1
-        backup["createdFirstAwakeKey"] =
-            (backup["createdFirstAwakeKey"] as? Bool ?? false) || !firstAwakeKeyExisted
         backup["createdMutedKey"] =
             (backup["createdMutedKey"] as? Bool ?? false) || !mutedKeyExisted
-        backup["addedFirstAwakeAvatarIDs"] = addedFirstAwake
         backup["addedMutedNotificationIDs"] = addedMuted
 
         root[persistedAtomContainerKey] = atoms
@@ -109,22 +91,9 @@ enum CodexOverlayNotificationState {
             return stateData
         }
         let backup = try jsonObject(from: backupData, name: "ChatBird 状态备份")
-        let addedFirstAwake = Set(
-            backupStringArray(in: backup, key: "addedFirstAwakeAvatarIDs")
-        )
         let addedMuted = Set(
             backupStringArray(in: backup, key: "addedMutedNotificationIDs")
         )
-
-        if atoms[firstAwakeKey] != nil {
-            let restored = try stringArray(in: atoms, key: firstAwakeKey)
-                .filter { !addedFirstAwake.contains($0) }
-            if backup["createdFirstAwakeKey"] as? Bool == true, restored.isEmpty {
-                atoms.removeValue(forKey: firstAwakeKey)
-            } else {
-                atoms[firstAwakeKey] = restored
-            }
-        }
 
         if atoms[mutedNotificationKey] != nil {
             let restored = try stringArray(in: atoms, key: mutedNotificationKey)

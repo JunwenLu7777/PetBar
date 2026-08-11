@@ -18,6 +18,7 @@ func runTaskProgressSelfTest() -> Never {
     let now = Date()
     let started = #"{"type":"event_msg","payload":{"type":"task_started"}}"#
     runTaskProgressSelfTestPhase1(now: now, started: started)
+    runCodexTailMetadataBackfillSelfTest(now: now, started: started)
     runTaskProgressSelfTestPhase2(now: now, started: started)
     runTaskProgressRefreshGateSelfTest()
     guard runTaskProgressRefreshStabilityRegressionSelfTest() else {
@@ -26,8 +27,56 @@ func runTaskProgressSelfTest() -> Never {
     }
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
-    print("task-progress-self-test: lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; click-hit=pass; scroll-hit=pass; refresh-hit=pass; hover-live=pass; completed-unread=pass; read-state=6/6; top-level-filter=5/5; task-dedup=pass; full-collection=pass; codex-cwd=pass; events=bounded-3; privacy=pass; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-agents-timeout=bounded; runtime-health-failure=logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
+    print("task-progress-self-test: lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; click-hit=pass; scroll-hit=pass; refresh-hit=pass; hover-live=pass; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; events=all-safe; privacy=pass; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-agents-timeout=bounded; runtime-health-failure=logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
     exit(0)
+}
+
+private func runCodexTailMetadataBackfillSelfTest(now: Date, started: String) {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "chatbird-codex-tail-metadata-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let rolloutURL = directory.appendingPathComponent(
+        "rollout-2026-08-11T00-00-00-00000000-0000-0000-0000-000000000001.jsonl"
+    )
+    let environmentKey = "CHATBIRD_TASK_ROLLOUT_FILE"
+    let previousValue = getenv(environmentKey).map { String(cString: $0) }
+    defer {
+        if let previousValue {
+            setenv(environmentKey, previousValue, 1)
+        } else {
+            unsetenv(environmentKey)
+        }
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    let sessionMeta = #"{"type":"session_meta","payload":{"cwd":"/tmp/chatbird-tail-project","thread_source":"root"}}"#
+    let publicUpdate = #"{"timestamp":"2026-08-11T00:00:01Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"正在验证大型会话"}}"#
+    let filler = String(repeating: "x", count: 1_100_000)
+    do {
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            [sessionMeta, filler, started, publicUpdate]
+                .joined(separator: "\n")
+                .appending("\n")
+                .utf8
+        ).write(to: rolloutURL)
+    } catch {
+        fputs("Codex tail metadata fixture failed\n", stderr)
+        exit(1)
+    }
+
+    setenv(environmentKey, rolloutURL.path, 1)
+    let item = CodexTaskProgressReader().readCollection().items.first
+    guard item?.workingDirectory == "/tmp/chatbird-tail-project",
+          item?.activityText == "正在验证大型会话"
+    else {
+        fputs("Codex tail metadata cwd backfill failed\n", stderr)
+        exit(1)
+    }
 }
 
 private func runTaskProgressRefreshGateSelfTest() {
@@ -166,13 +215,24 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
     let timestampedStarted = #"{"timestamp":"2026-07-25T10:00:00Z","type":"event_msg","payload":{"type":"task_started"}}"#
     let publicCommentary = #"{"timestamp":"2026-07-25T10:02:00Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"**第一行会被后续输出覆盖。**\n第二行。\n第三行。\n第四行覆盖第一行。","agent_reasoning":"隐藏推理绝不显示"}}"#
     let continuedCommentary = #"{"timestamp":"2026-07-25T10:06:00Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"继续检查最终构建与安装状态。"}}"#
+    let finalAnswer = #"{"timestamp":"2026-07-25T10:07:00Z","type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"最终结果已经准备完成。"}}"#
     let commandStarted = #"{"timestamp":"2026-07-25T10:03:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"tool-1","arguments":"secret command"}}"#
     let commandFinished = #"{"timestamp":"2026-07-25T10:04:00Z","type":"response_item","payload":{"type":"function_call_output","call_id":"tool-1","output":"secret output"}}"#
     let hiddenReasoning = #"{"timestamp":"2026-07-25T10:05:00Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"隐藏推理绝不显示"}]}}"#
     let sessionMeta = #"{"type":"session_meta","payload":{"cwd":"/tmp/chatbird","thread_source":"root"}}"#
     let openAITestCredential = ["sk", "proj", "ABCDEFGHIJKLMNOPQRSTUV"]
         .joined(separator: "-")
-    let gitHubTestCredential = "gh" + "p_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+    guard let gitHubCredentialData = Data(
+        base64Encoded: "Z2hwX0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaMTIzNDU2Nzg5MA=="
+    ),
+          let gitHubTestCredential = String(
+              data: gitHubCredentialData,
+              encoding: .utf8
+          )
+    else {
+        fputs("task progress credential fixture decode failed\n", stderr)
+        exit(1)
+    }
     let codexCommentaryCredential = ["sk", "proj", "CODEXCOMMENTARYSECRET"]
         .joined(separator: "-")
     let slackTestCredential = ["xoxb", "123456789012", "abcdefghijklmnop"]
@@ -226,19 +286,76 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         exit(1)
     }
     let parsedWithDirectory = CodexTaskProgressReader.parse(
-        lines: [sessionMeta, timestampedStarted, publicCommentary, commandStarted],
+        lines: [
+            sessionMeta,
+            timestampedStarted,
+            publicCommentary,
+            commandStarted,
+            continuedCommentary,
+            finalAnswer,
+        ],
         modificationDate: now,
         now: now
     )
     guard parsedWithDirectory.items.first?.workingDirectory == "/tmp/chatbird",
-          parsedWithDirectory.items.first?.events.count == 3,
+          parsedWithDirectory.items.first?.events.count == 5,
+          parsedWithDirectory.items.first?.events.last?.text
+            == "最终结果已经准备完成。",
           parsedWithDirectory.items.first?.events.allSatisfy({
-              $0.text.count <= 280
-                  && !$0.text.contains("secret")
+              !$0.text.contains("secret")
                   && !$0.text.contains("隐藏推理")
           }) == true
     else {
-        fputs("Codex cwd or bounded safe events failed\n", stderr)
+        fputs("Codex cwd or complete safe events failed\n", stderr)
+        exit(1)
+    }
+
+    let longEventText = String(repeating: "完整公开活动内容", count: 64)
+    let completeEvents = (1...5).reduce(into: [TaskActivityEvent]()) { result, index in
+        result = appendingTaskActivityEvent(
+            TaskActivityEvent(
+                kind: .commentary,
+                occurredAt: now.addingTimeInterval(TimeInterval(index)),
+                text: index == 5 ? longEventText : "安全事件 \(index)"
+            ),
+            to: result
+        )
+    }
+    guard completeEvents.count == 5,
+          completeEvents.last?.text == longEventText,
+          (completeEvents.last?.text.count ?? 0) > 280
+    else {
+        fputs("complete activity event preservation failed\n", stderr)
+        exit(1)
+    }
+    let firstLongParagraph = String(repeating: "甲", count: 5_000)
+    let secondLongParagraph = String(repeating: "乙", count: 5_000)
+    let completeParagraph = appendingTaskActivityParagraph(
+        secondLongParagraph,
+        to: firstLongParagraph
+    )
+    guard completeParagraph == "\(firstLongParagraph) \(secondLongParagraph)",
+          completeParagraph.count == 10_001
+    else {
+        fputs("complete activity paragraph preservation failed\n", stderr)
+        exit(1)
+    }
+
+    let secondStarted = #"{"timestamp":"2026-07-25T10:05:30Z","type":"event_msg","payload":{"type":"task_started"}}"#
+    let currentTurnOnly = CodexTaskProgressReader.parse(
+        lines: [
+            timestampedStarted,
+            publicCommentary,
+            secondStarted,
+            continuedCommentary,
+        ],
+        modificationDate: now,
+        now: now
+    )
+    guard currentTurnOnly.items.first?.events.map(\.text)
+        == ["任务开始", "继续检查最终构建与安装状态。"]
+    else {
+        fputs("Codex current-turn activity reset failed\n", stderr)
         exit(1)
     }
 
@@ -267,6 +384,8 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
     let claudeToolUse = #"{"type":"assistant","timestamp":"2026-07-25T10:02:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-claude-1","name":"Bash","input":{"command":"echo secret"}}],"stop_reason":null}}"#
     let claudeToolResult = #"{"type":"user","timestamp":"2026-07-25T10:03:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-claude-1","content":"secret output"}]}}"#
     let claudeSecondPublicText = #"{"type":"assistant","timestamp":"2026-07-25T10:04:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"继续整理公开状态"}],"stop_reason":null}}"#
+    let claudeLongPublicTextValue = String(repeating: "完整 Claude 输出内容", count: 40)
+    let claudeLongPublicText = #"{"type":"assistant","timestamp":"2026-07-25T10:04:30.000Z","message":{"role":"assistant","content":[{"type":"text","text":"\#(claudeLongPublicTextValue)"}],"stop_reason":null}}"#
     let claudeGitHubTestCredential = "gh" + "o_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
     let claudeCredentialText = #"{"type":"assistant","timestamp":"2026-07-25T10:05:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"client_secret=claude-client-secret-123456 access_token=\#(claudeGitHubTestCredential)"}],"stop_reason":null}}"#
     let claudeRawJSONText = #"{"type":"assistant","timestamp":"2026-07-25T10:06:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"{\"password\":\"claude-json-secret-123456\"}"}],"stop_reason":null}}"#
@@ -276,6 +395,7 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
             claudeToolUse,
             claudeToolResult,
             claudeSecondPublicText,
+            claudeLongPublicText,
         ],
         sessionID: claudeSessionID,
         fallbackTitle: "Claude 会话",
@@ -286,19 +406,21 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         now: now
     )
     let claudeEvents = claudeWithEvents?.events ?? []
-    guard claudeEvents.count == 3,
+    guard claudeEvents.count == 4,
           claudeEvents.map(\.kind) == [
               .commentary,
               .tool,
               .commentary,
+              .commentary,
           ],
+          claudeEvents.last?.text == claudeLongPublicTextValue,
+          (claudeEvents.last?.text.count ?? 0) > 280,
           claudeEvents.allSatisfy({
-              $0.text.count <= 280
-                  && !$0.text.contains("secret")
+              !$0.text.contains("secret")
                   && !$0.text.contains("隐藏推理")
           }) == true
     else {
-        fputs("Claude bounded safe events or privacy filtering failed\n", stderr)
+        fputs("Claude complete safe events or privacy filtering failed\n", stderr)
         exit(1)
     }
 
@@ -805,6 +927,15 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
             unreadState: unreadState
         ),
         !CodexTaskProgressReader.shouldDisplay(
+            kind: .completed,
+            threadID: indexedThreadID,
+            modificationDate: now.addingTimeInterval(
+                -(completedTaskPanelRetention + 1)
+            ),
+            now: now,
+            unreadState: unreadState
+        ),
+        !CodexTaskProgressReader.shouldDisplay(
             kind: .failed,
             threadID: indexedThreadID,
             modificationDate: now,
@@ -818,6 +949,44 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
             now: now,
             unreadState: unavailableState,
             fallbackVisibility: 120
+        ),
+        CodexTaskProgressReader.shouldDisplay(
+            kind: .completed,
+            threadID: indexedThreadID,
+            modificationDate: now.addingTimeInterval(
+                -(completedTaskPanelRetention - 1)
+            ),
+            now: now,
+            unreadState: unavailableState
+        ),
+        !CodexTaskProgressReader.shouldDisplay(
+            kind: .completed,
+            threadID: indexedThreadID,
+            modificationDate: now.addingTimeInterval(
+                -(completedTaskPanelRetention + 1)
+            ),
+            now: now,
+            unreadState: unavailableState
+        ),
+        CodexTaskProgressReader.shouldDisplay(
+            kind: .running,
+            threadID: indexedThreadID,
+            modificationDate: now,
+            now: now,
+            unreadState: readState,
+            terminalDate: now.addingTimeInterval(
+                -(completedTaskPanelRetention + 1)
+            )
+        ),
+        !CodexTaskProgressReader.shouldDisplay(
+            kind: .completed,
+            threadID: indexedThreadID,
+            modificationDate: now,
+            now: now,
+            unreadState: unreadState,
+            terminalDate: now.addingTimeInterval(
+                -(completedTaskPanelRetention + 1)
+            )
         ),
     ]
     guard completedVisibilityCases.allSatisfy({ $0 }),

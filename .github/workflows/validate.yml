@@ -21,30 +21,31 @@ jobs:
       - name: Verify ChatBird macOS arm64 app and behavior
         run: |
           set -euo pipefail
-          APP='macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app'
-          BIN="$APP/Contents/MacOS/ChatBirdQuotaPanel"
+          APP='macos/ChatBirdQuotaPanel/build/ChatBird.app'
+          BIN="$APP/Contents/MacOS/ChatBird"
           lipo "$BIN" -verify_arch arm64
           test "$(lipo -archs "$BIN")" = "arm64"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = "dev.chatbird.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")" = "ChatBird"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP/Contents/Info.plist")" = "ChatBird.icns"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")" = "12.3"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")" = "1"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")" = "2"
+          ! /usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$APP/Contents/Info.plist" >/dev/null 2>&1
+          test -f "$APP/Contents/Resources/ChatBird.icns"
+          test -f "$APP/Contents/Resources/ChatBirdPetSpritesheet.webp"
           test "$(vtool -show-build "$BIN" | grep -c 'minos 12.3')" -eq 1
           codesign --verify --deep --strict "$APP"
-          "$BIN" --print-panel-config | grep 'version=1.0.0 edition=chatbird-nt petID=chatbird-nt codexWeeklyQuotaOnly=true claudeQuotaPeriods=5h,weekly,fable width=388 height=226'
+          "$BIN" --print-panel-config | grep 'version=1.1.0 edition=chatbird-nt petID=chatbird-nt codexWeeklyQuotaOnly=true claudeQuotaPeriods=5h,weekly,fable width=388 height=226'
           "$BIN" --self-test-placement | grep 'activity-pill-segmentation=2/2.*gap=14.0; centerError=0.0'
           "$BIN" --self-test-lifecycle | grep 'pet-click-restore=5/5.*no-input-injection=2/2'
           "$BIN" --self-test-native-notification-state | grep 'prepare=pass reinstall=pass restore=pass file-lifecycle=pass user-values=preserved'
           "$BIN" --self-test-task-progress | grep 'lifecycle=7/7.*refresh-gate=single-flight+generation.*refresh-reader=reuse.*claude-agents-timeout=bounded.*claude-terminal-focus=pid-chain+3-hosts.*claude-iterm-resume=2/2.*claude-otty=3/3.*claude-resume=2/2'
-          "$BIN" --self-test-chatbird-edition | grep 'edition=chatbird-nt pet=chatbird-nt persistence=pass section-scope=pass startup-failure=logged'
+          "$BIN" --self-test-chatbird-edition | grep 'edition=chatbird-nt app-id=dev.chatbird.app pet=standalone'
           "$BIN" --self-test-weekly-quota | grep 'legacy-secondary=pass.*thresholds=7/7.*legacy-expires-at=iso+date-fallback+invalid-fails.*refresh=60s'
           "$BIN" --self-test-claude-quota | grep 'left-percent=3/3 used-percent=3/3.*non-interactive=3/3.*windows=5h+weekly+fable.*click-hit=pass.*provider-visibility=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass'
           "$BIN" --self-test-claude-hook | grep 'protocol=4/4.*privacy=pass.*auth=header.*queue=bounded.*config=optional+install+conflict-preserved+idempotent+uninstall+crlf+strict-json'
           "$BIN" --self-test-client-contract | grep 'app-server-reset-credits=pass path-discovery=codex+claude count-only-credits=pass process-timeout=term+kill inherited-pipe=nonblocking codex-timeout=completion'
-          SELECTION_ROOT="$(mktemp -d)"
-          trap 'rm -rf "$SELECTION_ROOT"' EXIT
-          SELECTION_CONFIG="$SELECTION_ROOT/config.toml"
-          printf '%s\n' '[desktop]' 'selected-avatar-id = "custom:old-pet"' > "$SELECTION_CONFIG"
-          "$BIN" --select-chatbird "$SELECTION_CONFIG"
-          grep -q 'selected-avatar-id = "custom:chatbird-nt"' "$SELECTION_CONFIG"
+          "$BIN" --self-test-dynamic-island | grep 'terminal-time=stable.*mode-switch=capsule-to-pet+pet-to-dynamic.*mode-roundtrip=queued+empty'
       - name: Run script regression tests
         run: |
           set -euo pipefail
@@ -56,18 +57,20 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/build-macos-release.sh
-          RELEASE='ChatBird-NT-macOS-arm64-1.0.0'
+          RELEASE='ChatBird-macOS-arm64-1.1.0'
           test -f "dist/$RELEASE.zip"
           test -f "dist/$RELEASE.zip.sha256"
-          test -e "build/release/$RELEASE/pet/chatbird-nt/spritesheet.webp"
-          test -e "build/release/$RELEASE/quota-panel/ChatBird 额度面板.app"
+          test -e "build/release/$RELEASE/ChatBird.app"
+          test -e "build/release/$RELEASE/dev.chatbird.app.plist.in"
+          test ! -e "build/release/$RELEASE/pet"
+          test ! -e "build/release/$RELEASE/quota-panel"
           unzip -tq "dist/$RELEASE.zip"
           ./scripts/privacy-audit.sh
       - run: zsh -n macos/package/*.command macos/ChatBirdQuotaPanel/scripts/*.sh script/*.sh scripts/*.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: chatbird-nt-macos-1.0.0
+          name: chatbird-macos-1.1.0
           if-no-files-found: error
           path: |
-            dist/ChatBird-NT-macOS-arm64-1.0.0.zip
-            dist/ChatBird-NT-macOS-arm64-1.0.0.zip.sha256
+            dist/ChatBird-macOS-arm64-1.1.0.zip
+            dist/ChatBird-macOS-arm64-1.1.0.zip.sha256

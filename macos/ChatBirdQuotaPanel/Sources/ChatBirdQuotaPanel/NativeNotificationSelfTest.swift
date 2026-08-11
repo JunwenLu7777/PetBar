@@ -71,7 +71,7 @@ func runNativeNotificationStateSelfTest() -> Never {
     let concurrentStopStarted = DispatchSemaphore(value: 0)
     let concurrentStopFinished = DispatchSemaphore(value: 0)
     let concurrentQueue = DispatchQueue(
-        label: "dev.chatbird.codex-quota-panel.native-activity-self-test"
+        label: "\(chatBirdBundleIdentifier).native-activity-self-test"
     )
     let concurrentMonitor = NativeActivityPillSuppressionMonitor(
         interval: 60,
@@ -284,7 +284,7 @@ func runNativeNotificationStateSelfTest() -> Never {
     let preparedAtoms = persistedAtoms(in: firstPreparation.stateData)
     let firstAwake = preparedAtoms["first-awake-pet-notification-avatar-ids"] as? [String]
     let muted = preparedAtoms["avatar-overlay-muted-notification-ids-v1"] as? [String]
-    guard firstAwake == ["codex", chatBirdPetAvatarID],
+    guard firstAwake == ["codex"],
           muted == [
               "local:local:already-muted",
               "local:local:indexed-thread",
@@ -314,7 +314,6 @@ func runNativeNotificationStateSelfTest() -> Never {
     var changedAtoms = changedRoot["electron-persisted-atom-state"] as! [String: Any]
     changedAtoms["first-awake-pet-notification-avatar-ids"] = [
         "codex",
-        chatBirdPetAvatarID,
         "custom:user-pet",
     ]
     changedAtoms["avatar-overlay-muted-notification-ids-v1"] = [
@@ -439,7 +438,7 @@ func runNativeNotificationStateSelfTest() -> Never {
         guard firstFilePreparationChanged,
               FileManager.default.fileExists(atPath: backupURL.path),
               filePreparedAtoms["first-awake-pet-notification-avatar-ids"] as? [String]
-                == ["codex", chatBirdPetAvatarID]
+                == ["codex"]
         else {
             fputs("native notification file prepare did not persist state\n", stderr)
             exit(1)

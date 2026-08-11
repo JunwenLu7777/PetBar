@@ -45,7 +45,14 @@ func runLifecycleSelfTest() -> Never {
             expected: true
         ),
         DesktopCase(
-            bundleIdentifier: "dev.chatbird.codex-quota-panel",
+            bundleIdentifier: chatBirdBundleIdentifier,
+            localizedName: "ChatBird",
+            bundlePath: "/Applications/ChatBird.app",
+            activationPolicy: .regular,
+            expected: false
+        ),
+        DesktopCase(
+            bundleIdentifier: legacyChatBirdBundleIdentifier,
             localizedName: "ChatBird 额度面板",
             bundlePath: "/Applications/ChatBird 额度面板.app",
             activationPolicy: .accessory,
@@ -179,6 +186,21 @@ func runLifecycleSelfTest() -> Never {
               .moveToCurrentDisplay,
               mode: .petPanel
           ),
+          isPresentationCommandEnabled(
+              .selectMode(.petPanel),
+              mode: .dynamicIsland,
+              petEnabled: true
+          ),
+          !isPresentationCommandEnabled(
+              .selectMode(.petPanel),
+              mode: .dynamicIsland,
+              petEnabled: false
+          ),
+          isPresentationCommandEnabled(
+              .selectMode(.dynamicIsland),
+              mode: .dynamicIsland,
+              petEnabled: false
+          ),
           isPresentationCommandEnabled(.toggleVisibility, mode: .petPanel),
           isPresentationCommandEnabled(.quit, mode: .dynamicIsland)
     else {
@@ -186,14 +208,77 @@ func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
-    guard chatBirdStatusItemLength == NSStatusItem.squareLength,
-          let statusItemImage = makeChatBirdStatusItemImage(),
-          statusItemImage.isTemplate,
+    let statusButton = NSStatusBarButton(frame: .zero)
+    configureChatBirdStatusButton(statusButton)
+    guard let dockIcon = makeChatBirdDockIcon(),
+          chatBirdStatusItemLength == NSStatusItem.variableLength,
+          statusButton.title == "ChatBird",
+          statusButton.image == nil,
+          statusButton.imagePosition == .noImage,
+          statusButton.toolTip?.contains("显示/隐藏") == true,
+          dockIcon.size.width >= 512,
+          dockIcon.size.height >= 512,
+          dockIcon.isTemplate == false,
+          dockIcon.accessibilityDescription == "ChatBird",
+          chatBirdActivationPolicy(panelHidden: false) == .regular,
+          chatBirdActivationPolicy(panelHidden: true) == .regular,
           chatBirdVisibilityHotKeyKeyEquivalent == "b",
           chatBirdVisibilityHotKeyModifierMask == [.command, .option],
           chatBirdVisibilityHotKeyDisplayName == "⌥⌘B"
     else {
         fputs("status item recovery configuration failed\n", stderr)
+        exit(1)
+    }
+
+    let preferenceSuite = "chatbird-app-migration-\(UUID().uuidString)"
+    guard let migratedDefaults = UserDefaults(suiteName: preferenceSuite) else {
+        exit(1)
+    }
+    defer { migratedDefaults.removePersistentDomain(forName: preferenceSuite) }
+    migratedDefaults.set(true, forKey: "pet-enabled")
+    let migratedKeys = migrateLegacyChatBirdPreferences(
+        from: [
+            "presentation-mode": PresentationMode.dynamicIsland.rawValue,
+            "pet-enabled": false,
+            "selected-quota-provider": QuotaProvider.claudeCode.rawValue,
+            "chatbird-pet-origin": [120.0, 240.0],
+            "unrelated-value": "must-not-migrate",
+        ],
+        to: migratedDefaults
+    )
+    guard chatBirdBundleIdentifier == "dev.chatbird.app",
+          chatBirdLaunchAgentLabel == chatBirdBundleIdentifier,
+          legacyChatBirdBundleIdentifier == "dev.chatbird.codex-quota-panel",
+          Set(migratedKeys) == [
+              "presentation-mode",
+              "selected-quota-provider",
+              "chatbird-pet-origin",
+          ],
+          migratedDefaults.bool(forKey: "pet-enabled"),
+          PresentationModePreference(defaults: migratedDefaults).mode
+            == .dynamicIsland,
+          QuotaProviderPreference(defaults: migratedDefaults).selectedProvider
+            == .claudeCode,
+          migratedDefaults.object(forKey: "unrelated-value") == nil
+    else {
+        fputs("standalone app identity or preference migration failed\n", stderr)
+        exit(1)
+    }
+
+    let petVisibleFrame = NSRect(x: -1_200, y: 40, width: 1_200, height: 760)
+    let defaultPetFrame = defaultChatBirdPetFrame(visibleFrame: petVisibleFrame)
+    let clampedPetFrame = clampedChatBirdPetFrame(
+        NSRect(x: -1_500, y: -100, width: 122, height: 112),
+        visibleFrame: petVisibleFrame
+    )
+    let petPosition = ChatBirdPetPositionPreference(defaults: migratedDefaults)
+    petPosition.origin = NSPoint(x: -888, y: 222)
+    guard petVisibleFrame.contains(defaultPetFrame),
+          petVisibleFrame.contains(clampedPetFrame),
+          petPosition.origin == NSPoint(x: -888, y: 222),
+          chatBirdPetAnimationFrames().count == 7
+    else {
+        fputs("standalone pet resource or cross-display placement failed\n", stderr)
         exit(1)
     }
 
@@ -268,11 +353,21 @@ func runLifecycleSelfTest() -> Never {
         mode: .petPanel,
         hiddenByUser: false
     ) == PresentationRuntimeDecision(
-        showPetPanel: false,
+        showPetPanel: true,
         showDynamicIsland: false,
         bindLegacyPermissionPresenter: true,
         bindDynamicPermissionPresenter: false
     ),
+          codexExitPresentationDecision(
+              mode: .petPanel,
+              hiddenByUser: false,
+              petEnabled: false
+          ) == PresentationRuntimeDecision(
+              showPetPanel: false,
+              showDynamicIsland: false,
+              bindLegacyPermissionPresenter: true,
+              bindDynamicPermissionPresenter: false
+          ),
           codexExitPresentationDecision(
               mode: .dynamicIsland,
               hiddenByUser: false
@@ -502,6 +597,6 @@ func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
-    print("lifecycle-self-test: desktop-app=5/5 visibility=4/4 presentation-runtime=4/4 mode-switch-preserves-dashboard=pass terminal-ack=active-skipped+terminal-memory codex-exit=pet-hidden+dynamic-capsule hidden-lifecycle=preserved pet-click-mode-gate=pass claude-permission-visibility=4/4 live-state-wins=2/2 pet-click-restore=5/5 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut status-item=restore")
+    print("lifecycle-self-test: desktop-app=6/6 standalone-identity=pass legacy-preferences=migrated-without-overwrite standalone-pet=resource+cross-display presentation-mode=pet-gated status-item=restore dock-icon=resource activation=regular codex-exit=pet-independent+dynamic-capsule visibility=4/4 presentation-runtime=5/5 mode-switch-preserves-dashboard=pass terminal-ack=active-skipped+terminal-memory hidden-lifecycle=preserved pet-click-mode-gate=pass claude-permission-visibility=4/4 live-state-wins=2/2 pet-click-restore=5/5 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut")
     exit(0)
 }

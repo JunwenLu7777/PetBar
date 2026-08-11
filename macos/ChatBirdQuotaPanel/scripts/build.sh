@@ -2,10 +2,12 @@
 set -euo pipefail
 
 ROOT="${0:A:h:h}"
-APP="$ROOT/build/ChatBird 额度面板.app"
+APP="$ROOT/build/ChatBird.app"
+LEGACY_APP="$ROOT/build/ChatBird 额度面板.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
+PET_SPRITESHEET="$ROOT/../../shared/pet/chatbird-nt/spritesheet.webp"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 SDK="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
@@ -15,6 +17,17 @@ if (( ${#SOURCE_FILES[@]} == 0 )); then
   echo "没有找到 Swift 源文件" >&2
   exit 1
 fi
+
+for resource in \
+  "$ROOT/Resources/ChatBird.icns" \
+  "$ROOT/Resources/ChatBird-AppIcon-1024.png" \
+  "$PET_SPRITESHEET"
+do
+  if [[ ! -f "$resource" ]]; then
+    echo "缺少 ChatBird App 资源：$resource" >&2
+    exit 1
+  fi
+done
 
 # 当前发行只面向 Apple 芯片，因此只构建 arm64。
 # 先编译进临时目录，成功后才替换 build/ 里的 app：编译失败时上一次可用的
@@ -29,19 +42,23 @@ if ! /usr/bin/swiftc \
   -framework Network \
   -framework Security \
   "${SOURCE_FILES[@]}" \
-  -o "$TMP_DIR/ChatBirdQuotaPanel-arm64" 2>"$TMP_DIR/arm64.log"
+  -o "$TMP_DIR/ChatBird-arm64" 2>"$TMP_DIR/arm64.log"
 then
   /bin/cat "$TMP_DIR/arm64.log" >&2
   echo "arm64 构建失败；已保留现有 app 未做改动。" >&2
   exit 1
 fi
 
-rm -rf "$APP"
+rm -rf "$APP" "$LEGACY_APP"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 cp "$ROOT"/Resources/ProviderIcon-*.svg "$RESOURCES/"
+cp "$ROOT/Resources/ChatBird.icns" "$RESOURCES/ChatBird.icns"
+cp "$ROOT/Resources/ChatBird-AppIcon-1024.png" \
+  "$RESOURCES/ChatBird-AppIcon-1024.png"
+cp "$PET_SPRITESHEET" "$RESOURCES/ChatBirdPetSpritesheet.webp"
 
-cp "$TMP_DIR/ChatBirdQuotaPanel-arm64" "$MACOS/ChatBirdQuotaPanel"
+cp "$TMP_DIR/ChatBird-arm64" "$MACOS/ChatBird"
 
 /usr/bin/codesign \
   --force \

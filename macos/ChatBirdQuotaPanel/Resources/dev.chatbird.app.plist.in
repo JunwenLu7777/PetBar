@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.chatbird.codex-quota-panel</string>
+  <string>dev.chatbird.app</string>
   <key>ProgramArguments</key>
   <array>
     <string>__EXECUTABLE__</string>

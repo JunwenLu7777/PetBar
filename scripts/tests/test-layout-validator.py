@@ -31,8 +31,8 @@ def base_paths() -> set[str]:
         "scripts/privacy-audit.sh",
         "scripts/update-readme-downloads.sh",
         "scripts/validate-repository-layout.py",
-        "dist/ChatBird-NT-macOS-arm64-1.0.0.zip",
-        "dist/ChatBird-NT-macOS-arm64-1.0.0.zip.sha256",
+        "dist/ChatBird-macOS-arm64-1.1.0.zip",
+        "dist/ChatBird-macOS-arm64-1.1.0.zip.sha256",
     }
 
 

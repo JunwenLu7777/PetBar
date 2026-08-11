@@ -3,18 +3,20 @@ emulate -L zsh
 setopt ERR_EXIT PIPE_FAIL NO_UNSET
 
 ROOT="${0:A:h}"
-PET_ID="chatbird-nt"
-PET_SOURCE="$ROOT/pet/$PET_ID"
-PET_DEST="${CODEX_HOME:-$HOME/.codex}/pets/$PET_ID"
-APP_SOURCE="$ROOT/quota-panel/ChatBird 额度面板.app"
-APP_DEST="$HOME/Applications/ChatBird 额度面板.app"
-APP_BINARY="$APP_DEST/Contents/MacOS/ChatBirdQuotaPanel"
-SOURCE_BINARY="$APP_SOURCE/Contents/MacOS/ChatBirdQuotaPanel"
-LABEL="dev.chatbird.codex-quota-panel"
-PLIST_SOURCE="$ROOT/quota-panel/$LABEL.plist.in"
+APP_SOURCE="$ROOT/ChatBird.app"
+APP_DEST="$HOME/Applications/ChatBird.app"
+APP_BINARY="$APP_DEST/Contents/MacOS/ChatBird"
+SOURCE_BINARY="$APP_SOURCE/Contents/MacOS/ChatBird"
+LABEL="dev.chatbird.app"
+LEGACY_LABEL="dev.chatbird.codex-quota-panel"
+PLIST_SOURCE="$ROOT/$LABEL.plist.in"
 PLIST_DEST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOG_PATH="$HOME/Library/Logs/ChatBird额度面板.log"
+LEGACY_PLIST_DEST="$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
+LOG_PATH="$HOME/Library/Logs/ChatBird.log"
+LEGACY_LOG_PATH="$HOME/Library/Logs/ChatBird额度面板.log"
+LEGACY_ALT_LOG_PATH="$HOME/Library/Logs/ChatBirdQuotaPanel.log"
 HEALTH_DIR="$HOME/Library/Caches/$LABEL"
+LEGACY_HEALTH_DIR="$HOME/Library/Caches/$LEGACY_LABEL"
 HEALTH_PATH="$HEALTH_DIR/panel-health.json"
 CONFIG="${CODEX_HOME:-$HOME/.codex}/config.toml"
 STATE_PATH="${CODEX_HOME:-$HOME/.codex}/.codex-global-state.json"
@@ -46,30 +48,26 @@ fail() {
   echo "安装失败：$1"
   if [[ -s "$LOG_PATH" ]]; then
     echo ""
-    echo "面板日志最后 12 行："
+    echo "ChatBird 日志最后 12 行："
     /usr/bin/tail -n 12 "$LOG_PATH" 2>/dev/null || true
   fi
   pause_before_exit
   exit 1
 }
 
-json_value() {
+plist_value() {
   /usr/bin/plutil -extract "$2" raw "$1" 2>/dev/null || true
 }
 
-image_dimension() {
-  /usr/bin/sips -g "$2" "$1" 2>/dev/null | /usr/bin/awk -v key="$2:" '$1 == key { print $2 }' || true
-}
-
-panel_service_has_pid() {
-  /bin/launchctl print "$DOMAIN/$LABEL" 2>/dev/null \
+service_has_pid() {
+  local label="$1"
+  /bin/launchctl print "$DOMAIN/$label" 2>/dev/null \
     | /usr/bin/grep -Eq '^[[:space:]]*pid = [0-9]+'
 }
 
 panel_health_is_current() {
   [[ -s "$HEALTH_PATH" ]] \
     && /usr/bin/grep -q '"edition":"chatbird-nt"' "$HEALTH_PATH" 2>/dev/null \
-    && /usr/bin/grep -q '"petID":"chatbird-nt"' "$HEALTH_PATH" 2>/dev/null \
     && /usr/bin/grep -q '"codexWeeklyQuotaOnly":true' "$HEALTH_PATH" 2>/dev/null \
     && /usr/bin/grep -q '"claudeQuotaPeriods":\["5h","weekly","fable"\]' "$HEALTH_PATH" 2>/dev/null
 }
@@ -77,7 +75,7 @@ panel_health_is_current() {
 wait_for_panel_health() {
   local attempt
   for attempt in {1..80}; do
-    if panel_service_has_pid && panel_health_is_current; then
+    if service_has_pid "$LABEL" && panel_health_is_current; then
       return 0
     fi
     /bin/sleep 0.1
@@ -86,30 +84,84 @@ wait_for_panel_health() {
 }
 
 assert_package_is_complete() {
-  [[ -f "$PET_SOURCE/pet.json" && -f "$PET_SOURCE/spritesheet.webp" ]] \
-    || fail "宠物文件不完整（$PET_ID），请重新解压整个分享包。"
-  [[ "$(json_value "$PET_SOURCE/pet.json" id)" == "$PET_ID" ]] \
-    || fail "pet.json 的 id 必须是 $PET_ID。"
-  [[ "$(json_value "$PET_SOURCE/pet.json" spriteVersionNumber)" == "2" ]] \
-    || fail "pet.json 的 spriteVersionNumber 必须是 2。"
-  [[ "$(image_dimension "$PET_SOURCE/spritesheet.webp" pixelWidth)" == "1536" ]] \
-    || fail "宠物图集宽度必须是 1536。"
-  [[ "$(image_dimension "$PET_SOURCE/spritesheet.webp" pixelHeight)" == "2288" ]] \
-    || fail "宠物图集高度必须是 2288。"
   [[ -d "$APP_SOURCE" && -x "$SOURCE_BINARY" && -f "$PLIST_SOURCE" ]] \
-    || fail "额度面板文件不完整，请重新解压整个分享包。"
+    || fail "ChatBird.app 或登录启动项模板不完整，请重新解压整个分享包。"
   /usr/bin/lipo "$SOURCE_BINARY" -verify_arch arm64 \
-    || fail "额度面板不包含 arm64 架构。"
+    || fail "ChatBird.app 不包含 arm64 架构。"
   /usr/bin/codesign --verify --deep --strict "$APP_SOURCE" >/dev/null 2>&1 \
-    || fail "额度面板签名校验失败，请重新解压整个分享包。"
+    || fail "ChatBird.app 签名校验失败，请重新解压整个分享包。"
+  [[ "$(plist_value "$APP_SOURCE/Contents/Info.plist" CFBundleIdentifier)" == "$LABEL" ]] \
+    || fail "ChatBird.app 的 Bundle ID 必须是 $LABEL。"
+  [[ "$(plist_value "$APP_SOURCE/Contents/Info.plist" CFBundleExecutable)" == "ChatBird" ]] \
+    || fail "ChatBird.app 的可执行程序必须是 ChatBird。"
+  [[ "$(plist_value "$APP_SOURCE/Contents/Info.plist" LSUIElement)" != "1" ]] \
+    || fail "ChatBird.app 不能是后台 LSUIElement 应用。"
+  [[ -n "$(plist_value "$APP_SOURCE/Contents/Info.plist" CFBundleIconFile)" ]] \
+    || fail "ChatBird.app 缺少自己的 App Icon。"
+  [[ "$(plist_value "$PLIST_SOURCE" Label)" == "$LABEL" ]] \
+    || fail "登录启动项模板 Label 必须是 $LABEL。"
+  [[ "$(plist_value "$PLIST_SOURCE" ProgramArguments.0)" == "__EXECUTABLE__" ]] \
+    && ! /usr/bin/plutil -extract ProgramArguments.1 raw "$PLIST_SOURCE" >/dev/null 2>&1 \
+    || fail "登录启动项模板必须且只能包含一个可执行程序参数。"
   /usr/bin/plutil -lint "$PLIST_SOURCE" >/dev/null \
     || fail "登录启动项模板无效。"
+}
+
+stop_service_and_processes() {
+  local label
+  for label in "$LABEL" "$LEGACY_LABEL"; do
+    /bin/launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
+    for _ in {1..20}; do
+      /bin/launchctl print "$DOMAIN/$label" >/dev/null 2>&1 || break
+      /bin/sleep 0.1
+    done
+  done
+  /usr/bin/pkill -x ChatBird 2>/dev/null || true
+  /usr/bin/pkill -x ChatBirdQuotaPanel 2>/dev/null || true
+  for _ in {1..20}; do
+    ! /usr/bin/pgrep -x ChatBird >/dev/null 2>&1 \
+      && ! /usr/bin/pgrep -x ChatBirdQuotaPanel >/dev/null 2>&1 \
+      && break
+    /bin/sleep 0.1
+  done
+}
+
+remove_legacy_codex_pet_selection() {
+  [[ -f "$CONFIG" ]] || return 0
+  /usr/bin/awk '
+    BEGIN { section = ""; found = 0 }
+    /^[[:space:]]*\[[^]]+\]/ {
+      section = ($0 ~ /^[[:space:]]*\[desktop\][[:space:]]*($|#)/) ? "desktop" : "other"
+    }
+    section == "desktop" && /^[[:space:]]*selected-avatar-id[[:space:]]*=[[:space:]]*"custom:chatbird-nt"/ {
+      found = 1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$CONFIG" || return 0
+
+  local backup
+  local tmp_config
+  backup="$CONFIG.chatbird-backup-$(date +%Y%m%d-%H%M%S)"
+  tmp_config="$(/usr/bin/mktemp "$CONFIG.tmp.XXXXXX")"
+  /bin/cp -p "$CONFIG" "$backup"
+  /usr/bin/awk '
+    BEGIN { section = "" }
+    /^[[:space:]]*\[[^]]+\]/ {
+      section = ($0 ~ /^[[:space:]]*\[desktop\][[:space:]]*($|#)/) ? "desktop" : "other"
+      print
+      next
+    }
+    section == "desktop" && /^[[:space:]]*selected-avatar-id[[:space:]]*=[[:space:]]*"custom:chatbird-nt"/ { next }
+    { print }
+  ' "$CONFIG" > "$tmp_config"
+  /bin/mv "$tmp_config" "$CONFIG"
+  echo "已备份并移除旧 Codex 宠物选择：$backup"
 }
 
 echo "正在校验 ChatBird 安装包…"
 assert_package_is_complete
 if [[ "$VERIFY_ONLY" == "true" ]]; then
-  echo "校验通过：ChatBird 安装包完整。"
+  echo "校验通过：ChatBird 独立 App 安装包完整。"
   pause_before_exit
   exit 0
 fi
@@ -122,46 +174,31 @@ if (( MACOS_MAJOR < 12 || (MACOS_MAJOR == 12 && MACOS_MINOR < 3) )); then
   fail "需要 macOS 12.3 或更高版本，当前版本为 $MACOS_VERSION。"
 fi
 ARCH="$(/usr/bin/uname -m)"
-# 只面向 Apple 芯片：在 Intel Mac 上直接说明原因，而不是让用户以为分享包损坏。
 [[ "$ARCH" == "arm64" ]] \
   || fail "当前版本只支持 Apple 芯片（arm64）；本机架构为 $ARCH。"
 /usr/bin/lipo "$SOURCE_BINARY" -verify_arch "$ARCH" \
-  || fail "额度面板不包含 $ARCH 架构。"
+  || fail "ChatBird.app 不包含 $ARCH 架构。"
 
-mkdir -p "${PET_DEST:h}" "$HOME/Applications" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs" "$HEALTH_DIR"
+mkdir -p "$HOME/Applications" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs" "$HEALTH_DIR" "${CONFIG:h}"
 
-if [[ -e "$PET_DEST" ]]; then
-  PET_BACKUP="$PET_DEST.backup-$(date +%Y%m%d-%H%M%S)"
-  /bin/mv "$PET_DEST" "$PET_BACKUP"
-  echo "已有同名宠物已备份到：$PET_BACKUP"
-fi
-/usr/bin/ditto "$PET_SOURCE" "$PET_DEST"
+stop_service_and_processes
+remove_legacy_codex_pet_selection
 
-/bin/launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-for _ in {1..20}; do
-  /bin/launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
-  /bin/sleep 0.1
-done
-/usr/bin/pkill -x ChatBirdQuotaPanel 2>/dev/null || true
-for _ in {1..20}; do
-  /usr/bin/pgrep -x ChatBirdQuotaPanel >/dev/null 2>&1 || break
-  /bin/sleep 0.1
-done
-
-/bin/rm -rf "$APP_DEST"
+/bin/rm -rf "$APP_DEST" "$HOME/Applications/ChatBird 额度面板.app" "$HEALTH_DIR" "$LEGACY_HEALTH_DIR"
+/bin/rm -f \
+  "$PLIST_DEST" \
+  "$LEGACY_PLIST_DEST" \
+  "$LEGACY_LOG_PATH" \
+  "$LEGACY_ALT_LOG_PATH"
 /usr/bin/ditto "$APP_SOURCE" "$APP_DEST"
 /usr/bin/xattr -dr com.apple.quarantine "$APP_DEST" 2>/dev/null || true
 /usr/bin/codesign --force --deep --sign - "$APP_DEST" >/dev/null
 /usr/bin/codesign --verify --deep --strict "$APP_DEST" \
-  || fail "额度面板自动签名失败，请重新下载分享包。"
-mkdir -p "${CONFIG:h}"
-[[ -f "$CONFIG" ]] || /usr/bin/touch "$CONFIG"
-/bin/cp -p "$CONFIG" "$CONFIG.chatbird-backup-$(date +%Y%m%d-%H%M%S)"
-"$APP_BINARY" --select-chatbird "$CONFIG" \
-  || fail "无法在 Codex 配置中选中 ChatBird。"
+  || fail "ChatBird.app 自动签名失败，请重新下载分享包。"
+
 CLAUDE_HOOK_STATUS="warning"
 if ! "$APP_BINARY" --install-claude-hook; then
-  echo "警告：Claude Code 权限确认 Hook 安装命令失败；Codex 核心安装将继续。" >&2
+  echo "警告：Claude Code 权限确认 Hook 安装命令失败；ChatBird 核心安装将继续。" >&2
 fi
 CLAUDE_HOOK_STATUS_OUTPUT=""
 if CLAUDE_HOOK_STATUS_OUTPUT="$("$APP_BINARY" --print-claude-hook-status)"; then
@@ -172,7 +209,7 @@ if CLAUDE_HOOK_STATUS_OUTPUT="$("$APP_BINARY" --print-claude-hook-status)"; then
     *) CLAUDE_HOOK_STATUS="warning" ;;
   esac
 else
-  echo "警告：无法读取 Claude Code 权限确认 Hook 状态；Codex 核心安装将继续。" >&2
+  echo "警告：无法读取 Claude Code 权限确认 Hook 状态；ChatBird 核心安装将继续。" >&2
 fi
 "$APP_BINARY" \
   --prepare-codex-overlay-notifications \
@@ -183,38 +220,47 @@ fi
 /bin/rm -f "$HEALTH_PATH"
 
 /bin/cp "$PLIST_SOURCE" "$PLIST_DEST"
-/usr/bin/plutil -replace ProgramArguments.0 -string "$APP_BINARY" "$PLIST_DEST"
+# `plutil -replace ProgramArguments.0` inserts before the existing array item
+# on supported macOS versions. Rebuild the array so launchd receives exactly
+# one argument: the standalone ChatBird executable.
+/usr/bin/plutil -replace ProgramArguments -json '[]' "$PLIST_DEST"
+/usr/bin/plutil -insert ProgramArguments.0 -string "$APP_BINARY" "$PLIST_DEST"
 /usr/bin/plutil -replace EnvironmentVariables.CHATBIRD_PANEL_HEALTH_FILE -string "$HEALTH_PATH" "$PLIST_DEST"
 /usr/bin/plutil -replace EnvironmentVariables.CHATBIRD_CODEX_STATE_FILE -string "$STATE_PATH" "$PLIST_DEST"
 /usr/bin/plutil -replace StandardErrorPath -string "$LOG_PATH" "$PLIST_DEST"
 /usr/bin/plutil -replace StandardOutPath -string "$LOG_PATH" "$PLIST_DEST"
 /usr/bin/plutil -lint "$PLIST_DEST" >/dev/null
+if [[ "$(plist_value "$PLIST_DEST" ProgramArguments.0)" != "$APP_BINARY" ]] \
+  || /usr/bin/plutil -extract ProgramArguments.1 raw "$PLIST_DEST" >/dev/null 2>&1
+then
+  fail "登录启动项包含无效或多余的启动参数。"
+fi
 
 if ! /bin/launchctl bootstrap "$DOMAIN" "$PLIST_DEST"; then
   /bin/sleep 1
   /bin/launchctl bootstrap "$DOMAIN" "$PLIST_DEST" \
-    || fail "无法注册额度面板登录启动项。"
+    || fail "无法注册 ChatBird 登录启动项。"
 fi
 /bin/launchctl kickstart -k "$DOMAIN/$LABEL" \
-  || fail "额度面板启动请求失败。"
+  || fail "ChatBird 启动请求失败。"
 
 if ! wait_for_panel_health; then
   echo "首次启动未通过自检，正在自动重试…"
   /bin/launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
   /bin/sleep 0.5
   /bin/launchctl bootstrap "$DOMAIN" "$PLIST_DEST" \
-    || fail "额度面板重试注册失败。"
+    || fail "ChatBird 重试注册失败。"
   /bin/launchctl kickstart -k "$DOMAIN/$LABEL" \
-    || fail "额度面板重试启动失败。"
+    || fail "ChatBird 重试启动失败。"
   wait_for_panel_health \
-    || fail "额度面板进程没有保持运行。请把上面的日志发给维护者。"
+    || fail "ChatBird 进程没有保持运行。请把上面的日志发给维护者。"
 fi
 
 echo ""
 echo "安装完成："
-echo "  ✓ ChatBird 宠物"
-echo "  ✓ ChatBird 额度面板"
-echo "  ✓ 已在 Codex 中选中 ChatBird"
+echo "  ✓ ChatBird 独立 App"
+echo "  ✓ 自有桌面宠物和灵动岛"
+echo "  ✓ 已移除旧 Codex ChatBird 宠物选择（如果存在）"
 echo "  ✓ 已启用 Codex 原生任务气泡静音同步"
 case "$CLAUDE_HOOK_STATUS" in
   enabled) echo "  ✓ 已启用 Claude Code 权限确认 Hook" ;;
@@ -229,7 +275,8 @@ else
 fi
 echo "  ✓ 随登录自动启动"
 echo ""
-echo "请完全退出并重新打开 Codex。ChatBird 会等 Codex 状态稳定后再同步，旧任务气泡不会在下次打开时恢复。"
+echo "ChatBird 现在以独立 App 运行：可从 Dock、启动台或 ~/Applications/ChatBird.app 启动。"
+echo "旧 ~/.codex/pets/chatbird-nt 不会被安装器删除；如你确认不再需要，可之后手动清理。"
 echo "辅助功能已授权时，ChatBird 会调用 Codex 自带的“静音任务”菜单；不会移动鼠标或发送按键，只匹配固定辅助功能标签且不保留相关字符串。"
 echo "未授权不影响额度与任务面板，也不需要 API Key。"
 pause_before_exit

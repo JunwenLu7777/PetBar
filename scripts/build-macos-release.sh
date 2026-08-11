@@ -3,14 +3,18 @@ set -euo pipefail
 
 SCRIPT_PATH="${0:A}"
 ROOT="${CHATBIRD_RELEASE_ROOT:-${SCRIPT_PATH:h:h}}"
-VERSION="1.0.0"
-RELEASE_ID="ChatBird-NT-macOS-arm64-$VERSION"
+VERSION="$(/usr/bin/awk -F': ' '$1 == "Version" { print $2; exit }' "$ROOT/macos/VERSION.txt")"
+[[ "$VERSION" == <->.<->.<-> ]] || {
+  /bin/echo "error: invalid version in $ROOT/macos/VERSION.txt" >&2
+  exit 1
+}
+RELEASE_ID="ChatBird-macOS-arm64-$VERSION"
 STAGE="$ROOT/build/release/$RELEASE_ID"
 OUT="$ROOT/dist/$RELEASE_ID.zip"
 CHECKSUM_OUT="$OUT.sha256"
 APP_PROJECT="$ROOT/macos/ChatBirdQuotaPanel"
-APP_BUILD="$APP_PROJECT/build/ChatBird 额度面板.app"
-LABEL="dev.chatbird.codex-quota-panel"
+APP_BUILD="$APP_PROJECT/build/ChatBird.app"
+LABEL="dev.chatbird.app"
 PLIST_TEMPLATE="$APP_PROJECT/Resources/$LABEL.plist.in"
 PET_SOURCE="${CHATBIRD_PET_SOURCE:-$ROOT/shared/pet/chatbird-nt}"
 PREVIEW_QA_SOURCE="${CHATBIRD_PREVIEW_QA_SOURCE:-$ROOT/shared/preview/chatbird-nt}"
@@ -129,10 +133,10 @@ scan_release_for_forbidden_terms() {
 
 verify_stage() {
   local target="$1"
-  require_file "$target/pet/chatbird-nt/pet.json"
-  require_file "$target/pet/chatbird-nt/spritesheet.webp"
-  require_dir "$target/quota-panel/ChatBird 额度面板.app"
-  require_file "$target/quota-panel/$LABEL.plist.in"
+  [[ ! -e "$target/pet" ]] || fail "release must not publish a standalone pet directory"
+  [[ ! -e "$target/quota-panel" ]] || fail "release must not publish a standalone quota-panel directory"
+  require_dir "$target/ChatBird.app"
+  require_file "$target/$LABEL.plist.in"
   require_file "$target/安装ChatBird.command"
   require_file "$target/检查ChatBird.command"
   require_file "$target/卸载ChatBird.command"
@@ -144,12 +148,26 @@ verify_stage() {
   require_file "$target/CHECKSUMS-SHA256.txt"
   require_nonempty_dir "$target/preview-qa"
 
-  local binary="$target/quota-panel/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel"
+  local app="$target/ChatBird.app"
+  local binary="$app/Contents/MacOS/ChatBird"
+  local launch_agent="$target/$LABEL.plist.in"
+  require_file "$app/Contents/Resources/ChatBird.icns"
+  require_file "$app/Contents/Resources/ChatBirdPetSpritesheet.webp"
+  [[ "$(/usr/bin/plutil -extract ProgramArguments.0 raw "$launch_agent" 2>/dev/null)" == "__EXECUTABLE__" ]] \
+    && ! /usr/bin/plutil -extract ProgramArguments.1 raw "$launch_agent" >/dev/null 2>&1 \
+    || fail "launch agent template must contain exactly one executable argument"
+  [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" == "dev.chatbird.app" ]] \
+    || fail "ChatBird bundle identifier is not dev.chatbird.app"
+  [[ "$(/usr/bin/plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")" == "ChatBird" ]] \
+    || fail "ChatBird executable identity is invalid"
+  if /usr/bin/plutil -extract LSUIElement raw "$app/Contents/Info.plist" >/dev/null 2>&1; then
+    fail "standalone ChatBird must not be an LSUIElement helper"
+  fi
   if [[ "$SKIP_APP_BINARY_CHECKS" != true ]]; then
     # 本发行只面向 Apple 芯片：要求 arm64，并拒收混入其他架构的胖二进制。
     /usr/bin/lipo "$binary" -verify_arch arm64
     [[ "$(/usr/bin/lipo -archs "$binary")" == "arm64" ]]
-    /usr/bin/codesign --verify --deep --strict "$target/quota-panel/ChatBird 额度面板.app"
+    /usr/bin/codesign --verify --deep --strict "$app"
   fi
   scan_release_for_forbidden_terms "$target"
   verify_stage_checksum_manifest "$target"
@@ -165,11 +183,10 @@ verify_stage_checksum_manifest() {
 
 stage_release() {
   /bin/rm -rf "$STAGE"
-  mkdir -p "$STAGE/pet" "$STAGE/quota-panel" "$STAGE/preview-qa"
-  /usr/bin/ditto "$PET_SOURCE" "$STAGE/pet/chatbird-nt"
+  mkdir -p "$STAGE/preview-qa"
   /usr/bin/ditto "$PREVIEW_QA_SOURCE" "$STAGE/preview-qa"
-  /usr/bin/ditto "$APP_BUILD" "$STAGE/quota-panel/ChatBird 额度面板.app"
-  /bin/cp "$PLIST_TEMPLATE" "$STAGE/quota-panel/$LABEL.plist.in"
+  /usr/bin/ditto "$APP_BUILD" "$STAGE/ChatBird.app"
+  /bin/cp "$PLIST_TEMPLATE" "$STAGE/$LABEL.plist.in"
   /bin/cp "$INSTALL_COMMAND" "$STAGE/安装ChatBird.command"
   /bin/cp "$CHECK_COMMAND" "$STAGE/检查ChatBird.command"
   /bin/cp "$UNINSTALL_COMMAND" "$STAGE/卸载ChatBird.command"
@@ -247,11 +264,10 @@ verify_release_directory_matches() {
 
 verify_stage_matches_current_sources() {
   local target="$1"
-  verify_release_directory_matches "$PET_SOURCE" "$target/pet/chatbird-nt"
   verify_release_directory_matches "$PREVIEW_QA_SOURCE" "$target/preview-qa"
   verify_release_file_matches \
     "$PLIST_TEMPLATE" \
-    "$target/quota-panel/$LABEL.plist.in"
+    "$target/$LABEL.plist.in"
   verify_release_file_matches "$INSTALL_COMMAND" "$target/安装ChatBird.command"
   verify_release_file_matches "$CHECK_COMMAND" "$target/检查ChatBird.command"
   verify_release_file_matches "$UNINSTALL_COMMAND" "$target/卸载ChatBird.command"
@@ -264,7 +280,7 @@ verify_stage_matches_current_sources() {
   if [[ -d "$APP_BUILD" ]]; then
     verify_release_directory_matches \
       "$APP_BUILD" \
-      "$target/quota-panel/ChatBird 额度面板.app"
+      "$target/ChatBird.app"
   fi
 }
 

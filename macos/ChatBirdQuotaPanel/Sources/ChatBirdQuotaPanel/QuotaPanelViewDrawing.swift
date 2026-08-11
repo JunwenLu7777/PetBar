@@ -303,14 +303,7 @@ extension QuotaPanelView {
         in rect: NSRect,
         fraction: CGFloat
     ) {
-        let image = Bundle.main.url(
-            forResource: provider.iconResourceName,
-            withExtension: "svg"
-        ).flatMap(NSImage.init(contentsOf:))
-            ?? NSImage(
-                systemSymbolName: provider.fallbackSymbolName,
-                accessibilityDescription: provider.displayName
-            )
+        let image = providerIconImage(for: provider)
         image?.draw(
             in: rect,
             from: .zero,

@@ -50,24 +50,25 @@ write_command() {
 }
 
 make_stage() {
-  local stage="$FIXTURE/build/release/ChatBird-NT-macOS-arm64-1.0.0"
-  local local_app="$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app"
+  local stage="$FIXTURE/build/release/ChatBird-macOS-arm64-1.1.0"
+  local local_app="$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app"
   /bin/rm -rf "$stage"
   mkdir -p \
-    "$stage/pet/chatbird-nt" \
     "$stage/preview-qa" \
-    "$stage/quota-panel/ChatBird 额度面板.app/Contents/MacOS"
-  /bin/cp "$FIXTURE/shared/pet/chatbird-nt/pet.json" "$stage/pet/chatbird-nt/pet.json"
-  /bin/cp "$FIXTURE/shared/pet/chatbird-nt/spritesheet.webp" "$stage/pet/chatbird-nt/spritesheet.webp"
+    "$stage/ChatBird.app/Contents/MacOS" \
+    "$stage/ChatBird.app/Contents/Resources"
   /bin/cp "$FIXTURE/shared/preview/chatbird-nt/panel-preview.png" "$stage/preview-qa/panel-preview.png"
-  /bin/cp "$FIXTURE/macos/ChatBirdQuotaPanel/Resources/dev.chatbird.codex-quota-panel.plist.in" \
-    "$stage/quota-panel/dev.chatbird.codex-quota-panel.plist.in"
+  /bin/cp "$FIXTURE/macos/ChatBirdQuotaPanel/Resources/dev.chatbird.app.plist.in" \
+    "$stage/dev.chatbird.app.plist.in"
   if [[ -d "$local_app" ]]; then
-    /bin/rm -rf "$stage/quota-panel/ChatBird 额度面板.app"
-    /usr/bin/ditto "$local_app" "$stage/quota-panel/ChatBird 额度面板.app"
+    /bin/rm -rf "$stage/ChatBird.app"
+    /usr/bin/ditto "$local_app" "$stage/ChatBird.app"
   else
-    write_file "$stage/quota-panel/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel" "fake binary"
-    /bin/chmod +x "$stage/quota-panel/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel"
+    write_file "$stage/ChatBird.app/Contents/Info.plist" '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.chatbird.app</string><key>CFBundleExecutable</key><string>ChatBird</string><key>CFBundleIconFile</key><string>ChatBird.icns</string></dict></plist>'
+    write_file "$stage/ChatBird.app/Contents/MacOS/ChatBird" "fake binary"
+    write_file "$stage/ChatBird.app/Contents/Resources/ChatBird.icns" "fake icon"
+    write_file "$stage/ChatBird.app/Contents/Resources/ChatBirdPetSpritesheet.webp" "fake webp"
+    /bin/chmod +x "$stage/ChatBird.app/Contents/MacOS/ChatBird"
   fi
   /bin/cp "$FIXTURE/macos/package/安装ChatBird.command" "$stage/安装ChatBird.command"
   /bin/cp "$FIXTURE/macos/package/检查ChatBird.command" "$stage/检查ChatBird.command"
@@ -86,15 +87,15 @@ make_stage() {
 
 make_dist_from_stage() {
   mkdir -p "$FIXTURE/dist"
-  /bin/rm -f "$FIXTURE/dist/ChatBird-NT-macOS-arm64-1.0.0.zip" \
-    "$FIXTURE/dist/ChatBird-NT-macOS-arm64-1.0.0.zip.sha256"
+  /bin/rm -f "$FIXTURE/dist/ChatBird-macOS-arm64-1.1.0.zip" \
+    "$FIXTURE/dist/ChatBird-macOS-arm64-1.1.0.zip.sha256"
   /usr/bin/ditto -c -k --norsrc --keepParent \
-    "$FIXTURE/build/release/ChatBird-NT-macOS-arm64-1.0.0" \
-    "$FIXTURE/dist/ChatBird-NT-macOS-arm64-1.0.0.zip"
+    "$FIXTURE/build/release/ChatBird-macOS-arm64-1.1.0" \
+    "$FIXTURE/dist/ChatBird-macOS-arm64-1.1.0.zip"
   (
     cd "$FIXTURE/dist"
-    /usr/bin/shasum -a 256 ChatBird-NT-macOS-arm64-1.0.0.zip \
-      > ChatBird-NT-macOS-arm64-1.0.0.zip.sha256
+    /usr/bin/shasum -a 256 ChatBird-macOS-arm64-1.1.0.zip \
+      > ChatBird-macOS-arm64-1.1.0.zip.sha256
   )
 }
 
@@ -114,11 +115,11 @@ write_file "$FIXTURE/shared/pet/chatbird-nt/pet.json" '{"id":"chatbird-nt","spri
 write_file "$FIXTURE/shared/pet/chatbird-nt/spritesheet.webp" "fake webp"
 write_file "$FIXTURE/shared/preview/chatbird-nt/panel-preview.png" "preview"
 write_file "$FIXTURE/macos/README.md" "macOS README"
-write_file "$FIXTURE/macos/VERSION.txt" "Version: 1.0.0"
+write_file "$FIXTURE/macos/VERSION.txt" "Version: 1.1.0"
 write_file "$FIXTURE/LICENSE" "license"
 write_file "$FIXTURE/PRIVACY.md" "privacy"
 write_file "$FIXTURE/ASSET-NOTICE.md" "asset notice"
-write_file "$FIXTURE/macos/ChatBirdQuotaPanel/Resources/dev.chatbird.codex-quota-panel.plist.in" '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>dev.chatbird.codex-quota-panel</string></dict></plist>'
+write_file "$FIXTURE/macos/ChatBirdQuotaPanel/Resources/dev.chatbird.app.plist.in" '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>dev.chatbird.app</string><key>ProgramArguments</key><array><string>__EXECUTABLE__</string></array></dict></plist>'
 write_file "$FIXTURE/macos/ChatBirdQuotaPanel/Resources/Info.plist" '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict/></plist>'
 write_file "$FIXTURE/macos/ChatBirdQuotaPanel/Resources/ChatBirdQuotaPanel.entitlements" '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict/></plist>'
 write_file "$FIXTURE/macos/ChatBirdQuotaPanel/Sources/ChatBirdQuotaPanel/main.swift" "print(\"ChatBird\")"
@@ -149,27 +150,37 @@ make_dist_from_stage
 expect_pass "refreshed source payload without local app build"
 
 /bin/sleep 1
-mkdir -p "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app/Contents/MacOS"
-write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel" "fake binary"
-/bin/chmod +x "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel"
+mkdir -p "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/MacOS" \
+  "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/Resources"
+write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/Info.plist" '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.chatbird.app</string><key>CFBundleExecutable</key><string>ChatBird</string><key>CFBundleIconFile</key><string>ChatBird.icns</string></dict></plist>'
+write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/MacOS/ChatBird" "fake binary"
+write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/Resources/ChatBird.icns" "fake icon"
+write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/Resources/ChatBirdPetSpritesheet.webp" "fake webp"
+/bin/chmod +x "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/MacOS/ChatBird"
 expect_fail "archive older than matching local app build"
 
 make_stage
 make_dist_from_stage
 expect_pass "matching local app build"
 
-write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel" "newer local binary"
+write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/MacOS/ChatBird" "newer local binary"
 expect_fail "stale archive relative to local app build"
 
 make_stage
 make_dist_from_stage
 git -C "$FIXTURE" add dist
-write_file "$FIXTURE/dist/ChatBird-NT-macOS-arm64-1.0.0.zip.sha256" "bad  ChatBird-NT-macOS-arm64-1.0.0.zip\n"
+write_file "$FIXTURE/dist/ChatBird-macOS-arm64-1.1.0.zip.sha256" "bad  ChatBird-macOS-arm64-1.1.0.zip\n"
 expect_fail "bad archive checksum"
 
 make_dist_from_stage
 git -C "$FIXTURE" add dist
-/bin/rm "$FIXTURE/build/release/ChatBird-NT-macOS-arm64-1.0.0/README.md"
+/bin/rm "$FIXTURE/build/release/ChatBird-macOS-arm64-1.1.0/README.md"
 expect_fail "invalid staged payload"
+
+write_file "$FIXTURE/macos/ChatBirdQuotaPanel/Resources/dev.chatbird.app.plist.in" '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>dev.chatbird.app</string><key>ProgramArguments</key><array><string>__EXECUTABLE__</string><string>__EXECUTABLE__</string></array></dict></plist>'
+make_stage
+make_dist_from_stage
+git -C "$FIXTURE" add dist
+expect_fail "launch agent template with extra program argument"
 
 /bin/echo "build macOS release verify-only tests passed"

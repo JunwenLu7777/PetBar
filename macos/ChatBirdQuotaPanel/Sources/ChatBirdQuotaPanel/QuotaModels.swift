@@ -236,6 +236,51 @@ enum QuotaProvider: String, CaseIterable {
             return "terminal"
         }
     }
+
+    var brandColor: NSColor {
+        switch self {
+        case .codex:
+            return NSColor(
+                calibratedRed: 16.0 / 255.0,
+                green: 163.0 / 255.0,
+                blue: 127.0 / 255.0,
+                alpha: 1
+            )
+        case .claudeCode:
+            return NSColor(
+                calibratedRed: 217.0 / 255.0,
+                green: 119.0 / 255.0,
+                blue: 87.0 / 255.0,
+                alpha: 1
+            )
+        }
+    }
+}
+
+private let providerIconImageCache = NSCache<NSString, NSImage>()
+
+func providerIconImage(
+    for provider: QuotaProvider,
+    bundle: Bundle = .main
+) -> NSImage? {
+    let cacheKey = "\(bundle.bundleURL.path)#\(provider.rawValue)" as NSString
+    if let cachedImage = providerIconImageCache.object(forKey: cacheKey) {
+        return cachedImage
+    }
+    let image = bundle.url(
+        forResource: provider.iconResourceName,
+        withExtension: "svg"
+    ).flatMap(NSImage.init(contentsOf:))
+        ?? NSImage(
+            systemSymbolName: provider.fallbackSymbolName,
+            accessibilityDescription: provider.displayName
+        )
+    image?.isTemplate = false
+    image?.accessibilityDescription = provider.displayName
+    if let image {
+        providerIconImageCache.setObject(image, forKey: cacheKey)
+    }
+    return image
 }
 
 func quotaProviders(claudeCodeAvailable: Bool) -> [QuotaProvider] {

@@ -13,38 +13,22 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-let chatBirdStatusItemLength = NSStatusItem.squareLength
+let chatBirdStatusItemLength = NSStatusItem.variableLength
 
-func makeChatBirdStatusItemImage() -> NSImage? {
-    let configuration = NSImage.SymbolConfiguration(
-        pointSize: 15,
-        weight: .semibold
-    )
-    let image = (
-        NSImage(
-            systemSymbolName: "bird.fill",
-            accessibilityDescription: "ChatBird"
-        )
-        ?? NSImage(
-            systemSymbolName: "message.fill",
-            accessibilityDescription: "ChatBird"
-        )
-    )?.withSymbolConfiguration(configuration)
-    image?.isTemplate = true
-    return image
+func chatBirdActivationPolicy(
+    panelHidden: Bool
+) -> NSApplication.ActivationPolicy {
+    _ = panelHidden
+    return .regular
 }
 
-private func configureChatBirdStatusButton(_ button: NSStatusBarButton?) {
+func configureChatBirdStatusButton(_ button: NSStatusBarButton?) {
     guard let button else { return }
-    if let image = makeChatBirdStatusItemImage() {
-        button.title = "ChatBird"
-        button.image = image
-        button.imagePosition = .imageOnly
-    } else {
-        button.image = nil
-        button.title = "CB"
-        button.imagePosition = .noImage
-    }
+    button.title = "ChatBird"
+    // Keep the recovery entry short and unambiguous. On crowded menu bars,
+    // an icon plus title is often compressed back to an unidentified icon.
+    button.image = nil
+    button.imagePosition = .noImage
     button.toolTip = "ChatBird · \(chatBirdVisibilityHotKeyDisplayName) 显示/隐藏"
     button.setAccessibilityLabel("ChatBird")
     button.setAccessibilityHelp(
@@ -52,20 +36,35 @@ private func configureChatBirdStatusButton(_ button: NSStatusBarButton?) {
     )
 }
 
+func makeChatBirdDockIcon(bundle: Bundle = .main) -> NSImage? {
+    let image = bundle.url(
+        forResource: "ChatBird",
+        withExtension: "icns"
+    ).flatMap(NSImage.init(contentsOf:))
+        ?? NSImage(
+            systemSymbolName: "bird.fill",
+            accessibilityDescription: "ChatBird"
+        )
+    image?.isTemplate = false
+    image?.accessibilityDescription = "ChatBird"
+    return image
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let quotaClient = CodexQuotaClient()
     private let claudeQuotaClient = ClaudeQuotaClient()
     private let quotaProviderPreference = QuotaProviderPreference()
-    private let locator = PetWindowLocator()
     private let healthWriter = RuntimeHealthWriter()
-    private let petSelectionStore = ChatBirdPetSelectionStore()
     private let taskActivityPreviewController = TaskActivityPreviewController()
     private let dashboardStore = ActivityDashboardStore()
     private let presentationModePreference = PresentationModePreference()
+    private let petEnabledPreference = PetEnabledPreference()
     private var presentationMode: PresentationMode = .petPanel
+    private var petEnabled = true
     private var claudePermissionCoordinator: ClaudePermissionCoordinator!
     private var claudePermissionPanelPresenter: ClaudePermissionPanelPresenter!
     private var dynamicIslandController: DynamicIslandWindowController!
+    private var petWindowController: ChatBirdPetWindowController!
     private var dynamicIslandConfirmationPresenter:
         DynamicIslandConfirmationPresenter!
     private var claudePermissionHookServer: ClaudePermissionHookServer?
@@ -78,20 +77,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var refreshTimer: Timer?
     private var taskProgressTimer: Timer?
     private var followTimer: Timer?
-    private var globalMouseMonitor: Any?
     private let taskProgressReaderStore = TaskProgressRefreshReaderStore()
     private var refreshingQuotaProviders = Set<QuotaProvider>()
     private var taskProgressRefreshGate = TaskProgressRefreshGate()
-    private var lastLocatedPet: LocatedPet?
-    private var lastLocatedAt: CFAbsoluteTime = 0
-    private var lastPetLocationPollAt: CFAbsoluteTime = 0
-    private var lastPetMovementAt: CFAbsoluteTime = 0
     private var lastWindowStackCheckAt: CFAbsoluteTime = 0
     private var petPanelFallbackDisplayID: CGDirectDisplayID?
     private var currentPanelScale: CGFloat = 1
     private var currentBasePanelSize = expandedPanelSize
     private var isPanelHiddenByUser = false
-    private var ignoreVisiblePetDoubleClickUntil: CFAbsoluteTime = 0
     private var cachedCodexDesktopRunning = false
     private lazy var codexOverlayNotificationSynchronizer: CodexOverlayNotificationSynchronizer = {
         let paths = CodexOverlayNotificationPaths.current()
@@ -121,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var nativeActivityPillSuppressionMonitor: NativeActivityPillSuppressionMonitor = {
         let suppressor = NativeActivityPillSuppressor()
         let queue = DispatchQueue(
-            label: "dev.chatbird.codex-quota-panel.native-activity",
+            label: "\(chatBirdBundleIdentifier).native-activity",
             qos: .utility
         )
         return NativeActivityPillSuppressionMonitor(
@@ -144,18 +137,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        migrateLegacyChatBirdPreferencesIfNeeded()
+        NSApp.applicationIconImage = makeChatBirdDockIcon()
+        NSApp.setActivationPolicy(.regular)
+        petEnabled = petEnabledPreference.isEnabled
         presentationMode = presentationModePreference.mode
-        selectChatBirdAtStartup(using: petSelectionStore)
+        if presentationMode == .petPanel, !petEnabled {
+            presentationMode = .dynamicIsland
+            presentationModePreference.mode = .dynamicIsland
+        }
+        dashboardStore.update { $0.petEnabled = petEnabled }
         let availableProviders = synchronizeQuotaProviderAvailability()
         makePanel()
         makeDynamicIslandController()
+        makePetWindowController()
         startCodexDesktopMonitoring()
         startClaudePermissionHook()
         startScreenParameterMonitoring()
         makeStatusItem()
         makeVisibilityHotKey()
-        startPetClickMonitor()
         bindClaudePermissionPresenter(for: presentationMode)
         applyInitialPresentationVisibility()
         updateStatusMenu()
@@ -178,6 +178,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        if isPanelHiddenByUser {
+            showPanelFromStatusItem()
+        }
+        return false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         nativeActivityPillSuppressionMonitor.stop()
         codexOverlayNotificationSynchronizer.stop()
@@ -192,15 +202,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         claudePermissionCoordinator?.cancelAll()
         claudePermissionHookServer?.stop()
         taskActivityPreviewController.hide()
+        petWindowController?.setEnabled(false)
         quotaView.setRunningTaskBadgeAnimationsEnabled(false)
         dynamicIslandController?.hide()
         panel?.orderOut(nil)
         refreshTimer?.invalidate()
         taskProgressTimer?.invalidate()
         followTimer?.invalidate()
-        if let globalMouseMonitor {
-            NSEvent.removeMonitor(globalMouseMonitor)
-        }
         if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)
         }
@@ -271,6 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.hidePanelByUser()
         }
         controller.onRequestPetPanel = { [weak self] in
+            guard self?.petEnabled == true else { return }
             self?.selectPresentationMode(.petPanel)
         }
         controller.onOpenTask = { [weak self] item in
@@ -301,6 +310,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func makePetWindowController() {
+        let controller = ChatBirdPetWindowController()
+        controller.onClick = { [weak self] in
+            self?.handleOwnPetClick()
+        }
+        controller.onMove = { [weak self] in
+            self?.followPet(forceLocationPoll: true)
+        }
+        petWindowController = controller
+        controller.setEnabled(petEnabled)
+    }
+
     private func makeStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: chatBirdStatusItemLength)
         configureChatBirdStatusButton(item.button)
@@ -326,6 +347,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         menu.addItem(menuItem(command: .toggleVisibility))
         menu.addItem(.separator())
+        menu.addItem(menuItem(command: .togglePet))
         menu.addItem(menuItem(command: .selectMode(.petPanel)))
         menu.addItem(menuItem(command: .selectMode(.dynamicIsland)))
         menu.addItem(menuItem(command: .moveToCurrentDisplay))
@@ -352,16 +374,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ) {
         item.isEnabled = isPresentationCommandEnabled(
             command,
-            mode: presentationMode
+            mode: presentationMode,
+            petEnabled: petEnabled
         )
         item.state = .off
         item.keyEquivalent = ""
         item.keyEquivalentModifierMask = []
         switch command {
         case .toggleVisibility:
-            item.title = isPanelHiddenByUser ? "显示" : "隐藏"
+            item.title = isPanelHiddenByUser ? "显示 ChatBird" : "隐藏 ChatBird"
             item.keyEquivalent = chatBirdVisibilityHotKeyKeyEquivalent
             item.keyEquivalentModifierMask = chatBirdVisibilityHotKeyModifierMask
+        case .togglePet:
+            item.title = "桌面宠物"
+            item.state = petEnabled ? .on : .off
         case .selectMode(.petPanel):
             item.title = "宠物面板"
             item.state = presentationMode == .petPanel ? .on : .off
@@ -382,7 +408,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func handlePresentationCommand(_ command: PresentationCommand) {
-        guard isPresentationCommandEnabled(command, mode: presentationMode)
+        guard isPresentationCommandEnabled(
+            command,
+            mode: presentationMode,
+            petEnabled: petEnabled
+        )
         else { return }
         switch command {
         case .toggleVisibility:
@@ -391,6 +421,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } else {
                 hidePanelByUser()
             }
+        case .togglePet:
+            setPetEnabled(!petEnabled)
         case .selectMode(let mode):
             selectPresentationMode(mode)
         case .moveToCurrentDisplay:
@@ -478,7 +510,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let decision = codexLifecyclePresentationDecision(
             mode: presentationMode,
             hiddenByUser: isPanelHiddenByUser,
-            codexDesktopRunning: codexDesktopRunning
+            codexDesktopRunning: codexDesktopRunning,
+            petEnabled: petEnabled
         )
         if presentationMode == .petPanel {
             followPet(forceLocationPoll: true)
@@ -555,6 +588,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ) { [weak self] _ in
             guard let self else { return }
             self.dynamicIslandController?.screenParametersDidChange()
+            self.petWindowController?.screenParametersDidChange()
             if dynamicIslandScreen(displayID: self.petPanelFallbackDisplayID) == nil {
                 self.petPanelFallbackDisplayID = nil
             }
@@ -627,38 +661,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func startPetClickMonitor() {
-        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) {
-            [weak self] event in
-            let clickCount = event.clickCount
-            let clickLocation = NSEvent.mouseLocation
-            DispatchQueue.main.async {
-                self?.handlePetClick(at: clickLocation, clickCount: clickCount)
-            }
-        }
-    }
-
-    private func handlePetClick(at location: NSPoint, clickCount: Int) {
-        guard shouldHandlePetClick(mode: presentationMode) else { return }
-        let now = CFAbsoluteTimeGetCurrent()
-        guard cachedCodexDesktopRunning, let pet = locator.locate() else { return }
-        let action = petPanelClickAction(
-            clickCount: clickCount,
-            clickLocation: location,
-            petVisibleRect: pet.visibleRect,
-            panelHidden: isPanelHiddenByUser,
-            suppressVisibleDoubleClick: now < ignoreVisiblePetDoubleClickUntil
-        )
-        guard action != .none else { return }
-
-        lastLocatedPet = pet
-        lastLocatedAt = now
-        if action == .show {
-            ignoreVisiblePetDoubleClickUntil = now + NSEvent.doubleClickInterval
+    private func handleOwnPetClick() {
+        guard petEnabled else { return }
+        if presentationMode != .petPanel {
+            selectPresentationMode(.petPanel)
+        } else if isPanelHiddenByUser {
             showPanelFromStatusItem()
         } else {
             hidePanelByUser()
         }
+    }
+
+    private func setPetEnabled(_ enabled: Bool) {
+        guard petEnabled != enabled else { return }
+        petEnabled = enabled
+        petEnabledPreference.isEnabled = enabled
+        dashboardStore.update { $0.petEnabled = enabled }
+        petWindowController?.setEnabled(enabled)
+        if !enabled, presentationMode == .petPanel {
+            selectPresentationMode(.dynamicIsland)
+        } else if enabled, presentationMode == .petPanel {
+            followPet(forceLocationPoll: true)
+        }
+        updateStatusMenu()
     }
 
     private func hidePanelByUser() {
@@ -668,6 +693,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quotaView.setRunningTaskBadgeAnimationsEnabled(false)
         panel.level = panelDefaultWindowLevel
         panel.orderOut(nil)
+        updateRecoveryActivationPolicy()
         updateStatusMenu()
         healthWriter.write(
             status: "hidden-by-user",
@@ -681,8 +707,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showPanelFromStatusItem() {
         isPanelHiddenByUser = false
+        updateRecoveryActivationPolicy()
         updateStatusMenu()
         showCurrentPresentation()
+    }
+
+    private func updateRecoveryActivationPolicy() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.dockTile.badgeLabel = nil
+        NSApp.dockTile.display()
     }
 
     private func applyInitialPresentationVisibility() {
@@ -691,6 +724,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func selectPresentationMode(_ mode: PresentationMode) {
+        guard mode != .petPanel || petEnabled else { return }
         guard presentationMode != mode else { return }
         if mode == .petPanel, presentationMode == .dynamicIsland {
             petPanelFallbackDisplayID = dynamicIslandController?.targetDisplayID
@@ -714,7 +748,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func showCurrentPresentation() {
         let decision = presentationRuntimeDecision(
             mode: presentationMode,
-            hiddenByUser: isPanelHiddenByUser
+            hiddenByUser: isPanelHiddenByUser,
+            petEnabled: petEnabled
         )
         quotaView.setRunningTaskBadgeAnimationsEnabled(decision.showPetPanel)
         if decision.showPetPanel {
@@ -739,7 +774,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func bindClaudePermissionPresenter(for mode: PresentationMode) {
         let decision = presentationRuntimeDecision(
             mode: mode,
-            hiddenByUser: isPanelHiddenByUser
+            hiddenByUser: isPanelHiddenByUser,
+            petEnabled: petEnabled
         )
         dynamicIslandConfirmationPresenter?.setPresentationActive(
             decision.bindDynamicPermissionPresenter
@@ -768,18 +804,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
-        guard cachedCodexDesktopRunning else {
-            lastLocatedPet = nil
-            lastLocatedAt = 0
-            lastPetLocationPollAt = 0
-            lastPetMovementAt = 0
-            lastWindowStackCheckAt = 0
+        guard petEnabled else {
             taskActivityPreviewController.hide()
             quotaView.setRunningTaskBadgeAnimationsEnabled(false)
             panel.level = panelDefaultWindowLevel
             panel.orderOut(nil)
             healthWriter.write(
-                status: "waiting-for-codex",
+                status: "pet-disabled",
                 panelVisible: false,
                 locationSource: nil,
                 panelScale: currentPanelScale,
@@ -795,42 +826,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        guard shouldPollPetLocation(
-            now: now,
-            lastPollAt: lastPetLocationPollAt,
-            lastMovementAt: lastPetMovementAt,
-            force: forceLocationPoll
-        ) else { return }
-        lastPetLocationPollAt = now
-
-        let pet: LocatedPet
-        let panelStatus: String
-        if let located = locator.locate() {
-            if locatedPetGeometryDiffers(lastLocatedPet, from: located) {
-                lastPetMovementAt = now
-            }
-            lastLocatedPet = located
-            lastLocatedAt = now
-            petPanelFallbackDisplayID = dynamicIslandDisplayID(for: located.screen)
-            pet = located
-            panelStatus = "following-pet"
-        } else if let recent = lastLocatedPet, now - lastLocatedAt <= 0.50 {
-            // Preserve the last exact attachment only across a brief window-list
-            // transition. Never leave the panel at an unrelated screen corner.
-            pet = recent
-            panelStatus = "following-pet"
-        } else if let saved = locator.locateSavedState(
-            allowClosedOverlay: true,
-            preferredDisplayID: petPanelFallbackDisplayID
-        ) {
-            petPanelFallbackDisplayID = dynamicIslandDisplayID(for: saved.screen)
-            pet = saved
-            panelStatus = "pet-panel-saved-position-fallback"
-        } else {
+        guard let pet = petWindowController?.locatedPet() else {
             taskActivityPreviewController.hide()
-            presentDetachedPetPanel()
+            quotaView.setRunningTaskBadgeAnimationsEnabled(false)
+            panel.orderOut(nil)
+            healthWriter.write(
+                status: "waiting-for-chatbird-pet",
+                panelVisible: false,
+                locationSource: nil,
+                force: true
+            )
             return
         }
+        petPanelFallbackDisplayID = dynamicIslandDisplayID(for: pet.screen)
+        let panelStatus = "following-chatbird-pet"
 
         let basePanelSize = currentBasePanelSize
         currentPanelScale = presentedPanelScale(pet.panelScale)
@@ -910,11 +919,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     )
             }
         }
-        if shouldPresentPanel(
-            codexDesktopRunning: true,
-            hiddenByUser: isPanelHiddenByUser,
-            hasPetLocation: true
-        ), !panel.isVisible || shouldReorderForNativeActivity {
+        if !panel.isVisible || shouldReorderForNativeActivity {
             panel.orderFrontRegardless()
         }
         healthWriter.write(

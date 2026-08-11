@@ -41,18 +41,6 @@ if CommandLine.arguments.contains("--check-accessibility") {
     printAccessibilityStatus()
 }
 
-if let selectionFlag = CommandLine.arguments.firstIndex(of: "--select-chatbird") {
-    let configURL: URL?
-    if CommandLine.arguments.indices.contains(selectionFlag + 1),
-       !CommandLine.arguments[selectionFlag + 1].hasPrefix("--")
-    {
-        configURL = URL(fileURLWithPath: CommandLine.arguments[selectionFlag + 1])
-    } else {
-        configURL = nil
-    }
-    selectChatBirdOnce(configURL: configURL)
-}
-
 if CommandLine.arguments.contains("--suppress-native-activity-once") {
     suppressNativeActivityOnce()
 }

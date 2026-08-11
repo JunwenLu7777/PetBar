@@ -198,6 +198,7 @@ struct ActivityDashboardSnapshot: Equatable {
     var acknowledgedTerminalTaskKeys = Set<String>()
     var isTaskRefreshing = false
     var codexDesktopRunning = false
+    var petEnabled = true
 }
 
 func terminalTaskAcknowledgementKey(

@@ -10,29 +10,6 @@ enum DynamicIslandQuotaPresentationPhase: Equatable {
     case unavailable
 }
 
-func dynamicIslandTintedSymbolImage(
-    named symbolName: String,
-    color: NSColor,
-    accessibilityDescription: String
-) -> NSImage? {
-    guard let base = NSImage(
-        systemSymbolName: symbolName,
-        accessibilityDescription: accessibilityDescription
-    )?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
-    else { return nil }
-    let size = NSSize(width: 16, height: 16)
-    let image = NSImage(size: size)
-    image.lockFocus()
-    let rect = NSRect(origin: .zero, size: size)
-    color.setFill()
-    rect.fill()
-    base.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1)
-    image.unlockFocus()
-    image.isTemplate = false
-    image.accessibilityDescription = accessibilityDescription
-    return image
-}
-
 func dynamicIslandQuotaPhase(
     state: QuotaProviderState?,
     providerAvailable: Bool
@@ -81,6 +58,8 @@ final class DynamicIslandQuotaViewController: NSViewController {
         imageName: "arrow.clockwise"
     )
     private let providerStack = NSStackView()
+    private let detailScrollView = NSScrollView()
+    private let detailDocumentView = NSView()
     private let detailStack = NSStackView()
     private var providerButtons: [QuotaProvider: NSButton] = [:]
     private var latestSnapshot = ActivityDashboardSnapshot()
@@ -88,6 +67,7 @@ final class DynamicIslandQuotaViewController: NSViewController {
     private var detailResetTexts: [String] = []
     private var resetCreditExpiryLineCount = 0
     private var detailAccessibilityTexts: [String] = []
+    private var shouldScrollDetailsToTop = true
 
     override func loadView() {
         view = NSView(frame: NSRect(origin: .zero, size: dynamicIslandQuotaSize))
@@ -97,8 +77,10 @@ final class DynamicIslandQuotaViewController: NSViewController {
         leftPane.addSubview(statusField)
         leftPane.addSubview(providerDivider)
         leftPane.addSubview(providerStack)
+        rightPane.addSubview(detailScrollView)
         rightPane.addSubview(refreshButton)
-        rightPane.addSubview(detailStack)
+        detailScrollView.documentView = detailDocumentView
+        detailDocumentView.addSubview(detailStack)
 
         titleField.stringValue = "提供商"
         titleField.setAccessibilityLabel("额度提供商")
@@ -112,6 +94,21 @@ final class DynamicIslandQuotaViewController: NSViewController {
         detailStack.orientation = .vertical
         detailStack.alignment = .leading
         detailStack.spacing = 10
+
+        let verticalScroller = NSScroller(frame: .zero)
+        verticalScroller.controlSize = .small
+        verticalScroller.knobStyle = .light
+        verticalScroller.wantsLayer = true
+        verticalScroller.layer?.cornerRadius = 4
+        verticalScroller.layer?.backgroundColor = NSColor.white
+            .withAlphaComponent(0.08).cgColor
+        detailScrollView.verticalScroller = verticalScroller
+        detailScrollView.hasVerticalScroller = true
+        detailScrollView.autohidesScrollers = false
+        detailScrollView.scrollerStyle = .legacy
+        detailScrollView.drawsBackground = false
+        detailScrollView.borderType = .noBorder
+        detailScrollView.setAccessibilityLabel("额度详情")
 
         refreshButton.target = self
         refreshButton.action = #selector(refresh)
@@ -159,17 +156,18 @@ final class DynamicIslandQuotaViewController: NSViewController {
             height: max(1, leftPane.bounds.height - 92)
         )
         refreshButton.frame = NSRect(
-            x: rightPane.bounds.width - 48,
+            x: rightPane.bounds.width - 68,
             y: rightPane.bounds.height - 46,
             width: 34,
             height: 34
         )
-        detailStack.frame = NSRect(
+        detailScrollView.frame = NSRect(
             x: 14,
             y: 14,
             width: max(1, rightPane.bounds.width - 28),
             height: max(1, rightPane.bounds.height - 28)
         )
+        layoutDetailDocument()
     }
 
     func apply(_ snapshot: ActivityDashboardSnapshot) {
@@ -180,6 +178,51 @@ final class DynamicIslandQuotaViewController: NSViewController {
         )
         rebuildProviders(snapshot)
         rebuildDetails(snapshot)
+        shouldScrollDetailsToTop = true
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+    }
+
+    private func layoutDetailDocument() {
+        detailScrollView.tile()
+        let viewportSize = detailScrollView.contentSize
+        let requiredHeight = requiredDetailStackHeight()
+        let documentHeight = max(viewportSize.height, requiredHeight)
+        let contentWidth = max(1, viewportSize.width)
+        detailDocumentView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: contentWidth,
+            height: documentHeight
+        )
+        detailStack.frame = NSRect(
+            x: 0,
+            y: max(0, documentHeight - requiredHeight),
+            width: contentWidth,
+            height: requiredHeight
+        )
+        detailStack.layoutSubtreeIfNeeded()
+        if shouldScrollDetailsToTop {
+            let topOrigin = NSPoint(
+                x: 0,
+                y: max(0, documentHeight - viewportSize.height)
+            )
+            detailScrollView.contentView.scroll(to: topOrigin)
+            detailScrollView.reflectScrolledClipView(detailScrollView.contentView)
+            shouldScrollDetailsToTop = false
+        }
+        detailScrollView.verticalScroller?.isHidden = false
+        detailScrollView.verticalScroller?.alphaValue = 1
+    }
+
+    private func requiredDetailStackHeight() -> CGFloat {
+        let arrangedHeights = detailStack.arrangedSubviews.map { subview in
+            let intrinsicHeight = subview.intrinsicContentSize.height
+            return intrinsicHeight > 0 ? intrinsicHeight : subview.fittingSize.height
+        }
+        let spacingHeight = CGFloat(max(0, arrangedHeights.count - 1))
+            * detailStack.spacing
+        return max(1, ceil(arrangedHeights.reduce(0, +) + spacingHeight))
     }
 
     private func rebuildProviders(_ snapshot: ActivityDashboardSnapshot) {
@@ -210,20 +253,14 @@ final class DynamicIslandQuotaViewController: NSViewController {
                 provider == selectedProvider,
                 accent: DynamicIslandPalette.green
             )
-            let symbolColor = provider == selectedProvider
-                ? DynamicIslandPalette.green
-                : DynamicIslandPalette.primaryText
-            button.image = dynamicIslandTintedSymbolImage(
-                named: symbolName(for: phase),
-                color: symbolColor,
-                accessibilityDescription: statusText(for: phase, state: state)
-            )
+            button.image = providerIconImage(for: provider)
             button.imagePosition = .imageLeading
+            button.imageScaling = .scaleProportionallyDown
             button.tag = provider == .codex ? 0 : 1
             button.font = .systemFont(ofSize: 13, weight: provider == selectedProvider ? .semibold : .regular)
-            button.contentTintColor = provider == selectedProvider
-                ? DynamicIslandPalette.green
-                : DynamicIslandPalette.primaryText
+            // Provider artwork carries its own brand color and is not a
+            // template image, so AppKit must not apply the shared control tint.
+            button.contentTintColor = nil
             button.setAccessibilityLabel("选择 \(provider.displayName) 额度")
             button.setAccessibilityValue(statusText(for: phase, state: state))
             button.widthAnchor.constraint(equalToConstant: 204).isActive = true
@@ -487,21 +524,6 @@ final class DynamicIslandQuotaViewController: NSViewController {
         }
     }
 
-    private func symbolName(
-        for phase: DynamicIslandQuotaPresentationPhase
-    ) -> String {
-        switch phase {
-        case .firstLoad, .refreshing:
-            return "arrow.triangle.2.circlepath"
-        case .current:
-            return "checkmark.circle"
-        case .stale:
-            return "exclamationmark.arrow.triangle.2.circlepath"
-        case .firstFailure, .unavailable:
-            return "exclamationmark.triangle"
-        }
-    }
-
     private func tintColor(
         for phase: DynamicIslandQuotaPresentationPhase
     ) -> NSColor {
@@ -599,8 +621,45 @@ final class DynamicIslandQuotaViewController: NSViewController {
         }
     }
 
+    func providerButtonIconsUseResourcesForSelfTest() -> Bool {
+        _ = view
+        return providerButtons.allSatisfy { provider, button in
+            button.image?.accessibilityDescription == provider.displayName
+                && button.image?.isTemplate == false
+        }
+    }
+
     func isRefreshEnabledForSelfTest() -> Bool {
         refreshButton.isEnabled
+    }
+
+    func detailScrollIsConfiguredForSelfTest() -> Bool {
+        _ = view
+        view.layoutSubtreeIfNeeded()
+        return detailScrollView.documentView === detailDocumentView
+            && detailScrollView.hasVerticalScroller
+    }
+
+    func detailLayoutHasNoOverlapForSelfTest() -> Bool {
+        _ = view
+        view.layoutSubtreeIfNeeded()
+        let frames = detailStack.arrangedSubviews.map(\.frame)
+        for leftIndex in frames.indices {
+            for rightIndex in frames.indices where rightIndex > leftIndex {
+                if frames[leftIndex].intersects(frames[rightIndex]) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    func detailHeadlineIsVisibleForSelfTest() -> Bool {
+        _ = view
+        view.layoutSubtreeIfNeeded()
+        guard let headline = detailStack.arrangedSubviews.first else { return false }
+        let headlineFrame = headline.convert(headline.bounds, to: detailDocumentView)
+        return detailScrollView.documentVisibleRect.intersects(headlineFrame)
     }
 
     func selectProviderForSelfTest(_ provider: QuotaProvider) {

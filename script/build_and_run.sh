@@ -2,14 +2,15 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="ChatBirdQuotaPanel"
-BUNDLE_ID="dev.chatbird.codex-quota-panel"
+APP_NAME="ChatBird"
+BUNDLE_ID="dev.chatbird.app"
 ROOT="${0:A:h:h}"
 PROJECT="$ROOT/macos/ChatBirdQuotaPanel"
-APP_BUNDLE="$PROJECT/build/ChatBird 额度面板.app"
+APP_BUNDLE="$PROJECT/build/ChatBird.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+INSTALLED_BINARY="$HOME/Applications/ChatBird.app/Contents/MacOS/$APP_NAME"
 INSTALL_SCRIPT="$PROJECT/scripts/install.sh"
-LABEL="dev.chatbird.codex-quota-panel"
+LABEL="dev.chatbird.app"
 DOMAIN="gui/$(id -u)"
 
 install_and_launch() {
@@ -38,14 +39,14 @@ case "$MODE" in
     for _ in {1..40}; do
       RUNNING_PID="$(/usr/bin/pgrep -x "$APP_NAME" | /usr/bin/head -1 || true)"
       if [[ -n "$RUNNING_PID" ]] \
-        && [[ "$(/bin/ps -p "$RUNNING_PID" -o command=)" == "$APP_BINARY" ]]
+        && [[ "$(/bin/ps -p "$RUNNING_PID" -o command=)" == "$INSTALLED_BINARY" ]]
       then
-        echo "ChatBird 额度面板已启动"
+        echo "ChatBird 已启动"
         exit 0
       fi
       /bin/sleep 0.1
     done
-    echo "ChatBird 额度面板未能启动" >&2
+    echo "ChatBird 未能启动" >&2
     exit 1
     ;;
   *)

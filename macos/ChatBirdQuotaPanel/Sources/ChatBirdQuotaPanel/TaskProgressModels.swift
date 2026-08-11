@@ -3,7 +3,7 @@
 //  ChatBirdQuotaPanel
 //
 //  模块职责：任务进度数据模型（TaskProgressItem/Snapshot）、Claude 终端
-//  打开请求的导航计划，以及任务活动文本的段落/截断处理工具。
+//  打开请求的导航计划，以及任务活动文本的完整段落处理工具。
 //
 
 import AppKit
@@ -28,6 +28,18 @@ enum TaskProgressKind: String, Equatable {
 enum TaskSource: String, Equatable {
     case codex
     case claudeCode
+}
+
+let completedTaskPanelRetention: TimeInterval = 24 * 60 * 60
+
+func taskIsWithinTerminalPanelRetention(
+    kind: TaskProgressKind,
+    updatedAt: Date,
+    now: Date,
+    retention: TimeInterval = completedTaskPanelRetention
+) -> Bool {
+    guard kind == .completed || kind == .failed else { return true }
+    return now.timeIntervalSince(updatedAt) <= retention
 }
 
 func taskProgressSymbolName(for kind: TaskProgressKind) -> String {
@@ -327,7 +339,6 @@ struct TaskActivityPreviewPayload: Equatable {
 }
 
 let maximumTaskActivityLines = 3
-let maximumTaskActivityCharacters = 4_096
 
 func taskActivityParagraph(from text: String) -> String? {
     let paragraph = text.components(separatedBy: .newlines)
@@ -406,31 +417,22 @@ func appendingTaskActivityParagraph(
     _ fragment: String,
     to current: String
 ) -> String {
-    let combined = current.isEmpty ? fragment : "\(current) \(fragment)"
-    return String(combined.suffix(maximumTaskActivityCharacters))
+    current.isEmpty ? fragment : "\(current) \(fragment)"
 }
 
 func appendingTaskActivityEvent(
     _ event: TaskActivityEvent,
-    to events: [TaskActivityEvent],
-    limit: Int = 3,
-    maximumCharacters: Int = 280
+    to events: [TaskActivityEvent]
 ) -> [TaskActivityEvent] {
-    guard limit > 0, maximumCharacters > 0 else { return [] }
-    let boundedEvent = TaskActivityEvent(
-        kind: event.kind,
-        occurredAt: event.occurredAt,
-        text: String(event.text.prefix(maximumCharacters))
-    )
     var next = events.filter {
-        !($0.kind == boundedEvent.kind && $0.text == boundedEvent.text)
+        !($0.kind == event.kind && $0.text == event.text)
     }
-    next.append(boundedEvent)
+    next.append(event)
     next.sort {
         if $0.occurredAt == $1.occurredAt { return $0.text < $1.text }
         return $0.occurredAt < $1.occurredAt
     }
-    return Array(next.suffix(limit))
+    return next
 }
 
 func taskActivityVisibleTailText(

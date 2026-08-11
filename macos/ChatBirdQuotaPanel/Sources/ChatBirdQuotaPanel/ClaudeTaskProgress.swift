@@ -298,7 +298,7 @@ final class ClaudeTaskProgressReader {
     private let fileManager = FileManager.default
     private let maximumTailBytes: UInt64 = 1_048_576
     private let transcriptRescanInterval: TimeInterval = 5
-    private let completedTaskVisibility: TimeInterval = 2 * 60
+    private let completedTaskVisibility = completedTaskPanelRetention
     private var cachedCandidates: [TranscriptCandidate] = []
     private var parsedCache: [String: ParsedCacheEntry] = [:]
     private var nextTranscriptScanAt = Date.distantPast
@@ -381,14 +381,21 @@ final class ClaudeTaskProgressReader {
                     item: item
                 )
             }
-            if let item {
+            if let item,
+               taskIsWithinTerminalPanelRetention(
+                   kind: item.kind,
+                   updatedAt: item.updatedAt,
+                   now: now,
+                   retention: completedTaskVisibility
+               )
+            {
                 items.append(item)
                 parsedSessionIDs.insert(candidate.sessionID)
             }
         }
 
         for agent in agents where !parsedSessionIDs.contains(agent.sessionID) {
-            items.append(TaskProgressItem(
+            let item = TaskProgressItem(
                 title: agent.title,
                 kind: agent.kind,
                 startedAt: agent.startedAt,
@@ -400,7 +407,15 @@ final class ClaudeTaskProgressReader {
                 workingDirectory: agent.workingDirectory,
                 processID: agent.processID,
                 processStartIdentity: agent.processStartIdentity
-            ))
+            )
+            if taskIsWithinTerminalPanelRetention(
+                kind: item.kind,
+                updatedAt: item.updatedAt,
+                now: now,
+                retention: completedTaskVisibility
+            ) {
+                items.append(item)
+            }
         }
 
         return .displaying(items)

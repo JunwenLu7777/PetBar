@@ -53,3 +53,20 @@ final class PresentationModePreference {
         set { defaults.set(newValue.rawValue, forKey: key) }
     }
 }
+
+final class PetEnabledPreference {
+    private let defaults: UserDefaults
+    private let key = "pet-enabled"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    var isEnabled: Bool {
+        get {
+            guard defaults.object(forKey: key) != nil else { return true }
+            return defaults.bool(forKey: key)
+        }
+        set { defaults.set(newValue, forKey: key) }
+    }
+}

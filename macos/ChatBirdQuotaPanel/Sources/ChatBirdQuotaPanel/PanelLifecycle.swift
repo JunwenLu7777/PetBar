@@ -41,6 +41,7 @@ func shouldPresentClaudePermissionPanel(
 
 enum PresentationCommand: Equatable {
     case toggleVisibility
+    case togglePet
     case selectMode(PresentationMode)
     case moveToCurrentDisplay
     case quit
@@ -69,10 +70,11 @@ func dynamicIslandVisibilityAction(
 
 func presentationRuntimeDecision(
     mode: PresentationMode,
-    hiddenByUser: Bool
+    hiddenByUser: Bool,
+    petEnabled: Bool = true
 ) -> PresentationRuntimeDecision {
     PresentationRuntimeDecision(
-        showPetPanel: !hiddenByUser && mode == .petPanel,
+        showPetPanel: !hiddenByUser && petEnabled && mode == .petPanel,
         showDynamicIsland: !hiddenByUser && mode == .dynamicIsland,
         bindLegacyPermissionPresenter: mode == .petPanel,
         bindDynamicPermissionPresenter: mode == .dynamicIsland
@@ -81,30 +83,33 @@ func presentationRuntimeDecision(
 
 func codexExitPresentationDecision(
     mode: PresentationMode,
-    hiddenByUser: Bool
+    hiddenByUser: Bool,
+    petEnabled: Bool = true
 ) -> PresentationRuntimeDecision {
-    PresentationRuntimeDecision(
-        showPetPanel: false,
-        showDynamicIsland: !hiddenByUser && mode == .dynamicIsland,
-        bindLegacyPermissionPresenter: mode == .petPanel,
-        bindDynamicPermissionPresenter: mode == .dynamicIsland
+    presentationRuntimeDecision(
+        mode: mode,
+        hiddenByUser: hiddenByUser,
+        petEnabled: petEnabled
     )
 }
 
 func codexLifecyclePresentationDecision(
     mode: PresentationMode,
     hiddenByUser: Bool,
-    codexDesktopRunning: Bool
+    codexDesktopRunning: Bool,
+    petEnabled: Bool = true
 ) -> PresentationRuntimeDecision {
     if codexDesktopRunning {
         return presentationRuntimeDecision(
             mode: mode,
-            hiddenByUser: hiddenByUser
+            hiddenByUser: hiddenByUser,
+            petEnabled: petEnabled
         )
     }
     return codexExitPresentationDecision(
         mode: mode,
-        hiddenByUser: hiddenByUser
+        hiddenByUser: hiddenByUser,
+        petEnabled: petEnabled
     )
 }
 
@@ -114,12 +119,15 @@ func shouldHandlePetClick(mode: PresentationMode) -> Bool {
 
 func isPresentationCommandEnabled(
     _ command: PresentationCommand,
-    mode: PresentationMode
+    mode: PresentationMode,
+    petEnabled: Bool = true
 ) -> Bool {
     switch command {
     case .moveToCurrentDisplay:
         return mode == .dynamicIsland
-    case .toggleVisibility, .selectMode, .quit:
+    case .selectMode(.petPanel):
+        return petEnabled
+    case .toggleVisibility, .togglePet, .selectMode(.dynamicIsland), .quit:
         return true
     }
 }
@@ -260,6 +268,8 @@ final class RuntimeHealthWriter {
             return URL(fileURLWithPath: override)
         }
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/dev.chatbird.codex-quota-panel/panel-health.json")
+            .appendingPathComponent(
+                "Library/Caches/\(chatBirdBundleIdentifier)/panel-health.json"
+            )
     }
 }

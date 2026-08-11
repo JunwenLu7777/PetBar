@@ -17,10 +17,9 @@ let taskProgressRefreshInterval: TimeInterval = 2
 let codexTaskProgressRescanInterval: TimeInterval = 5
 let taskAnimationFramesPerSecond: TimeInterval = 8
 let taskAnimationDegreesPerTick: CGFloat = 36
-let panelVersion = "1.0.0"
+let panelVersion = "1.1.0"
 let panelEdition = "chatbird-nt"
 let chatBirdPetID = "chatbird-nt"
-let chatBirdPetAvatarID = "custom:\(chatBirdPetID)"
 // Track fast enough that the panel preserves its 14 px visual gap while the
 // pet window is moving between animation positions.
 let followInterval: TimeInterval = 0.03

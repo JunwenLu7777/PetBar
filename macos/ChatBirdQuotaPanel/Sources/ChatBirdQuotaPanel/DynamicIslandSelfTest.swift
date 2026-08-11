@@ -63,6 +63,42 @@ private func dynamicIslandMinimumFontSizeForSelfTest(
     }
 }
 
+private func colorMatchesForSelfTest(
+    _ color: NSColor,
+    red: CGFloat,
+    green: CGFloat,
+    blue: CGFloat
+) -> Bool {
+    var actualRed: CGFloat = 0
+    var actualGreen: CGFloat = 0
+    var actualBlue: CGFloat = 0
+    var alpha: CGFloat = 0
+    color.getRed(
+        &actualRed,
+        green: &actualGreen,
+        blue: &actualBlue,
+        alpha: &alpha
+    )
+    return abs(actualRed - red) <= 0.002
+        && abs(actualGreen - green) <= 0.002
+        && abs(actualBlue - blue) <= 0.002
+        && abs(alpha - 1) <= 0.002
+}
+
+private func providerIconResourceContainsBrandColorForSelfTest(
+    provider: QuotaProvider,
+    hex: String,
+    bundle: Bundle = .main
+) -> Bool {
+    guard let url = bundle.url(
+        forResource: provider.iconResourceName,
+        withExtension: "svg"
+    ),
+          let text = try? String(contentsOf: url, encoding: .utf8)
+    else { return false }
+    return text.localizedCaseInsensitiveContains(hex)
+}
+
 private func assertDynamicIslandCapsulePresentation() {
     let now = Date(timeIntervalSince1970: 10_000)
     let started = now.addingTimeInterval(-185)
@@ -120,18 +156,33 @@ private func assertDynamicIslandCapsulePresentation() {
         isRefreshing: false,
         isStale: false
     )
+    let claudeQuotaState = QuotaProviderState(
+        rows: [QuotaRow(name: "5 小时", remainingPercent: 17, resetsAt: nil)],
+        resetCredits: nil,
+        statusText: "Claude ok",
+        errorText: nil,
+        updatedAt: now,
+        isRefreshing: false,
+        isStale: false
+    )
 
     func snapshot(
         items: [TaskProgressItem],
         queue: ClaudePermissionQueueSnapshot = .empty,
         acknowledged: Set<String> = [],
-        codexRunning: Bool = true
+        codexRunning: Bool = true,
+        quotaStates: [QuotaProvider: QuotaProviderState]? = nil,
+        availableProviders: [QuotaProvider] = QuotaProvider.allCases,
+        selectedQuotaProvider: QuotaProvider = .codex
     ) -> ActivityDashboardSnapshot {
         ActivityDashboardSnapshot(
             taskCollection: TaskProgressCollectionSnapshot.displaying(items),
-            quotaStates: [.codex: quotaState],
-            availableProviders: [.codex],
-            selectedQuotaProvider: .codex,
+            quotaStates: quotaStates ?? [
+                .codex: quotaState,
+                .claudeCode: claudeQuotaState,
+            ],
+            availableProviders: availableProviders,
+            selectedQuotaProvider: selectedQuotaProvider,
             permissionQueue: queue,
             acknowledgedTerminalTaskKeys: acknowledged,
             isTaskRefreshing: false,
@@ -182,8 +233,12 @@ private func assertDynamicIslandCapsulePresentation() {
     guard running.title == runningTask.title,
           running.statusText == "执行中",
           running.activityText == "正在运行测试",
+          running.provider == .codex,
+          running.quotaItems.isEmpty,
+          dynamicIslandCapsuleContentChoices(for: running)
+            == ["正在运行测试", "Build feature"],
           running.progressStyle == .indeterminate,
-          running.elapsedText == "03:05",
+          running.elapsedText?.hasSuffix(" · 03:05") == true,
           running.accessibilityValue.contains("正在运行测试"),
           running.accessibilityValue.contains("Codex"),
           !running.title.contains("3/5"),
@@ -226,24 +281,40 @@ private func assertDynamicIslandCapsulePresentation() {
     }
 
     let failed = dynamicIslandCapsulePresentation(
-        snapshot: snapshot(items: [failedTask, completedTask]),
+        snapshot: snapshot(
+            items: [failedTask, completedTask],
+            codexRunning: false,
+            availableProviders: [.codex]
+        ),
         now: now
+    )
+    let failedLater = dynamicIslandCapsulePresentation(
+        snapshot: snapshot(
+            items: [failedTask, completedTask],
+            codexRunning: false,
+            availableProviders: [.codex]
+        ),
+        now: now.addingTimeInterval(3_600)
     )
     guard failed.title == failedTask.title,
           failed.statusText == "失败",
-          failed.progressStyle == .failed
+          failed.progressStyle == .failed,
+          failed.elapsedText?.hasSuffix(" · 03:07") == true,
+          failedLater.elapsedText == failed.elapsedText
     else {
         fputs("dynamic island capsule failed priority self-test failed\n", stderr)
         exit(1)
     }
 
-    guard let failedKey = terminalTaskAcknowledgementKey(for: failedTask),
-          let completedKey = terminalTaskAcknowledgementKey(for: completedTask)
-    else { exit(1) }
+    guard let failedKey = terminalTaskAcknowledgementKey(for: failedTask) else {
+        exit(1)
+    }
     let completed = dynamicIslandCapsulePresentation(
         snapshot: snapshot(
             items: [failedTask, completedTask],
-            acknowledged: [failedKey]
+            acknowledged: [failedKey],
+            codexRunning: false,
+            availableProviders: [.codex]
         ),
         now: now
     )
@@ -256,20 +327,52 @@ private func assertDynamicIslandCapsulePresentation() {
     }
 
     let idle = dynamicIslandCapsulePresentation(
-        snapshot: snapshot(
-            items: [failedTask, completedTask],
-            acknowledged: [failedKey, completedKey]
-        ),
+        snapshot: snapshot(items: [failedTask, completedTask]),
         now: now
     )
     guard idle.title == "ChatBird 空闲",
           idle.statusText == "空闲",
           idle.progressStyle == .idle,
           idle.preferredTab == .quota,
-          idle.activityText == "64% 可用",
-          idle.accessibilityValue.contains("64% 可用")
+          idle.activityText == "GPT 64% · Claude 17%",
+          idle.quotaItems.map(\.provider) == [.codex, .claudeCode],
+          idle.quotaItems.map(\.label) == ["GPT", "Claude"],
+          idle.quotaItems.map(\.remainingPercent) == [64, 17],
+          idle.accessibilityValue.contains("GPT 64%"),
+          idle.accessibilityValue.contains("Claude 17%")
     else {
         fputs("dynamic island capsule idle quota self-test failed\n", stderr)
+        exit(1)
+    }
+
+    let partiallyUnavailable = dynamicIslandCapsulePresentation(
+        snapshot: snapshot(
+            items: [],
+            quotaStates: [.codex: quotaState],
+            availableProviders: [.codex],
+            selectedQuotaProvider: .claudeCode
+        ),
+        now: now
+    )
+    guard partiallyUnavailable.activityText == "GPT 64% · Claude --",
+          partiallyUnavailable.quotaItems.map(\.remainingPercent) == [64, nil],
+          partiallyUnavailable.accessibilityValue.contains("GPT 64%"),
+          partiallyUnavailable.accessibilityValue.contains("Claude --")
+    else {
+        fputs("dynamic island capsule partial quota self-test failed\n", stderr)
+        exit(1)
+    }
+
+    let fullyUnavailable = dynamicIslandCapsulePresentation(
+        snapshot: snapshot(items: [], quotaStates: [:]),
+        now: now
+    )
+    guard fullyUnavailable.activityText == "GPT -- · Claude --",
+          fullyUnavailable.quotaItems.map(\.remainingPercent) == [nil, nil],
+          fullyUnavailable.accessibilityValue.contains("GPT --"),
+          fullyUnavailable.accessibilityValue.contains("Claude --")
+    else {
+        fputs("dynamic island capsule unavailable quota self-test failed\n", stderr)
         exit(1)
     }
 
@@ -297,6 +400,61 @@ private func assertDynamicIslandCapsulePresentation() {
 
 private func assertDynamicIslandChromeAccessibility() {
     _ = NSApplication.shared
+    guard let codexIcon = providerIconImage(for: .codex),
+          let claudeIcon = providerIconImage(for: .claudeCode)
+    else {
+        fputs("dynamic island provider icon load self-test failed\n", stderr)
+        exit(1)
+    }
+    let providerIconChecks: [(String, Bool)] = [
+        ("codex-cache", codexIcon === providerIconImage(for: .codex)),
+        ("claude-cache", claudeIcon === providerIconImage(for: .claudeCode)),
+        ("codex-concrete", !codexIcon.isTemplate),
+        ("claude-concrete", !claudeIcon.isTemplate),
+        ("codex-svg-color", providerIconResourceContainsBrandColorForSelfTest(
+            provider: .codex,
+            hex: "#10A37F"
+        )),
+        ("claude-svg-color", providerIconResourceContainsBrandColorForSelfTest(
+            provider: .claudeCode,
+            hex: "#D97757"
+        )),
+        ("codex-brand-color", colorMatchesForSelfTest(
+            QuotaProvider.codex.brandColor,
+            red: 16.0 / 255.0,
+            green: 163.0 / 255.0,
+            blue: 127.0 / 255.0
+        )),
+        ("claude-brand-color", colorMatchesForSelfTest(
+            QuotaProvider.claudeCode.brandColor,
+            red: 217.0 / 255.0,
+            green: 119.0 / 255.0,
+            blue: 87.0 / 255.0
+        )),
+    ]
+    if let failedCheck = providerIconChecks.first(where: { !$0.1 }) {
+        fputs(
+            "dynamic island provider icon \(failedCheck.0) self-test failed\n",
+            stderr
+        )
+        exit(1)
+    }
+    let segmentedProbe = DynamicIslandSegmentedControl(labels: ["一", "二", "三"])
+    segmentedProbe.frame = NSRect(x: 0, y: 0, width: 240, height: 32)
+    segmentedProbe.layoutSubtreeIfNeeded()
+    let segmentedButtons = segmentedProbe.subviews
+        .compactMap { $0 as? DynamicIslandButton }
+        .sorted { $0.frame.minX < $1.frame.minX }
+    let segmentedGaps = zip(segmentedButtons, segmentedButtons.dropFirst()).map {
+        $1.frame.minX - $0.frame.maxX
+    }
+    guard segmentedProbe.layer?.cornerRadius ?? 0 >= 10,
+          segmentedButtons.allSatisfy({ ($0.layer?.cornerRadius ?? 0) >= 9 }),
+          segmentedGaps.allSatisfy({ $0 >= 4 })
+    else {
+        fputs("dynamic island rounded spaced controls self-test failed\n", stderr)
+        exit(1)
+    }
     let root = DynamicIslandRootViewController()
     let now = Date(timeIntervalSince1970: 20_000)
     let runningTask = TaskProgressItem(
@@ -340,6 +498,7 @@ private func assertDynamicIslandChromeAccessibility() {
     let hitTargetSize = root.capsuleHitTargetSizeForSelfTest()
     let capsuleLayout = root.capsuleLayoutSnapshotForSelfTest()
     let capsuleContentFrames = [
+        capsuleLayout.providerIconFrame,
         capsuleLayout.statusDotFrame,
         capsuleLayout.statusFrame,
         capsuleLayout.titleFrame,
@@ -353,11 +512,12 @@ private func assertDynamicIslandChromeAccessibility() {
               origin: .zero,
               size: dynamicIslandCapsuleSize
           ),
-          capsuleLayout.statusDotFrame == NSRect(x: 22, y: 24, width: 10, height: 10),
-          capsuleLayout.statusFrame == NSRect(x: 42, y: 19, width: 58, height: 20),
-          capsuleLayout.titleFrame == NSRect(x: 116, y: 18, width: 144, height: 22),
-          capsuleLayout.elapsedFrame == NSRect(x: 272, y: 19, width: 40, height: 20),
-          capsuleLayout.chevronFrame == NSRect(x: 322, y: 21, width: 8, height: 16),
+          capsuleLayout.providerIconFrame == NSRect(x: 18, y: 19, width: 20, height: 20),
+          capsuleLayout.statusDotFrame == NSRect(x: 46, y: 25, width: 8, height: 8),
+          capsuleLayout.statusFrame == NSRect(x: 62, y: 19, width: 48, height: 20),
+          capsuleLayout.titleFrame == NSRect(x: 120, y: 18, width: 96, height: 22),
+          capsuleLayout.elapsedFrame == NSRect(x: 228, y: 19, width: 96, height: 20),
+          capsuleLayout.chevronFrame == NSRect(x: 326, y: 21, width: 8, height: 16),
           capsuleLayout.modeSwitchFrame == NSRect(x: 340, y: 15, width: 50, height: 28),
           capsuleContentFrames.allSatisfy({
               capsuleLayout.bounds.contains($0)
@@ -374,9 +534,12 @@ private func assertDynamicIslandChromeAccessibility() {
           capsuleLayout.modeSwitchTitle == "面板",
           capsuleLayout.modeSwitchToolTip == "切换到宠物面板",
           capsuleLayout.modeSwitchAccessibilityLabel == "切换到宠物面板",
+          capsuleLayout.providerIconAccessibilityDescription == "Claude Code",
+          !capsuleLayout.taskContentIsHidden,
+          capsuleLayout.quotaSummaryIsHidden,
           accessibilitySnapshot.contains("ChatBird 活动"),
           accessibilitySnapshot.contains("任务 1"),
-          accessibilitySnapshot.contains("确认 1"),
+          !accessibilitySnapshot.contains("确认"),
           accessibilitySnapshot.contains("额度"),
           accessibilitySnapshot.contains("全部"),
           accessibilitySnapshot.contains("Codex"),
@@ -392,6 +555,123 @@ private func assertDynamicIslandChromeAccessibility() {
                 + "hitTarget=\(hitTargetSize) "
                 + "layout=\(capsuleLayout) "
                 + "rootSize=\(root.view.frame.size)\n",
+            stderr
+        )
+        exit(1)
+    }
+
+    let idleRoot = DynamicIslandRootViewController()
+    idleRoot.apply(
+        snapshot: ActivityDashboardSnapshot(
+            taskCollection: TaskProgressCollectionSnapshot.displaying([]),
+            quotaStates: [
+                .codex: QuotaProviderState(
+                    rows: [
+                        QuotaRow(
+                            name: QuotaProvider.codex.summaryRowName,
+                            remainingPercent: 35,
+                            resetsAt: nil
+                        )
+                    ]
+                ),
+                .claudeCode: QuotaProviderState(
+                    rows: [
+                        QuotaRow(
+                            name: QuotaProvider.claudeCode.summaryRowName,
+                            remainingPercent: 17,
+                            resetsAt: nil
+                        )
+                    ]
+                ),
+            ],
+            availableProviders: QuotaProvider.allCases,
+            selectedQuotaProvider: .claudeCode,
+            permissionQueue: .empty,
+            acknowledgedTerminalTaskKeys: [],
+            isTaskRefreshing: false,
+            codexDesktopRunning: true
+        ),
+        state: .capsule
+    )
+    let idleCapsuleLayout = idleRoot.capsuleLayoutSnapshotForSelfTest()
+    let quotaSummaryLayout = idleRoot
+        .capsuleQuotaSummaryLayoutSnapshotForSelfTest()
+    let quotaComponentFrames = quotaSummaryLayout.iconFrames
+        + quotaSummaryLayout.nameFrames
+        + quotaSummaryLayout.valueFrames
+    let leftQuotaGroupFrame = quotaSummaryLayout.iconFrames[0]
+        .union(quotaSummaryLayout.nameFrames[0])
+        .union(quotaSummaryLayout.valueFrames[0])
+    let rightQuotaGroupFrame = quotaSummaryLayout.iconFrames[1]
+        .union(quotaSummaryLayout.nameFrames[1])
+        .union(quotaSummaryLayout.valueFrames[1])
+    let leftQuotaColumnMidX = quotaSummaryLayout.dividerFrame.minX / 2
+    let rightQuotaColumnMidX = (
+        quotaSummaryLayout.dividerFrame.maxX
+            + quotaSummaryLayout.frame.width
+    ) / 2
+    guard idleCapsuleLayout.taskContentIsHidden,
+          !idleCapsuleLayout.quotaSummaryIsHidden,
+          idleCapsuleLayout.hitTargetFrame == NSRect(
+              x: 0,
+              y: 0,
+              width: 334,
+              height: 58
+          ),
+          idleCapsuleLayout.chevronFrame == NSRect(
+              x: 326,
+              y: 21,
+              width: 8,
+              height: 16
+          ),
+          idleCapsuleLayout.modeSwitchFrame == NSRect(
+              x: 340,
+              y: 15,
+              width: 50,
+              height: 28
+          ),
+          quotaSummaryLayout.frame == NSRect(
+              x: 18,
+              y: 19,
+              width: 286,
+              height: 20
+          ),
+          quotaSummaryLayout.iconFrames == [
+              NSRect(x: 17.5, y: 0, width: 20, height: 20),
+              NSRect(x: 150, y: 0, width: 20, height: 20),
+          ],
+          quotaSummaryLayout.nameFrames == [
+              NSRect(x: 45.5, y: 0, width: 30, height: 20),
+              NSRect(x: 178, y: 0, width: 52, height: 20),
+          ],
+          quotaSummaryLayout.valueFrames == [
+              NSRect(x: 83.5, y: 0, width: 42, height: 20),
+              NSRect(x: 238, y: 0, width: 42, height: 20),
+          ],
+          quotaSummaryLayout.dividerFrame == NSRect(
+              x: 142.5,
+              y: 3,
+              width: 1,
+              height: 14
+          ),
+          quotaSummaryLayout.dividerFrame.midX
+              == quotaSummaryLayout.frame.width / 2,
+          quotaComponentFrames.allSatisfy({ frame in
+              frame.midY == quotaSummaryLayout.frame.height / 2
+          }),
+          abs(leftQuotaGroupFrame.midX - leftQuotaColumnMidX) <= 0.25,
+          abs(rightQuotaGroupFrame.midX - rightQuotaColumnMidX) <= 0.25,
+          quotaSummaryLayout.names == ["GPT", "Claude"],
+          quotaSummaryLayout.values == ["35%", "17%"],
+          quotaSummaryLayout.iconAccessibilityDescriptions == [
+              "Codex",
+              "Claude Code",
+          ]
+    else {
+        fputs(
+            "dynamic island capsule dual quota layout self-test failed "
+                + "capsule=\(idleCapsuleLayout) "
+                + "quota=\(quotaSummaryLayout)\n",
             stderr
         )
         exit(1)
@@ -431,6 +711,17 @@ private func assertDynamicIslandChromeAccessibility() {
         fputs("dynamic island capsule mode switch isolation self-test failed\n", stderr)
         exit(1)
     }
+    expansionStore.update { $0.petEnabled = false }
+    controller.rootControllerForSelfTest().performCapsuleModeSwitchForSelfTest()
+    guard requestedPetPanelCount == 1,
+          controller.rootControllerForSelfTest()
+              .capsuleLayoutSnapshotForSelfTest()
+              .modeSwitchToolTip == "请先在 ChatBird 菜单开启桌面宠物"
+    else {
+        fputs("dynamic island disabled pet mode switch self-test failed\n", stderr)
+        exit(1)
+    }
+    expansionStore.update { $0.petEnabled = true }
     controller.rootControllerForSelfTest().expandCapsuleForSelfTest()
     controller.completeAnimationForSelfTest()
     guard controller.state == .expanded(.tasks),
@@ -461,28 +752,32 @@ private func assertDynamicIslandChromeAccessibility() {
 private func assertDynamicIslandTaskWorkspace() {
     _ = NSApplication.shared
     let now = Date(timeIntervalSince1970: 30_000)
-    let sampleEventCard = NSRect(x: 16, y: 64, width: 450, height: 160)
-    let singleEventFrame = dynamicIslandTaskEventStackFrame(
-        in: sampleEventCard,
-        eventCount: 1
+    let previousDateProvider = dynamicIslandCurrentDate
+    dynamicIslandCurrentDate = { now }
+    defer { dynamicIslandCurrentDate = previousDateProvider }
+    let shortEventHeight = dynamicIslandTaskEventRowHeight(
+        text: "safe event",
+        availableWidth: 360
     )
-    let threeEventFrame = dynamicIslandTaskEventStackFrame(
-        in: sampleEventCard,
-        eventCount: 3
+    let longEventHeight = dynamicIslandTaskEventRowHeight(
+        text: String(repeating: "完整活动内容需要自动换行显示。", count: 12),
+        availableWidth: 360
     )
-    guard singleEventFrame.maxY == sampleEventCard.maxY - 10,
-          singleEventFrame.height == 22,
-          threeEventFrame.maxY == sampleEventCard.maxY - 10,
-          threeEventFrame.height == 74
+    guard shortEventHeight >= 30,
+          longEventHeight > shortEventHeight
     else {
-        fputs("dynamic island task event top alignment self-test failed\n", stderr)
+        fputs("dynamic island task event wrapping self-test failed\n", stderr)
         exit(1)
     }
+    let fullActivityText = String(
+        repeating: "完整活动内容必须保留并通过滚动查看。",
+        count: 180
+    )
     func event(_ index: Int) -> TaskActivityEvent {
         TaskActivityEvent(
             kind: .commentary,
             occurredAt: now.addingTimeInterval(TimeInterval(index)),
-            text: "safe event \(index)"
+            text: index == 5 ? fullActivityText : "safe event \(index)"
         )
     }
     let codexRunning = TaskProgressItem(
@@ -584,8 +879,21 @@ private func assertDynamicIslandTaskWorkspace() {
           controller.accessibilitySnapshotForSelfTest().contains("全部 2"),
           controller.accessibilitySnapshotForSelfTest().contains("运行 1"),
           controller.accessibilitySnapshotForSelfTest().contains("最近事件"),
+          controller.accessibilitySnapshotForSelfTest().contains("开始 "),
+          controller.accessibilitySnapshotForSelfTest().contains("持续 01:30"),
           controller.detailEventTextsForSelfTest()
-              == ["safe event 3", "safe event 4", "safe event 5"],
+              == [
+                  "safe event 1",
+                  "safe event 2",
+                  "safe event 3",
+                  "safe event 4",
+                  fullActivityText,
+              ],
+          controller.currentActivityTextForSelfTest() == fullActivityText,
+          controller.activityScrollerIsEnabledForSelfTest(),
+          controller.eventsScrollerIsEnabledForSelfTest(),
+          controller.visibleProviderIconsAreConcreteForSelfTest(),
+          controller.footerButtonGapForSelfTest() >= 14,
           controller.copyPathForSelfTest() == "/tmp/chatbird",
           controller.openButtonTitleForSelfTest() == "打开 Codex"
     else {
@@ -639,7 +947,7 @@ private func assertDynamicIslandTaskWorkspace() {
     let selectedBeforeHover = controller.selectedTaskKeyForSelfTest()
     controller.showHoverForSelfTest(item: codexRunning)
     guard controller.hoverEventTextsForSelfTest()
-        == ["safe event 3", "safe event 4", "safe event 5"],
+        == ["safe event 3", "safe event 4", fullActivityText],
           controller.selectedTaskKeyForSelfTest() == selectedBeforeHover
     else {
         fputs("dynamic island task hover self-test failed\n", stderr)
@@ -664,6 +972,17 @@ private func assertDynamicIslandTaskWorkspace() {
         snapshot: ActivityDashboardSnapshot(taskCollection: collection),
         state: .expanded(.tasks)
     )
+    let topLevelTabLabels = workspace.topLevelTabLabelsForSelfTest().map {
+        $0.trimmingCharacters(in: .whitespaces)
+    }
+    guard !workspace.sourceFilterIsHiddenForSelfTest(),
+          topLevelTabLabels == ["任务 \(collection.items.count)", "额度"],
+          workspace.selectedTopLevelTabForSelfTest() == 0,
+          !workspace.accessibilitySnapshotForSelfTest().contains("确认")
+    else {
+        fputs("dynamic island task source filter visibility self-test failed\n", stderr)
+        exit(1)
+    }
     workspace.setSourceFilterForSelfTest(.claudeCode)
     guard emittedSourceFilters.last == .claudeCode,
           workspace.taskVisibleKeysForSelfTest() == [
@@ -672,6 +991,33 @@ private func assertDynamicIslandTaskWorkspace() {
           ]
     else {
         fputs("dynamic island task source action self-test failed\n", stderr)
+        exit(1)
+    }
+    workspace.apply(
+        snapshot: ActivityDashboardSnapshot(taskCollection: collection),
+        state: .expanded(.quota)
+    )
+    guard workspace.sourceFilterIsHiddenForSelfTest() else {
+        fputs("dynamic island quota duplicate source filter self-test failed\n", stderr)
+        exit(1)
+    }
+    workspace.apply(
+        snapshot: ActivityDashboardSnapshot(taskCollection: collection),
+        state: .expanded(.confirmation)
+    )
+    guard workspace.sourceFilterIsHiddenForSelfTest(),
+          workspace.selectedTopLevelTabForSelfTest() == nil,
+          !workspace.accessibilitySnapshotForSelfTest().contains("确认")
+    else {
+        fputs("dynamic island transient confirmation navigation self-test failed\n", stderr)
+        exit(1)
+    }
+    workspace.apply(
+        snapshot: ActivityDashboardSnapshot(taskCollection: collection),
+        state: .expanded(.tasks)
+    )
+    guard !workspace.sourceFilterIsHiddenForSelfTest() else {
+        fputs("dynamic island source filter restoration self-test failed\n", stderr)
         exit(1)
     }
 
@@ -824,6 +1170,7 @@ private func assertDynamicIslandQuotaWorkspace() {
           controller.leftPaneWidthForSelfTest() == 228,
           controller.selectedProviderForSelfTest() == .codex,
           controller.providerButtonImagesAreConcreteForSelfTest(),
+          controller.providerButtonIconsUseResourcesForSelfTest(),
           controller.selectedSummaryPercentForSelfTest() == 64,
           controller.detailRowNamesForSelfTest() == ["周额度"],
           controller.detailResetTextsForSelfTest().contains(where: {
@@ -860,7 +1207,10 @@ private func assertDynamicIslandQuotaWorkspace() {
     ))
     guard controller.detailRowNamesForSelfTest() == ["5 小时", "周额度", "Fable"],
           controller.accessibilitySnapshotForSelfTest().contains("Fable 97%"),
-          controller.accessibilitySnapshotForSelfTest().contains("正在更新")
+          controller.accessibilitySnapshotForSelfTest().contains("正在更新"),
+          controller.detailScrollIsConfiguredForSelfTest(),
+          controller.detailLayoutHasNoOverlapForSelfTest(),
+          controller.detailHeadlineIsVisibleForSelfTest()
     else {
         fputs("dynamic island quota claude rows self-test failed\n", stderr)
         exit(1)
@@ -1025,6 +1375,7 @@ private func assertDynamicIslandPreviewRendering() {
         "confirm-plan",
         "quota-codex",
         "quota-claude",
+        "quota-refreshing",
         "quota-loading",
         "quota-stale",
         "quota-first-failure",
@@ -1051,6 +1402,7 @@ private func assertDynamicIslandPreviewRendering() {
         .confirmPlan: dynamicIslandConfirmationSize,
         .quotaCodex: dynamicIslandQuotaSize,
         .quotaClaude: dynamicIslandQuotaSize,
+        .quotaRefreshing: dynamicIslandQuotaSize,
         .quotaLoading: dynamicIslandQuotaSize,
         .quotaStale: dynamicIslandQuotaSize,
         .quotaFirstFailure: dynamicIslandQuotaSize,
@@ -2430,15 +2782,16 @@ func runDynamicIslandSelfTest() -> Never {
             + "capsule-priority=7/7 fake-progress=absent "
             + "activity-sanitizer=pass selected-task-key=preserved "
             + "brand=ChatBird controls=accessible palette=independent "
-            + "fonts=min-12 preview=17-states+2x "
+            + "fonts=min-12 preview=18-states+2x "
             + "collection=full+compact store-observer=pass quota-snapshot=pass "
             + "quota-workspace=left-228+rows+reset-credits "
-            + "quota-phases=6/6 stale-data=preserved "
+            + "quota-phases=6/6 stale-data=preserved+scroll-no-overlap "
+            + "top-tabs=tasks+quota confirmation=transient "
             + "manual-refresh=tasks+all-providers "
             + "window-actions=refresh+hide+provider+copy+detail-ack "
             + "passive-refresh=no-ack "
             + "filters=source+state selection=stable "
-            + "detail-events=3-safe copy-path=absolute-only "
+            + "detail-events=all-safe+scroll current-activity=latest copy-path=absolute-only "
             + "source-action=immediate open-callback=forwarded "
             + "hover=no-selection-change+collapse-hide "
             + "terminal-time=stable "

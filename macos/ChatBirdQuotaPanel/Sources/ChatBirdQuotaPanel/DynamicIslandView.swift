@@ -11,13 +11,29 @@ enum DynamicIslandProgressStyle: Equatable {
     case idle
 }
 
+struct DynamicIslandCapsuleQuotaItem: Equatable {
+    let provider: QuotaProvider
+    let label: String
+    let remainingPercent: Int?
+
+    var valueText: String {
+        remainingPercent.map { "\($0)%" } ?? "--"
+    }
+
+    var summaryText: String {
+        "\(label) \(valueText)"
+    }
+}
+
 struct DynamicIslandCapsulePresentation: Equatable {
     let title: String
     let statusText: String
     let activityText: String?
     let elapsedText: String?
+    let provider: QuotaProvider?
     let providerText: String?
     let badgeText: String?
+    let quotaItems: [DynamicIslandCapsuleQuotaItem]
     let progressStyle: DynamicIslandProgressStyle
     let preferredTab: DynamicIslandTab
     let selectedTaskKey: String?
@@ -26,6 +42,7 @@ struct DynamicIslandCapsulePresentation: Equatable {
 
 struct DynamicIslandCapsuleLayoutSnapshot: Equatable {
     let bounds: NSRect
+    let providerIconFrame: NSRect
     let statusDotFrame: NSRect
     let statusFrame: NSRect
     let titleFrame: NSRect
@@ -42,6 +59,20 @@ struct DynamicIslandCapsuleLayoutSnapshot: Equatable {
     let modeSwitchTitle: String
     let modeSwitchToolTip: String?
     let modeSwitchAccessibilityLabel: String?
+    let providerIconAccessibilityDescription: String?
+    let taskContentIsHidden: Bool
+    let quotaSummaryIsHidden: Bool
+}
+
+struct DynamicIslandCapsuleQuotaSummaryLayoutSnapshot: Equatable {
+    let frame: NSRect
+    let iconFrames: [NSRect]
+    let nameFrames: [NSRect]
+    let valueFrames: [NSRect]
+    let dividerFrame: NSRect
+    let names: [String]
+    let values: [String]
+    let iconAccessibilityDescriptions: [String?]
 }
 
 enum DynamicIslandPalette {
@@ -194,7 +225,7 @@ final class DynamicIslandButton: NSButton {
         focusRingType = .none
         setButtonType(.momentaryChange)
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 10
         layer?.borderWidth = 1
         font = .systemFont(ofSize: 12.5, weight: .medium)
         if let imageName {
@@ -299,7 +330,7 @@ final class DynamicIslandSegmentedControl: NSView {
         accentColors = Array(repeating: DynamicIslandPalette.green, count: labels.count)
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = 11
         layer?.backgroundColor = DynamicIslandPalette.raised.cgColor
         layer?.borderColor = DynamicIslandPalette.hairline.cgColor
         layer?.borderWidth = 1
@@ -315,14 +346,14 @@ final class DynamicIslandSegmentedControl: NSView {
     override func layout() {
         super.layout()
         guard !buttons.isEmpty else { return }
-        let spacing: CGFloat = 2
+        let spacing: CGFloat = 4
         let width = max(1, (bounds.width - spacing * CGFloat(buttons.count + 1)) / CGFloat(buttons.count))
         for (index, button) in buttons.enumerated() {
             button.frame = NSRect(
                 x: spacing + CGFloat(index) * (width + spacing),
-                y: 2,
+                y: 3,
                 width: width,
-                height: max(1, bounds.height - 4)
+                height: max(1, bounds.height - 6)
             )
         }
     }
@@ -346,6 +377,16 @@ final class DynamicIslandSegmentedControl: NSView {
         updateSelectionAppearance()
         setAccessibilityValue("当前 \(labels[index])；" + labels.joined(separator: "，"))
         if notify { onSelectionChange?(index) }
+    }
+
+    func clearSelection() {
+        selectedSegment = -1
+        updateSelectionAppearance()
+        setAccessibilityValue(labels.joined(separator: "，"))
+    }
+
+    func labelsForSelfTest() -> [String] {
+        labels
     }
 
     private func rebuildButtons() {
@@ -384,6 +425,13 @@ func taskElapsedText(from startedAt: Date, to now: Date) -> String {
         return String(format: "%d:%02d:%02d", hours, minutes, seconds)
     }
     return String(format: "%02d:%02d", minutes, seconds)
+}
+
+func taskStartAndDurationText(from startedAt: Date, now: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "HH:mm"
+    let started = formatter.string(from: startedAt)
+    return "\(started) · \(taskElapsedText(from: startedAt, to: now))"
 }
 
 func dynamicIslandSanitizedTaskActivityText(_ text: String?) -> String? {
@@ -440,6 +488,16 @@ func dynamicIslandSanitizedTaskActivityText(_ text: String?) -> String? {
     return sanitized.isEmpty ? nil : sanitized
 }
 
+func dynamicIslandCapsuleContentChoices(
+    for model: DynamicIslandCapsulePresentation
+) -> [String] {
+    guard model.quotaItems.isEmpty else { return [model.title] }
+    guard let activity = dynamicIslandSanitizedTaskActivityText(model.activityText),
+          activity != model.title
+    else { return [model.title] }
+    return [activity, model.title]
+}
+
 func dynamicIslandCapsulePresentation(
     snapshot: ActivityDashboardSnapshot,
     now: Date = Date()
@@ -460,9 +518,12 @@ func dynamicIslandCapsulePresentation(
         _ item: TaskProgressItem,
         style: DynamicIslandProgressStyle
     ) -> DynamicIslandCapsulePresentation {
-        let elapsed = taskElapsedText(from: item.startedAt, to: now)
-        let provider = item.source == .codex ? "Codex" : "Claude Code"
-        let activity = dynamicIslandSanitizedTaskActivityText(item.activityText)
+        let startAndElapsed = taskProgressStartAndDurationText(for: item, now: now)
+        let quotaProvider: QuotaProvider = item.source == .codex ? .codex : .claudeCode
+        let provider = quotaProvider.displayName
+        let activity = dynamicIslandSanitizedTaskActivityText(
+            item.events.last?.text ?? item.activityText
+        )
         let status: String
         switch style {
         case .indeterminate: status = "执行中"
@@ -475,9 +536,11 @@ func dynamicIslandCapsulePresentation(
             title: item.title,
             statusText: status,
             activityText: activity,
-            elapsedText: elapsed,
+            elapsedText: startAndElapsed,
+            provider: quotaProvider,
             providerText: provider,
             badgeText: nil,
+            quotaItems: [],
             progressStyle: style,
             preferredTab: .tasks,
             selectedTaskKey: item.identityKey,
@@ -485,7 +548,7 @@ func dynamicIslandCapsulePresentation(
                 title: item.title,
                 status: status,
                 activity: activity,
-                elapsed: elapsed,
+                elapsed: startAndElapsed,
                 provider: provider,
                 badge: nil
             )
@@ -502,15 +565,17 @@ func dynamicIslandCapsulePresentation(
         case nil: typeText = "请求待确认"
         }
         let title = current?.title ?? "Claude 等待确认"
-        let elapsed = current.map { taskElapsedText(from: $0.arrivedAt, to: now) }
+        let elapsed = current.map { taskStartAndDurationText(from: $0.arrivedAt, now: now) }
         let badge = "\(snapshot.permissionQueue.count)"
         return DynamicIslandCapsulePresentation(
             title: title,
             statusText: "待确认",
             activityText: typeText,
             elapsedText: elapsed,
+            provider: .claudeCode,
             providerText: "Claude Code",
             badgeText: badge,
+            quotaItems: [],
             progressStyle: .waiting,
             preferredTab: .confirmation,
             selectedTaskKey: nil,
@@ -535,6 +600,46 @@ func dynamicIslandCapsulePresentation(
     }) {
         return taskModel(item, style: .indeterminate)
     }
+    if snapshot.codexDesktopRunning
+        || snapshot.availableProviders.contains(.claudeCode)
+    {
+        let quotaItems = [QuotaProvider.codex, .claudeCode].map { provider in
+            let remaining = snapshot.quotaStates[provider]?.rows.first(where: {
+                $0.name == provider.summaryRowName
+            })?.remainingPercent
+            let label = provider == .codex ? "GPT" : "Claude"
+            return DynamicIslandCapsuleQuotaItem(
+                provider: provider,
+                label: label,
+                remainingPercent: remaining
+            )
+        }
+        let activity = quotaItems.map(\.summaryText).joined(separator: " · ")
+        let title = "ChatBird 空闲"
+        let status = "空闲"
+        return DynamicIslandCapsulePresentation(
+            title: title,
+            statusText: status,
+            activityText: activity,
+            elapsedText: nil,
+            provider: nil,
+            providerText: nil,
+            badgeText: nil,
+            quotaItems: quotaItems,
+            progressStyle: .idle,
+            preferredTab: .quota,
+            selectedTaskKey: nil,
+            accessibilityValue: accessibility(
+                title: title,
+                status: status,
+                activity: activity,
+                elapsed: nil,
+                provider: nil,
+                badge: nil
+            )
+        )
+    }
+
     if let item = snapshot.taskCollection.items.first(where: {
         guard $0.kind == .failed,
               let key = terminalTaskAcknowledgementKey(for: $0)
@@ -552,45 +657,15 @@ func dynamicIslandCapsulePresentation(
         return taskModel(item, style: .completed)
     }
 
-    if snapshot.codexDesktopRunning
-        || snapshot.availableProviders.contains(.claudeCode)
-    {
-        let provider = snapshot.selectedQuotaProvider
-        let state = snapshot.quotaStates[provider]
-        let remaining = state?.rows.first(where: {
-            $0.name == provider.summaryRowName
-        })?.remainingPercent
-        let activity = remaining.map { "\($0)% 可用" }
-        let title = "ChatBird 空闲"
-        let status = "空闲"
-        return DynamicIslandCapsulePresentation(
-            title: title,
-            statusText: status,
-            activityText: activity,
-            elapsedText: nil,
-            providerText: provider.displayName,
-            badgeText: nil,
-            progressStyle: .idle,
-            preferredTab: .quota,
-            selectedTaskKey: nil,
-            accessibilityValue: accessibility(
-                title: title,
-                status: status,
-                activity: activity,
-                elapsed: nil,
-                provider: provider.displayName,
-                badge: nil
-            )
-        )
-    }
-
     return DynamicIslandCapsulePresentation(
         title: "Codex 已退出",
         statusText: "离线",
         activityText: nil,
         elapsedText: nil,
+        provider: nil,
         providerText: nil,
         badgeText: nil,
+        quotaItems: [],
         progressStyle: .idle,
         preferredTab: .tasks,
         selectedTaskKey: nil,
@@ -724,6 +799,7 @@ final class DynamicIslandRootViewController: NSViewController {
             now: dynamicIslandCurrentDate()
         )
         capsuleController.apply(model)
+        capsuleController.setPetPanelAvailable(snapshot.petEnabled)
         workspaceController.selectedTaskKey = selectedTaskKey
         workspaceController.apply(snapshot: snapshot, state: state)
 
@@ -755,6 +831,15 @@ final class DynamicIslandRootViewController: NSViewController {
         capsuleController.view.needsLayout = true
         capsuleController.view.layoutSubtreeIfNeeded()
         return capsuleController.layoutSnapshotForSelfTest()
+    }
+
+    func capsuleQuotaSummaryLayoutSnapshotForSelfTest()
+        -> DynamicIslandCapsuleQuotaSummaryLayoutSnapshot
+    {
+        _ = view
+        capsuleController.view.needsLayout = true
+        capsuleController.view.layoutSubtreeIfNeeded()
+        return capsuleController.quotaSummaryLayoutSnapshotForSelfTest()
     }
 
     func setSelectedTaskKey(_ selectedTaskKey: String?) {
@@ -843,6 +928,138 @@ final class DynamicIslandRootViewController: NSViewController {
     }
 }
 
+final class DynamicIslandCapsuleQuotaSummaryView: NSView {
+    private let iconViews = [NSImageView(), NSImageView()]
+    private let nameFields = [
+        DynamicIslandLabel(size: 12, weight: .medium),
+        DynamicIslandLabel(size: 12, weight: .medium),
+    ]
+    private let valueFields = [
+        DynamicIslandLabel(size: 13, weight: .semibold, monospaced: true),
+        DynamicIslandLabel(size: 13, weight: .semibold, monospaced: true),
+    ]
+    private let dividerView = DynamicIslandDividerView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityElement(false)
+        for index in iconViews.indices {
+            let iconView = iconViews[index]
+            iconView.imageScaling = .scaleProportionallyDown
+            iconView.setAccessibilityElement(false)
+            addSubview(iconView)
+
+            let nameField = nameFields[index]
+            nameField.textColor = DynamicIslandPalette.secondaryText
+            nameField.setAccessibilityElement(false)
+            addSubview(nameField)
+
+            let valueField = valueFields[index]
+            valueField.textColor = DynamicIslandPalette.primaryText
+            valueField.alignment = .right
+            valueField.setAccessibilityElement(false)
+            addSubview(valueField)
+        }
+        addSubview(dividerView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        let iconWidth: CGFloat = 20
+        let itemSpacing: CGFloat = 8
+        let nameWidths: [CGFloat] = [30, 52]
+        let valueWidth: CGFloat = 42
+        let dividerWidth: CGFloat = 1
+        let dividerHeight: CGFloat = 14
+        let componentHeight: CGFloat = 20
+        let centerY = bounds.midY
+        let componentY = centerY - componentHeight / 2
+        let dividerX = bounds.midX - dividerWidth / 2
+        dividerView.frame = NSRect(
+            x: dividerX,
+            y: centerY - dividerHeight / 2,
+            width: dividerWidth,
+            height: dividerHeight
+        )
+
+        let columns: [(location: CGFloat, length: CGFloat)] = [
+            (location: 0, length: dividerX),
+            (
+                location: dividerX + dividerWidth,
+                length: bounds.width - dividerX - dividerWidth
+            ),
+        ]
+        for index in iconViews.indices {
+            let groupWidth = iconWidth
+                + itemSpacing
+                + nameWidths[index]
+                + itemSpacing
+                + valueWidth
+            let columnMidX = columns[index].location + columns[index].length / 2
+            let groupX = ((columnMidX - groupWidth / 2) * 2).rounded() / 2
+            iconViews[index].frame = NSRect(
+                x: groupX,
+                y: componentY,
+                width: iconWidth,
+                height: componentHeight
+            )
+            nameFields[index].frame = NSRect(
+                x: groupX + iconWidth + itemSpacing,
+                y: componentY,
+                width: nameWidths[index],
+                height: componentHeight
+            )
+            valueFields[index].frame = NSRect(
+                x: groupX
+                    + iconWidth
+                    + itemSpacing
+                    + nameWidths[index]
+                    + itemSpacing,
+                y: componentY,
+                width: valueWidth,
+                height: componentHeight
+            )
+        }
+    }
+
+    func apply(_ items: [DynamicIslandCapsuleQuotaItem]) {
+        let providers = [QuotaProvider.codex, .claudeCode]
+        for (index, provider) in providers.enumerated() {
+            let item = items.first { $0.provider == provider }
+            iconViews[index].image = providerIconImage(for: provider)
+            nameFields[index].stringValue = item?.label
+                ?? (provider == .codex ? "GPT" : "Claude")
+            valueFields[index].stringValue = item?.valueText ?? "--"
+            valueFields[index].textColor = item?.remainingPercent == nil
+                ? DynamicIslandPalette.tertiaryText
+                : DynamicIslandPalette.primaryText
+        }
+        needsLayout = true
+    }
+
+    func layoutSnapshotForSelfTest() -> DynamicIslandCapsuleQuotaSummaryLayoutSnapshot {
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        return DynamicIslandCapsuleQuotaSummaryLayoutSnapshot(
+            frame: frame,
+            iconFrames: iconViews.map(\.frame),
+            nameFrames: nameFields.map(\.frame),
+            valueFrames: valueFields.map(\.frame),
+            dividerFrame: dividerView.frame,
+            names: nameFields.map(\.stringValue),
+            values: valueFields.map(\.stringValue),
+            iconAccessibilityDescriptions: iconViews.map {
+                $0.image?.accessibilityDescription
+            }
+        )
+    }
+}
+
 final class DynamicIslandCapsuleViewController: NSViewController {
     var onExpand: ((DynamicIslandTab, String?) -> Void)?
     var onDragEnded: ((NSPoint) -> Void)?
@@ -852,6 +1069,7 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         cornerRadius: 29,
         showsHairline: true
     )
+    private let providerIconView = NSImageView()
     private let statusDotView = NSView()
     private let statusField = DynamicIslandLabel(size: 12, weight: .medium)
     private let titleField = DynamicIslandLabel(size: 14, weight: .semibold)
@@ -860,6 +1078,7 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         weight: .medium,
         monospaced: true
     )
+    private let quotaSummaryView = DynamicIslandCapsuleQuotaSummaryView()
     private let chevronView = NSImageView()
     private let hitTargetButton = DynamicIslandCapsuleHitTargetButton(
         title: "",
@@ -871,6 +1090,10 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         style: .secondary
     )
     private var model: DynamicIslandCapsulePresentation?
+    private var contentChoices: [String] = []
+    private var contentChoiceIndex = 0
+    private var contentRotationTimer: Timer?
+    private var petPanelAvailable = true
 
     var hitTargetFrameForSelfTest: NSRect { hitTargetButton.frame }
 
@@ -878,6 +1101,7 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         view = NSView(frame: NSRect(origin: .zero, size: dynamicIslandCapsuleSize))
         view.addSubview(backgroundView)
         for subview in [
+            providerIconView,
             statusDotView,
             statusField,
             titleField,
@@ -887,10 +1111,13 @@ final class DynamicIslandCapsuleViewController: NSViewController {
             view.addSubview(subview)
             subview.setAccessibilityElement(false)
         }
+        view.addSubview(quotaSummaryView)
+        quotaSummaryView.isHidden = true
         view.addSubview(hitTargetButton)
         view.addSubview(modeSwitchButton)
 
         statusDotView.wantsLayer = true
+        providerIconView.imageScaling = .scaleProportionallyDown
         statusField.textColor = DynamicIslandPalette.secondaryText
         elapsedField.textColor = DynamicIslandPalette.secondaryText
 
@@ -929,13 +1156,18 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         modeSwitchButton.toolTip = "切换到宠物面板"
     }
 
+    deinit {
+        contentRotationTimer?.invalidate()
+    }
+
     override func viewDidLayout() {
         super.viewDidLayout()
         backgroundView.frame = view.bounds
         let centerY = view.bounds.midY
-        statusDotView.frame = NSRect(x: 22, y: centerY - 5, width: 10, height: 10)
-        statusDotView.layer?.cornerRadius = 5
-        statusField.frame = NSRect(x: 42, y: centerY - 10, width: 58, height: 20)
+        providerIconView.frame = NSRect(x: 18, y: centerY - 10, width: 20, height: 20)
+        statusDotView.frame = NSRect(x: 46, y: centerY - 4, width: 8, height: 8)
+        statusDotView.layer?.cornerRadius = 4
+        statusField.frame = NSRect(x: 62, y: centerY - 10, width: 48, height: 20)
 
         let modeSwitchFrame = NSRect(
             x: max(0, view.bounds.width - 64),
@@ -945,22 +1177,28 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         )
         modeSwitchButton.frame = modeSwitchFrame
         let chevronFrame = NSRect(
-            x: max(0, modeSwitchFrame.minX - 18),
+            x: max(0, modeSwitchFrame.minX - 14),
             y: centerY - 8,
             width: 8,
             height: 16
         )
         chevronView.frame = chevronFrame
         elapsedField.frame = NSRect(
-            x: max(0, chevronFrame.minX - 50),
+            x: max(0, modeSwitchFrame.minX - 112),
             y: centerY - 10,
-            width: 40,
+            width: 96,
+            height: 20
+        )
+        quotaSummaryView.frame = NSRect(
+            x: 18,
+            y: centerY - 10,
+            width: 286,
             height: 20
         )
         titleField.frame = NSRect(
-            x: 116,
+            x: 120,
             y: centerY - 11,
-            width: max(0, elapsedField.frame.minX - 128),
+            width: max(0, elapsedField.frame.minX - 132),
             height: 22
         )
         hitTargetButton.frame = NSRect(
@@ -974,15 +1212,53 @@ final class DynamicIslandCapsuleViewController: NSViewController {
     func apply(_ model: DynamicIslandCapsulePresentation) {
         _ = view
         self.model = model
-        titleField.stringValue = model.title
+        let showsQuotaSummary = !model.quotaItems.isEmpty
+        let nextChoices = dynamicIslandCapsuleContentChoices(for: model)
+        let contentChanged = contentChoices != nextChoices
+        if contentChanged {
+            contentChoices = nextChoices
+            contentChoiceIndex = 0
+        }
+        renderCurrentContentChoice()
+        if contentChanged || contentRotationTimer == nil {
+            updateContentRotationTimer()
+        }
         statusField.stringValue = model.statusText
         elapsedField.stringValue = model.elapsedText ?? ""
-        titleField.toolTip = model.title
+        titleField.toolTip = [model.title, model.activityText]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+        providerIconView.image = model.provider.flatMap {
+            providerIconImage(for: $0)
+        }
+        quotaSummaryView.apply(model.quotaItems)
+        quotaSummaryView.isHidden = !showsQuotaSummary
+        providerIconView.isHidden = showsQuotaSummary || model.provider == nil
+        statusDotView.isHidden = showsQuotaSummary
+        statusField.isHidden = showsQuotaSummary
+        titleField.isHidden = showsQuotaSummary
+        elapsedField.isHidden = showsQuotaSummary
         statusDotView.layer?.backgroundColor = statusColor(for: model).cgColor
 
-        let accessibilityLabel = "\(model.title)，\(model.statusText)"
+        let accessibilityLabel = showsQuotaSummary
+            ? "GPT 和 Claude 额度"
+            : "\(model.title)，\(model.statusText)"
         hitTargetButton.setAccessibilityLabel(accessibilityLabel)
         hitTargetButton.setAccessibilityValue(model.accessibilityValue)
+    }
+
+    func setPetPanelAvailable(_ available: Bool) {
+        _ = view
+        petPanelAvailable = available
+        modeSwitchButton.isEnabled = available
+        modeSwitchButton.toolTip = available
+            ? "切换到宠物面板"
+            : "请先在 ChatBird 菜单开启桌面宠物"
+        modeSwitchButton.setAccessibilityHelp(
+            available
+                ? "关闭灵动岛并显示宠物面板"
+                : "宠物面板不可用；请先在 ChatBird 菜单开启桌面宠物"
+        )
     }
 
     @objc private func expandFromButton() {
@@ -991,6 +1267,7 @@ final class DynamicIslandCapsuleViewController: NSViewController {
     }
 
     @objc private func requestPetPanel() {
+        guard petPanelAvailable else { return }
         onRequestPetPanel?()
     }
 
@@ -1006,10 +1283,36 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         modeSwitchButton.performClick(nil)
     }
 
+    private func updateContentRotationTimer() {
+        contentRotationTimer?.invalidate()
+        contentRotationTimer = nil
+        guard contentChoices.count > 1 else { return }
+        let timer = Timer(timeInterval: 3.6, repeats: true) { [weak self] _ in
+            self?.advanceContentChoice()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        contentRotationTimer = timer
+    }
+
+    private func advanceContentChoice() {
+        guard !contentChoices.isEmpty else { return }
+        contentChoiceIndex = (contentChoiceIndex + 1) % contentChoices.count
+        renderCurrentContentChoice()
+    }
+
+    private func renderCurrentContentChoice() {
+        guard contentChoices.indices.contains(contentChoiceIndex) else {
+            titleField.stringValue = model?.title ?? ""
+            return
+        }
+        titleField.stringValue = contentChoices[contentChoiceIndex]
+    }
+
     func layoutSnapshotForSelfTest() -> DynamicIslandCapsuleLayoutSnapshot {
         let buttons = view.subviews.compactMap { $0 as? NSButton }
         return DynamicIslandCapsuleLayoutSnapshot(
             bounds: view.bounds,
+            providerIconFrame: providerIconView.frame,
             statusDotFrame: statusDotView.frame,
             statusFrame: statusField.frame,
             titleFrame: titleField.frame,
@@ -1027,8 +1330,22 @@ final class DynamicIslandCapsuleViewController: NSViewController {
             modeSwitchTitle: modeSwitchButton.title,
             modeSwitchToolTip: modeSwitchButton.toolTip,
             modeSwitchAccessibilityLabel:
-                modeSwitchButton.accessibilityLabel() as? String
+                modeSwitchButton.accessibilityLabel() as? String,
+            providerIconAccessibilityDescription:
+                providerIconView.image?.accessibilityDescription,
+            taskContentIsHidden: providerIconView.isHidden
+                && statusDotView.isHidden
+                && statusField.isHidden
+                && titleField.isHidden
+                && elapsedField.isHidden,
+            quotaSummaryIsHidden: quotaSummaryView.isHidden
         )
+    }
+
+    func quotaSummaryLayoutSnapshotForSelfTest()
+        -> DynamicIslandCapsuleQuotaSummaryLayoutSnapshot
+    {
+        quotaSummaryView.layoutSnapshotForSelfTest()
     }
 
     private func statusColor(for model: DynamicIslandCapsulePresentation) -> NSColor {
@@ -1064,7 +1381,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     )
     private let titleField = DynamicIslandLabel(size: 15, weight: .semibold)
     private let tabs = DynamicIslandSegmentedControl(
-        labels: ["任务", "确认", "额度"]
+        labels: ["任务", "额度"]
     )
     private let sourceFilter = DynamicIslandSegmentedControl(
         labels: ["全部", "Codex", "Claude"]
@@ -1125,8 +1442,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         }
         tabs.setAccessibilityLabel("活动分页")
         tabs.setAccentColor(DynamicIslandPalette.green, forSegment: 0)
-        tabs.setAccentColor(DynamicIslandPalette.amber, forSegment: 1)
-        tabs.setAccentColor(DynamicIslandPalette.green, forSegment: 2)
+        tabs.setAccentColor(DynamicIslandPalette.green, forSegment: 1)
 
         sourceFilter.onSelectionChange = { [weak self] index in
             self?.sourceChanged(index: index)
@@ -1148,11 +1464,11 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         hideButton.action = #selector(hide)
         hideButton.setAccessibilityLabel("隐藏灵动岛")
         hideButton.setAccessibilityHelp(
-            "隐藏后可按 \(chatBirdVisibilityHotKeyDisplayName) 重新显示"
+            "隐藏后可点击菜单栏或 Dock 中的 ChatBird，或按 \(chatBirdVisibilityHotKeyDisplayName) 重新显示"
         )
-        hideButton.toolTip = "隐藏灵动岛（\(chatBirdVisibilityHotKeyDisplayName) 可恢复）"
+        hideButton.toolTip = "隐藏灵动岛（菜单栏、Dock 或 \(chatBirdVisibilityHotKeyDisplayName) 可恢复）"
 
-        placeholderField.stringValue = "任务、确认和额度详情将在后续任务接入"
+        placeholderField.stringValue = "任务与额度详情"
         placeholderField.setAccessibilityLabel("共享展开工作台内容")
         statusField.setAccessibilityLabel("当前活动状态")
         taskController.onOpenTask = { [weak self] item in
@@ -1181,8 +1497,8 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         let width = view.bounds.width
         let height = view.bounds.height
         titleField.frame = NSRect(x: 22, y: height - 39, width: 118, height: 22)
-        tabs.frame = NSRect(x: 146, y: height - 44, width: 240, height: 32)
-        sourceFilter.frame = NSRect(x: 424, y: height - 44, width: 214, height: 32)
+        tabs.frame = NSRect(x: 146, y: height - 44, width: 160, height: 32)
+        sourceFilter.frame = NSRect(x: 324, y: height - 44, width: 214, height: 32)
         refreshButton.frame = NSRect(x: width - 134, y: height - 44, width: 32, height: 32)
         collapseButton.frame = NSRect(x: width - 92, y: height - 44, width: 32, height: 32)
         hideButton.frame = NSRect(x: width - 50, y: height - 44, width: 32, height: 32)
@@ -1231,20 +1547,17 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         } else {
             activeTab = .tasks
         }
+        sourceFilter.isHidden = activeTab != .tasks
         tabs.setLabel(
             "  任务 \(taskCount)",
             forSegment: 0
         )
         tabs.setLabel(
-            "  确认 \(confirmationCount)",
+            "  额度",
             forSegment: 1
         )
-        tabs.setLabel(
-            "  额度",
-            forSegment: 2
-        )
         tabs.setAccessibilityValue(
-            "任务 \(taskCount)，确认 \(confirmationCount)，额度"
+            "任务 \(taskCount)，额度"
         )
         sourceFilter.setLabel(
             "  全部",
@@ -1258,7 +1571,11 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             "  Claude",
             forSegment: 2
         )
-        tabs.selectSegment(tabSegmentIndex(for: state))
+        if let segmentIndex = tabSegmentIndex(for: state) {
+            tabs.selectSegment(segmentIndex)
+        } else {
+            tabs.clearSelection()
+        }
         sourceFilter.selectSegment(sourceSegmentIndex(for: currentSourceFilter))
         sourceFilter.setAccessibilityValue(
             "当前来源筛选 \(sourceFilterName(currentSourceFilter))，全部，Codex，Claude"
@@ -1316,12 +1633,12 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         }
     }
 
-    private func tabSegmentIndex(for state: DynamicIslandPresentationState) -> Int {
+    private func tabSegmentIndex(for state: DynamicIslandPresentationState) -> Int? {
         guard case .expanded(let tab) = state else { return 0 }
         switch tab {
         case .tasks: return 0
-        case .confirmation: return 1
-        case .quota: return 2
+        case .confirmation: return nil
+        case .quota: return 1
         }
     }
 
@@ -1346,7 +1663,9 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         return [
             titleField.accessibilityLabel(),
             tabs.accessibilityValue() as? String,
-            sourceFilter.accessibilityValue() as? String,
+            sourceFilter.isHidden
+                ? nil
+                : sourceFilter.accessibilityValue() as? String,
             refreshButton.accessibilityLabel(),
             collapseButton.accessibilityLabel(),
             hideButton.accessibilityLabel(),
@@ -1355,8 +1674,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
 
     private func tabChanged(index: Int) {
         switch index {
-        case 1: onTabChange?(.confirmation)
-        case 2: onTabChange?(.quota)
+        case 1: onTabChange?(.quota)
         default: onTabChange?(.tasks)
         }
     }
@@ -1469,6 +1787,21 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
 
     func taskVisibleKeysForSelfTest() -> [String] {
         taskController.visibleTaskKeysForSelfTest()
+    }
+
+    func sourceFilterIsHiddenForSelfTest() -> Bool {
+        _ = view
+        return sourceFilter.isHidden
+    }
+
+    func topLevelTabLabelsForSelfTest() -> [String] {
+        _ = view
+        return tabs.labelsForSelfTest()
+    }
+
+    func selectedTopLevelTabForSelfTest() -> Int? {
+        _ = view
+        return tabs.selectedSegment >= 0 ? tabs.selectedSegment : nil
     }
 
     func quotaAccessibilitySnapshotForSelfTest() -> String {

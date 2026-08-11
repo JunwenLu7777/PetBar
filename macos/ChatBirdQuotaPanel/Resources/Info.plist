@@ -5,25 +5,25 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>zh_CN</string>
   <key>CFBundleDisplayName</key>
-  <string>ChatBird 额度面板</string>
+  <string>ChatBird</string>
   <key>CFBundleExecutable</key>
-  <string>ChatBirdQuotaPanel</string>
+  <string>ChatBird</string>
   <key>CFBundleIdentifier</key>
-  <string>dev.chatbird.codex-quota-panel</string>
+  <string>dev.chatbird.app</string>
+  <key>CFBundleIconFile</key>
+  <string>ChatBird.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>ChatBird 额度面板</string>
+  <string>ChatBird</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0.0</string>
+  <string>1.1.0</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>2</string>
   <key>LSMinimumSystemVersion</key>
   <string>12.3</string>
-  <key>LSUIElement</key>
-  <true/>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSAppleEventsUsageDescription</key>

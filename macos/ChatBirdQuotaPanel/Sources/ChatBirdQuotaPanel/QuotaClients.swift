@@ -764,7 +764,7 @@ final class ClaudeQuotaClient {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Caches", isDirectory: true)
             .appendingPathComponent(
-                "dev.chatbird.codex-quota-panel",
+                chatBirdBundleIdentifier,
                 isDirectory: true
             )
             .appendingPathComponent("ClaudeProbe", isDirectory: true)

@@ -15,45 +15,35 @@ import Darwin
 import Foundation
 
 func runTaskProgressSelfTestPhase2(now: Date, started: String) {
-    let desktopSelectionInput = [
-        "# keep leading comment",
-        #"selected-avatar-id = "outside-desktop""#,
-        "",
-        "[desktop] # existing desktop settings",
-        "  # keep nearby comment",
-        #"  selected-avatar-id = "other-avatar" # inline note"#,
-        "",
-        "[desktop.window]",
-        #"selected-avatar-id = "nested-desktop-value""#,
-        "",
-        "[other]",
-        #"selected-avatar-id = "other-section-value""#,
-        "",
-    ].joined(separator: "\r\n")
-    let desktopSelectionOutput =
-        ChatBirdPetSelectionStore.updatingDesktopSelection(
-            in: desktopSelectionInput,
-            avatarID: chatBirdPetAvatarID
-        )
-    guard desktopSelectionOutput.contains("\r\n"),
-          desktopSelectionOutput.contains(
-              #"selected-avatar-id = "outside-desktop""#
-          ),
-          desktopSelectionOutput.contains(
-              #"selected-avatar-id = "nested-desktop-value""#
-          ),
-          desktopSelectionOutput.contains(
-              #"selected-avatar-id = "other-section-value""#
-          ),
-          desktopSelectionOutput.contains(
-              #"  selected-avatar-id = "\#(chatBirdPetAvatarID)" # inline note"#
-          ),
-          ChatBirdPetSelectionStore.updatingDesktopSelection(
-              in: desktopSelectionOutput,
-              avatarID: chatBirdPetAvatarID
-          ) == desktopSelectionOutput
+    let preferenceSuite = "chatbird-task-progress-phase2-\(UUID().uuidString)"
+    guard let migratedDefaults = UserDefaults(suiteName: preferenceSuite) else {
+        exit(1)
+    }
+    defer { migratedDefaults.removePersistentDomain(forName: preferenceSuite) }
+    let migratedKeys = migrateLegacyChatBirdPreferences(
+        from: [
+            "presentation-mode": PresentationMode.dynamicIsland.rawValue,
+            "pet-enabled": false,
+            "selected-quota-provider": QuotaProvider.claudeCode.rawValue,
+            "chatbird-pet-origin": [32.0, 64.0],
+            "selected-avatar-id": "custom:legacy-chatbird",
+        ],
+        to: migratedDefaults
+    )
+    guard chatBirdBundleIdentifier == "dev.chatbird.app",
+          chatBirdLaunchAgentLabel == chatBirdBundleIdentifier,
+          Set(migratedKeys) == [
+              "presentation-mode",
+              "pet-enabled",
+              "selected-quota-provider",
+              "chatbird-pet-origin",
+          ],
+          migratedDefaults.string(forKey: "selected-avatar-id") == nil,
+          PresentationModePreference(defaults: migratedDefaults).mode == .dynamicIsland,
+          !PetEnabledPreference(defaults: migratedDefaults).isEnabled,
+          QuotaProviderPreference(defaults: migratedDefaults).selectedProvider == .claudeCode
     else {
-        fputs("desktop selection TOML preservation failed\n", stderr)
+        fputs("standalone preference migration scope failed\n", stderr)
         exit(1)
     }
 
@@ -66,10 +56,42 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
         !CodexTaskProgressReader.isUserVisibleSessionMetadata(line: subagentMetadata),
         !CodexTaskProgressReader.isUserVisibleSessionMetadata(line: automationMetadata),
         !CodexTaskProgressReader.isUserVisibleSessionMetadata(line: sourceOnlySubagentMetadata),
+        CodexTaskProgressReader.isUserVisibleSessionMetadata(
+            line: subagentMetadata,
+            explicitlyVisible: true
+        ),
+        !CodexTaskProgressReader.isUserVisibleSessionMetadata(
+            line: automationMetadata,
+            explicitlyVisible: true
+        ),
         CodexTaskProgressReader.isUserVisibleSessionMetadata(line: started),
     ]
     guard rolloutVisibilityCases.allSatisfy({ $0 }) else {
         fputs("task non-user session filtering failed\n", stderr)
+        exit(1)
+    }
+
+    let pinnedID = "12345678-1234-4abc-8def-1234567890ab"
+    let projectlessID = "22345678-1234-4abc-8def-1234567890ab"
+    let assignedID = "32345678-1234-4abc-8def-1234567890ab"
+    let stateFixture: [String: Any] = [
+        "pinned-thread-ids": [pinnedID.uppercased()],
+        "projectless-thread-ids": [projectlessID],
+        "thread-project-assignments": [assignedID: "project"],
+        "electron-persisted-atom-state": [
+            "unread-thread-ids-by-host-v1": ["local": [assignedID]],
+        ],
+    ]
+    guard let stateData = try? JSONSerialization.data(withJSONObject: stateFixture),
+          let threadState = CodexTaskProgressReader.threadState(from: stateData),
+          threadState.ids == [assignedID],
+          threadState.explicitlyVisibleIDs == [
+              pinnedID,
+              projectlessID,
+              assignedID,
+          ]
+    else {
+        fputs("Codex explicit user-visible thread state parsing failed\n", stderr)
         exit(1)
     }
 
