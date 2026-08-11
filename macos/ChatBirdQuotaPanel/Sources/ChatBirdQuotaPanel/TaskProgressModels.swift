@@ -60,6 +60,7 @@ struct TaskProgressItem: Equatable {
     let workingDirectory: String?
     let processID: Int32?
     let processStartIdentity: String?
+    let events: [TaskActivityEvent]
 
     init(
         title: String,
@@ -73,7 +74,8 @@ struct TaskProgressItem: Equatable {
         sessionID: String? = nil,
         workingDirectory: String? = nil,
         processID: Int32? = nil,
-        processStartIdentity: String? = nil
+        processStartIdentity: String? = nil,
+        events: [TaskActivityEvent] = []
     ) {
         self.title = title
         self.kind = kind
@@ -84,9 +86,10 @@ struct TaskProgressItem: Equatable {
         self.statusOverride = statusOverride
         self.threadID = threadID
         self.sessionID = sessionID
-        self.workingDirectory = workingDirectory
+        self.workingDirectory = workingDirectory.flatMap(normalizedAbsolutePath)
         self.processID = processID
         self.processStartIdentity = processStartIdentity
+        self.events = events
     }
 
     var statusText: String {
@@ -296,32 +299,7 @@ struct TaskProgressSnapshot: Equatable {
     )])
 
     static func displaying(_ sourceItems: [TaskProgressItem]) -> TaskProgressSnapshot {
-        guard !sourceItems.isEmpty else { return .idle }
-
-        // Recurring Codex tasks create a new thread on every run. Multiple
-        // rows with the same title are indistinguishable in this compact view,
-        // so show the highest-priority/newest sorted instance only.
-        let sorted = sourceItems.sorted {
-            if $0.updatedAt == $1.updatedAt { return $0.title < $1.title }
-            return $0.updatedAt > $1.updatedAt
-        }
-        var seenTitles = Set<String>()
-        let deduplicated = sorted.filter { item in
-            seenTitles.insert(item.deduplicationKey).inserted
-        }
-        guard !deduplicated.isEmpty else { return .idle }
-
-        let active = deduplicated.filter(\.kind.isActive)
-        if active.count > maximumVisibleTaskRows {
-            return TaskProgressSnapshot(items: active, isScrollable: true)
-        }
-
-        let terminal = deduplicated.filter {
-            $0.kind == .completed || $0.kind == .failed
-        }
-        let rows = Array((active + terminal).prefix(maximumVisibleTaskRows))
-        guard !rows.isEmpty else { return .idle }
-        return TaskProgressSnapshot(items: rows)
+        TaskProgressCollectionSnapshot.displaying(sourceItems).compactProjection()
     }
 }
 
@@ -367,12 +345,92 @@ func taskActivityParagraph(from text: String) -> String? {
     return paragraph.isEmpty ? nil : paragraph
 }
 
+func safePublicActivityParagraph(from text: String) -> String? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let data = trimmed.data(using: .utf8),
+       let value = try? JSONSerialization.jsonObject(with: data),
+       value is [String: Any] || value is [Any]
+    {
+        return nil
+    }
+
+    guard var paragraph = taskActivityParagraph(from: text) else { return nil }
+    if paragraph.range(
+        of: #"-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----"#,
+        options: [.regularExpression, .caseInsensitive]
+    ) != nil {
+        return nil
+    }
+
+    let redactions: [(pattern: String, replacement: String)] = [
+        (
+            #"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"#,
+            "Bearer [已隐藏]"
+        ),
+        (
+            #"(?i)\b(api[\s_-]*key|access[\s_-]*token|refresh[\s_-]*token|client[\s_-]*secret|password|private[\s_-]*key)\b\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"#,
+            "$1=[已隐藏]"
+        ),
+        (
+            #"(?i)\bsk-[A-Za-z0-9_-]{8,}\b"#,
+            "[已隐藏]"
+        ),
+        (
+            #"(?i)\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"#,
+            "[已隐藏]"
+        ),
+        (
+            #"(?i)\bxox[baprs]-[A-Za-z0-9-]{10,}\b"#,
+            "[已隐藏]"
+        ),
+        (
+            #"(?i)\bAKIA[0-9A-Z]{16}\b"#,
+            "[已隐藏]"
+        ),
+        (
+            #"(?i)(https?://)[^/\s:@]+:[^@\s/]+@"#,
+            "$1[已隐藏]@"
+        ),
+    ]
+    for redaction in redactions {
+        paragraph = paragraph.replacingOccurrences(
+            of: redaction.pattern,
+            with: redaction.replacement,
+            options: .regularExpression
+        )
+    }
+    return paragraph
+}
+
 func appendingTaskActivityParagraph(
     _ fragment: String,
     to current: String
 ) -> String {
     let combined = current.isEmpty ? fragment : "\(current) \(fragment)"
     return String(combined.suffix(maximumTaskActivityCharacters))
+}
+
+func appendingTaskActivityEvent(
+    _ event: TaskActivityEvent,
+    to events: [TaskActivityEvent],
+    limit: Int = 3,
+    maximumCharacters: Int = 280
+) -> [TaskActivityEvent] {
+    guard limit > 0, maximumCharacters > 0 else { return [] }
+    let boundedEvent = TaskActivityEvent(
+        kind: event.kind,
+        occurredAt: event.occurredAt,
+        text: String(event.text.prefix(maximumCharacters))
+    )
+    var next = events.filter {
+        !($0.kind == boundedEvent.kind && $0.text == boundedEvent.text)
+    }
+    next.append(boundedEvent)
+    next.sort {
+        if $0.occurredAt == $1.occurredAt { return $0.text < $1.text }
+        return $0.occurredAt < $1.occurredAt
+    }
+    return Array(next.suffix(limit))
 }
 
 func taskActivityVisibleTailText(

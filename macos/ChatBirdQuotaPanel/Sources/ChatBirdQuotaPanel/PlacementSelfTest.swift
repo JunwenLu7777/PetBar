@@ -91,6 +91,45 @@ func runPlacementSelfTest() -> Never {
         }
     }
 
+    let fallbackFrame = detachedPanelFrame(
+        panelSize: expandedPanelSize,
+        screenVisibleFrame: NSRect(x: -1_920, y: -98, width: 1_920, height: 1_080)
+    )
+    guard fallbackFrame == NSRect(x: -396, y: 744, width: 388, height: 226),
+          fallbackFrame.minX >= -1_920 + panelScreenMargin,
+          fallbackFrame.maxX == -panelScreenMargin,
+          fallbackFrame.maxY <= -98 + 1_080 - panelScreenMargin
+    else {
+        fputs("detached panel fallback placement failed: \(fallbackFrame)\n", stderr)
+        exit(1)
+    }
+
+    let narrowFallbackFrame = detachedPanelFrame(
+        panelSize: expandedPanelSize,
+        screenVisibleFrame: NSRect(x: 400, y: 50, width: 360, height: 210)
+    )
+    guard narrowFallbackFrame.origin == NSPoint(x: 408, y: 58) else {
+        fputs("detached panel narrow-screen clamp failed: \(narrowFallbackFrame)\n", stderr)
+        exit(1)
+    }
+
+    guard !shouldUseStoredPetPosition(
+        overlayOpen: false,
+        allowClosedOverlay: false
+    ),
+          shouldUseStoredPetPosition(
+              overlayOpen: false,
+              allowClosedOverlay: true
+          ),
+          shouldUseStoredPetPosition(
+              overlayOpen: nil,
+              allowClosedOverlay: false
+          )
+    else {
+        fputs("closed-pet saved-position eligibility failed\n", stderr)
+        exit(1)
+    }
+
     let pixelWidth = 360
     let pixelHeight = 320
     let expectedPetBounds = CGRect(x: 128, y: 118, width: 105, height: 188)

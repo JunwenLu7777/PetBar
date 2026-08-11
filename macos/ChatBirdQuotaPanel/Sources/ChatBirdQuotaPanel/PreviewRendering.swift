@@ -14,37 +14,50 @@ import Foundation
 
 func renderPreviewOnce(to outputPath: String) -> Never {
     _ = NSApplication.shared
+    let previewNow = Date(timeIntervalSince1970: 1_786_354_140)
     var previewTaskTemplates = [
-        TaskProgressItem(title: "制作 ChatBird 宠物", kind: .running, startedAt: Date()),
-        TaskProgressItem(title: "等待确认视觉方向", kind: .waitingForInput, startedAt: Date()),
+        TaskProgressItem(title: "制作 ChatBird 宠物", kind: .running, startedAt: previewNow),
+        TaskProgressItem(
+            title: "等待确认视觉方向",
+            kind: .waitingForInput,
+            startedAt: previewNow
+        ),
         TaskProgressItem(
             title: "检查 Claude 运行结果",
             kind: .running,
-            startedAt: Date(),
+            startedAt: previewNow,
             source: .claudeCode,
             sessionID: "b687a9ef-4535-4bb4-a9d5-e692bbcdb0a6",
             workingDirectory: "/tmp"
         ),
-        TaskProgressItem(title: "检查额度面板比例", kind: .running, startedAt: Date()),
-        TaskProgressItem(title: "生成发布包", kind: .waitingForInput, startedAt: Date()),
+        TaskProgressItem(
+            title: "检查额度面板比例",
+            kind: .running,
+            startedAt: previewNow
+        ),
+        TaskProgressItem(
+            title: "生成发布包",
+            kind: .waitingForInput,
+            startedAt: previewNow
+        ),
     ]
     if CommandLine.arguments.contains("--preview-completed") {
         previewTaskTemplates[0] = TaskProgressItem(
             title: "检查完成状态图标",
             kind: .completed,
-            startedAt: Date()
+            startedAt: previewNow
         )
     } else if CommandLine.arguments.contains("--preview-waiting") {
         previewTaskTemplates[0] = TaskProgressItem(
             title: "等待用户确认",
             kind: .waitingForInput,
-            startedAt: Date()
+            startedAt: previewNow
         )
     } else if CommandLine.arguments.contains("--preview-failed") {
         previewTaskTemplates[0] = TaskProgressItem(
             title: "检查失败状态图标",
             kind: .failed,
-            startedAt: Date()
+            startedAt: previewNow
         )
     }
     let countFlag = "--preview-task-count"
@@ -64,8 +77,8 @@ func renderPreviewOnce(to outputPath: String) -> Never {
             return TaskProgressItem(
                 title: "活跃任务 \(index + 1)",
                 kind: index == 1 ? .waitingForInput : .running,
-                startedAt: Date(),
-                updatedAt: Date().addingTimeInterval(Double(index)),
+                startedAt: previewNow,
+                updatedAt: previewNow.addingTimeInterval(Double(index)),
                 source: isClaude ? .claudeCode : .codex,
                 sessionID: isClaude
                     ? String(format: "b687a9ef-4535-4bb4-a9d5-%012d", index + 1)
@@ -90,8 +103,8 @@ func renderPreviewOnce(to outputPath: String) -> Never {
     }
     let previewPanelSize = panelSizeForTaskRows(previewTasks.rowCount)
     let view = QuotaPanelView(frame: NSRect(origin: .zero, size: previewPanelSize))
+    view.currentDateProvider = { previewNow }
     view.pointerSide = .bottom
-    let previewNow = Date()
     view.providerRemainingPercents = [
         .codex: CommandLine.arguments.contains("--preview-claude-quota")
             ? 97
@@ -139,24 +152,40 @@ func renderPreviewOnce(to outputPath: String) -> Never {
             QuotaRow(
                 name: "5 小时",
                 remainingPercent: previewRemaining,
-                resetsAt: Calendar.current.date(byAdding: .hour, value: 4, to: Date())
+                resetsAt: Calendar.current.date(
+                    byAdding: .hour,
+                    value: 4,
+                    to: previewNow
+                )
             ),
             QuotaRow(
                 name: "周额度",
                 remainingPercent: 63,
-                resetsAt: Calendar.current.date(byAdding: .day, value: 5, to: Date())
+                resetsAt: Calendar.current.date(
+                    byAdding: .day,
+                    value: 5,
+                    to: previewNow
+                )
             ),
             QuotaRow(
                 name: "Fable",
                 remainingPercent: 97,
-                resetsAt: Calendar.current.date(byAdding: .day, value: 5, to: Date())
+                resetsAt: Calendar.current.date(
+                    byAdding: .day,
+                    value: 5,
+                    to: previewNow
+                )
             ),
         ]
     } else {
         view.rows = [QuotaRow(
             name: "周额度",
             remainingPercent: previewRemaining,
-            resetsAt: Calendar.current.date(byAdding: .day, value: 7, to: Date())
+            resetsAt: Calendar.current.date(
+                byAdding: .day,
+                value: 7,
+                to: previewNow
+            )
         )]
     }
     view.statusText = quotaSuccessStatusText(

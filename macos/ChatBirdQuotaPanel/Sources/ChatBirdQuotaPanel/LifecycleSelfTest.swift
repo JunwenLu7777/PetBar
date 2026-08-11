@@ -91,6 +91,219 @@ func runLifecycleSelfTest() -> Never {
         }
     }
 
+    guard shouldPresentDetachedPetPanel(
+        codexDesktopRunning: true,
+        hiddenByUser: false
+    ),
+          !shouldPresentDetachedPetPanel(
+              codexDesktopRunning: false,
+              hiddenByUser: false
+          ),
+          !shouldPresentDetachedPetPanel(
+              codexDesktopRunning: true,
+              hiddenByUser: true
+          )
+    else {
+        fputs("detached pet panel visibility decision failed\n", stderr)
+        exit(1)
+    }
+
+    let petDecision = presentationRuntimeDecision(
+        mode: .petPanel,
+        hiddenByUser: false
+    )
+    guard petDecision == PresentationRuntimeDecision(
+        showPetPanel: true,
+        showDynamicIsland: false,
+        bindLegacyPermissionPresenter: true,
+        bindDynamicPermissionPresenter: false
+    ) else {
+        fputs("pet presentation runtime decision failed\n", stderr)
+        exit(1)
+    }
+
+    let dynamicDecision = presentationRuntimeDecision(
+        mode: .dynamicIsland,
+        hiddenByUser: false
+    )
+    guard dynamicDecision == PresentationRuntimeDecision(
+        showPetPanel: false,
+        showDynamicIsland: true,
+        bindLegacyPermissionPresenter: false,
+        bindDynamicPermissionPresenter: true
+    ) else {
+        fputs("dynamic presentation runtime decision failed\n", stderr)
+        exit(1)
+    }
+
+    let hiddenDynamicDecision = presentationRuntimeDecision(
+        mode: .dynamicIsland,
+        hiddenByUser: true
+    )
+    guard hiddenDynamicDecision == PresentationRuntimeDecision(
+        showPetPanel: false,
+        showDynamicIsland: false,
+        bindLegacyPermissionPresenter: false,
+        bindDynamicPermissionPresenter: true
+    ) else {
+        fputs("hidden dynamic presentation runtime decision failed\n", stderr)
+        exit(1)
+    }
+
+    guard dynamicIslandVisibilityAction(
+        decision: dynamicDecision,
+        hasCurrentPermissionRequest: false
+    ) == .capsule,
+          dynamicIslandVisibilityAction(
+              decision: dynamicDecision,
+              hasCurrentPermissionRequest: true
+          ) == .confirmation,
+          dynamicIslandVisibilityAction(
+              decision: hiddenDynamicDecision,
+              hasCurrentPermissionRequest: true
+          ) == .hidden,
+          dynamicIslandVisibilityAction(
+              decision: petDecision,
+              hasCurrentPermissionRequest: true
+          ) == .hidden
+    else {
+        fputs("prompt-aware dynamic island visibility decision failed\n", stderr)
+        exit(1)
+    }
+
+    guard isPresentationCommandEnabled(
+        .moveToCurrentDisplay,
+        mode: .dynamicIsland
+    ),
+          !isPresentationCommandEnabled(
+              .moveToCurrentDisplay,
+              mode: .petPanel
+          ),
+          isPresentationCommandEnabled(.toggleVisibility, mode: .petPanel),
+          isPresentationCommandEnabled(.quit, mode: .dynamicIsland)
+    else {
+        fputs("presentation command enabled state failed\n", stderr)
+        exit(1)
+    }
+
+    guard chatBirdStatusItemLength == NSStatusItem.squareLength,
+          let statusItemImage = makeChatBirdStatusItemImage(),
+          statusItemImage.isTemplate,
+          chatBirdVisibilityHotKeyKeyEquivalent == "b",
+          chatBirdVisibilityHotKeyModifierMask == [.command, .option],
+          chatBirdVisibilityHotKeyDisplayName == "⌥⌘B"
+    else {
+        fputs("status item recovery configuration failed\n", stderr)
+        exit(1)
+    }
+
+    let now = Date(timeIntervalSince1970: 12_345)
+    let activeTask = TaskProgressItem(
+        title: "Active",
+        kind: .running,
+        updatedAt: now
+    )
+    let completedTask = TaskProgressItem(
+        title: "Done",
+        kind: .completed,
+        updatedAt: now
+    )
+    let failedTask = TaskProgressItem(
+        title: "Failed",
+        kind: .failed,
+        updatedAt: now
+    )
+    var acknowledgementKeys = Set<String>()
+    acknowledgeTerminalTask(completedTask, in: &acknowledgementKeys)
+    acknowledgeTerminalTask(activeTask, in: &acknowledgementKeys)
+    guard let completedKey = terminalTaskAcknowledgementKey(for: completedTask),
+          acknowledgementKeys == [completedKey]
+    else {
+        fputs("completed task acknowledgement failed\n", stderr)
+        exit(1)
+    }
+    acknowledgeTerminalTask(failedTask, in: &acknowledgementKeys)
+    guard let failedKey = terminalTaskAcknowledgementKey(for: failedTask),
+          acknowledgementKeys == [completedKey, failedKey]
+    else {
+        fputs("failed task acknowledgement failed\n", stderr)
+        exit(1)
+    }
+
+    let preservedSnapshot = ActivityDashboardSnapshot(
+        taskCollection: TaskProgressCollectionSnapshot.displaying([
+            activeTask,
+            completedTask,
+        ]),
+        quotaStates: [
+            .codex: QuotaProviderState(
+                rows: [QuotaRow(name: "周额度", remainingPercent: 73, resetsAt: nil)],
+                statusText: "Codex ok"
+            )
+        ],
+        availableProviders: [.codex],
+        selectedQuotaProvider: .codex,
+        permissionQueue: ClaudePermissionQueueSnapshot(
+            current: ClaudePermissionQueueItem(
+                requestID: UUID(),
+                interactionKind: .toolApproval,
+                title: "Allow tool",
+                sessionID: nil,
+                arrivedAt: now
+            )
+        ),
+        acknowledgedTerminalTaskKeys: acknowledgementKeys,
+        isTaskRefreshing: true,
+        codexDesktopRunning: true
+    )
+    guard dashboardSnapshotPreservedAcrossPresentationSwitch(
+        before: preservedSnapshot,
+        after: preservedSnapshot
+    ) else {
+        fputs("dashboard snapshot presentation switch preservation failed\n", stderr)
+        exit(1)
+    }
+
+    guard codexExitPresentationDecision(
+        mode: .petPanel,
+        hiddenByUser: false
+    ) == PresentationRuntimeDecision(
+        showPetPanel: false,
+        showDynamicIsland: false,
+        bindLegacyPermissionPresenter: true,
+        bindDynamicPermissionPresenter: false
+    ),
+          codexExitPresentationDecision(
+              mode: .dynamicIsland,
+              hiddenByUser: false
+          )
+            == PresentationRuntimeDecision(
+                showPetPanel: false,
+                showDynamicIsland: true,
+                bindLegacyPermissionPresenter: false,
+                bindDynamicPermissionPresenter: true
+            )
+    else {
+        fputs("codex exit presentation decision failed\n", stderr)
+        exit(1)
+    }
+
+    guard codexExitPresentationDecision(
+        mode: .dynamicIsland,
+        hiddenByUser: true
+    ) == hiddenDynamicDecision,
+          codexLifecyclePresentationDecision(
+              mode: .dynamicIsland,
+              hiddenByUser: true,
+              codexDesktopRunning: true
+          ) == hiddenDynamicDecision,
+          shouldHandlePetClick(mode: .petPanel),
+          !shouldHandlePetClick(mode: .dynamicIsland)
+    else {
+        fputs("hidden lifecycle or pet click mode gate failed\n", stderr)
+        exit(1)
+    }
+
     let claudePermissionVisibilityCases = [
         (cached: true, live: true, expected: true),
         (cached: false, live: true, expected: true),
@@ -289,6 +502,6 @@ func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
-    print("lifecycle-self-test: desktop-app=5/5 visibility=4/4 claude-permission-visibility=4/4 live-state-wins=2/2 pet-click-restore=5/5 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut status-item=restore")
+    print("lifecycle-self-test: desktop-app=5/5 visibility=4/4 presentation-runtime=4/4 mode-switch-preserves-dashboard=pass terminal-ack=active-skipped+terminal-memory codex-exit=pet-hidden+dynamic-capsule hidden-lifecycle=preserved pet-click-mode-gate=pass claude-permission-visibility=4/4 live-state-wins=2/2 pet-click-restore=5/5 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut status-item=restore")
     exit(0)
 }

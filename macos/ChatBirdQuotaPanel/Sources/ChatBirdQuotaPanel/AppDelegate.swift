@@ -13,7 +13,46 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+let chatBirdStatusItemLength = NSStatusItem.squareLength
+
+func makeChatBirdStatusItemImage() -> NSImage? {
+    let configuration = NSImage.SymbolConfiguration(
+        pointSize: 15,
+        weight: .semibold
+    )
+    let image = (
+        NSImage(
+            systemSymbolName: "bird.fill",
+            accessibilityDescription: "ChatBird"
+        )
+        ?? NSImage(
+            systemSymbolName: "message.fill",
+            accessibilityDescription: "ChatBird"
+        )
+    )?.withSymbolConfiguration(configuration)
+    image?.isTemplate = true
+    return image
+}
+
+private func configureChatBirdStatusButton(_ button: NSStatusBarButton?) {
+    guard let button else { return }
+    if let image = makeChatBirdStatusItemImage() {
+        button.title = "ChatBird"
+        button.image = image
+        button.imagePosition = .imageOnly
+    } else {
+        button.image = nil
+        button.title = "CB"
+        button.imagePosition = .noImage
+    }
+    button.toolTip = "ChatBird · \(chatBirdVisibilityHotKeyDisplayName) 显示/隐藏"
+    button.setAccessibilityLabel("ChatBird")
+    button.setAccessibilityHelp(
+        "打开 ChatBird 菜单；隐藏后可选择“显示”或按 \(chatBirdVisibilityHotKeyDisplayName) 恢复面板"
+    )
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let quotaClient = CodexQuotaClient()
     private let claudeQuotaClient = ClaudeQuotaClient()
     private let quotaProviderPreference = QuotaProviderPreference()
@@ -21,25 +60,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let healthWriter = RuntimeHealthWriter()
     private let petSelectionStore = ChatBirdPetSelectionStore()
     private let taskActivityPreviewController = TaskActivityPreviewController()
-    private var claudePermissionPanelController: ClaudePermissionPanelController!
+    private let dashboardStore = ActivityDashboardStore()
+    private let presentationModePreference = PresentationModePreference()
+    private var presentationMode: PresentationMode = .petPanel
+    private var claudePermissionCoordinator: ClaudePermissionCoordinator!
+    private var claudePermissionPanelPresenter: ClaudePermissionPanelPresenter!
+    private var dynamicIslandController: DynamicIslandWindowController!
+    private var dynamicIslandConfirmationPresenter:
+        DynamicIslandConfirmationPresenter!
     private var claudePermissionHookServer: ClaudePermissionHookServer?
+    private var dashboardObserverToken: UUID?
+    private var screenParametersObserver: NSObjectProtocol?
     private let quotaView = QuotaPanelView(frame: NSRect(origin: .zero, size: expandedPanelSize))
     private var panel: NSPanel!
     private var statusItem: NSStatusItem?
+    private var visibilityHotKey: ChatBirdVisibilityHotKey?
     private var refreshTimer: Timer?
     private var taskProgressTimer: Timer?
     private var followTimer: Timer?
     private var globalMouseMonitor: Any?
     private let taskProgressReaderStore = TaskProgressRefreshReaderStore()
-    private var isRefreshing = false
-    private var quotaRowsByProvider: [QuotaProvider: [QuotaRow]] = [:]
-    private var currentCodexResetCreditsSnapshot: CodexResetCreditsSnapshot?
+    private var refreshingQuotaProviders = Set<QuotaProvider>()
     private var taskProgressRefreshGate = TaskProgressRefreshGate()
     private var lastLocatedPet: LocatedPet?
     private var lastLocatedAt: CFAbsoluteTime = 0
     private var lastPetLocationPollAt: CFAbsoluteTime = 0
     private var lastPetMovementAt: CFAbsoluteTime = 0
     private var lastWindowStackCheckAt: CFAbsoluteTime = 0
+    private var petPanelFallbackDisplayID: CGDirectDisplayID?
     private var currentPanelScale: CGFloat = 1
     private var currentBasePanelSize = expandedPanelSize
     private var isPanelHiddenByUser = false
@@ -97,22 +145,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        presentationMode = presentationModePreference.mode
         selectChatBirdAtStartup(using: petSelectionStore)
         let availableProviders = synchronizeQuotaProviderAvailability()
         makePanel()
+        makeDynamicIslandController()
         startCodexDesktopMonitoring()
         startClaudePermissionHook()
+        startScreenParameterMonitoring()
         makeStatusItem()
+        makeVisibilityHotKey()
         startPetClickMonitor()
-        updateStatusItem()
+        bindClaudePermissionPresenter(for: presentationMode)
+        applyInitialPresentationVisibility()
+        updateStatusMenu()
         healthWriter.write(status: "started", panelVisible: false, locationSource: nil, force: true)
-        followPet()
-        refreshQuota()
-        if let backgroundProvider = availableProviders.first(where: {
-            $0 != quotaView.selectedQuotaProvider
-        }) {
-            refreshBackgroundQuotaSummary(for: backgroundProvider)
-        }
+        availableProviders.forEach { refreshQuota(provider: $0) }
         refreshTaskProgress()
         nativeActivityPillSuppressionMonitor.start()
 
@@ -134,10 +182,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         nativeActivityPillSuppressionMonitor.stop()
         codexOverlayNotificationSynchronizer.stop()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
-        claudePermissionPanelController?.cancelAll()
+        if let screenParametersObserver {
+            NotificationCenter.default.removeObserver(screenParametersObserver)
+        }
+        if let dashboardObserverToken {
+            dashboardStore.removeObserver(dashboardObserverToken)
+        }
+        dynamicIslandConfirmationPresenter?.setPresentationActive(false)
+        claudePermissionCoordinator?.cancelAll()
         claudePermissionHookServer?.stop()
         taskActivityPreviewController.hide()
         quotaView.setRunningTaskBadgeAnimationsEnabled(false)
+        dynamicIslandController?.hide()
+        panel?.orderOut(nil)
         refreshTimer?.invalidate()
         taskProgressTimer?.invalidate()
         followTimer?.invalidate()
@@ -147,6 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)
         }
+        visibilityHotKey = nil
         healthWriter.write(status: "terminated", panelVisible: false, locationSource: nil, force: true)
     }
 
@@ -172,6 +230,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quotaView.onRequestHide = { [weak self] in
             self?.hidePanelByUser()
         }
+        quotaView.onRequestDynamicIsland = { [weak self] in
+            self?.selectPresentationMode(.dynamicIsland)
+        }
         quotaView.onRequestQuotaRefresh = { [weak self] in
             self?.refreshQuota()
         }
@@ -190,33 +251,153 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
         quotaView.onOpenTask = { [weak self] item in
-            switch item.source {
-            case .codex:
-                guard let threadID = item.threadID,
-                      let url = codexThreadURL(threadID: threadID)
-                else { return }
-                NSWorkspace.shared.open(url)
-            case .claudeCode:
-                if self?.claudePermissionPanelController?
-                    .handoffToTerminalIfPresenting(item) == true
-                {
-                    return
-                }
-                openClaudeTerminal(
-                    request: claudeTerminalOpenRequest(for: item)
-                )
+            self?.openTask(item)
+        }
+        dashboardObserverToken = dashboardStore.observe { [weak self] snapshot in
+            guard let self else { return }
+            self.quotaView.applyDashboardSnapshot(snapshot)
+            let compact = snapshot.taskCollection.compactProjection()
+            let nextBaseSize = panelSizeForTaskRows(compact.rowCount)
+            if nextBaseSize != self.currentBasePanelSize {
+                self.currentBasePanelSize = nextBaseSize
+                self.followPet()
             }
         }
     }
 
+    private func makeDynamicIslandController() {
+        let controller = DynamicIslandWindowController(store: dashboardStore)
+        controller.onRequestHide = { [weak self] in
+            self?.hidePanelByUser()
+        }
+        controller.onRequestPetPanel = { [weak self] in
+            self?.selectPresentationMode(.petPanel)
+        }
+        controller.onOpenTask = { [weak self] item in
+            self?.openTask(item)
+        }
+        controller.onCopyWorkingDirectory = { [weak self] path in
+            self?.copyWorkingDirectoryToPasteboard(path) ?? false
+        }
+        controller.onTaskDetailOpened = { [weak self] item in
+            self?.acknowledgeTerminalTaskInStore(item)
+        }
+        bindDynamicIslandDashboardActions(to: controller)
+        dynamicIslandController = controller
+
+        let confirmationController = DynamicIslandConfirmationViewController()
+        dynamicIslandConfirmationPresenter = controller.makeConfirmationPresenter(
+            viewController: confirmationController
+        )
+        dynamicIslandConfirmationPresenter.onReturnToPriorTab = {
+            [weak self, weak controller] tab in
+            guard let self,
+                  presentationRuntimeDecision(
+                      mode: self.presentationMode,
+                      hiddenByUser: self.isPanelHiddenByUser
+                  ).showDynamicIsland
+            else { return }
+            controller?.expand(tab)
+        }
+    }
+
     private func makeStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "ChatBird"
-        item.button?.toolTip = "ChatBird 额度面板"
-        item.button?.target = self
-        item.button?.action = #selector(handleStatusItem)
-        item.isVisible = false
+        let item = NSStatusBar.system.statusItem(withLength: chatBirdStatusItemLength)
+        configureChatBirdStatusButton(item.button)
+        item.menu = makeStatusMenu()
+        item.isVisible = true
         statusItem = item
+    }
+
+    private func makeVisibilityHotKey() {
+        visibilityHotKey = ChatBirdVisibilityHotKey { [weak self] in
+            self?.handlePresentationCommand(.toggleVisibility)
+        }
+        if visibilityHotKey == nil {
+            fputs(
+                "ChatBird 无法注册全局快捷键 \(chatBirdVisibilityHotKeyDisplayName)\n",
+                stderr
+            )
+        }
+    }
+
+    private func makeStatusMenu() -> NSMenu {
+        let menu = NSMenu(title: "ChatBird")
+        menu.delegate = self
+        menu.addItem(menuItem(command: .toggleVisibility))
+        menu.addItem(.separator())
+        menu.addItem(menuItem(command: .selectMode(.petPanel)))
+        menu.addItem(menuItem(command: .selectMode(.dynamicIsland)))
+        menu.addItem(menuItem(command: .moveToCurrentDisplay))
+        menu.addItem(.separator())
+        menu.addItem(menuItem(command: .quit))
+        return menu
+    }
+
+    private func menuItem(command: PresentationCommand) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: "",
+            action: #selector(handlePresentationMenuItem(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = command
+        configure(menuItem: item, command: command)
+        return item
+    }
+
+    private func configure(
+        menuItem item: NSMenuItem,
+        command: PresentationCommand
+    ) {
+        item.isEnabled = isPresentationCommandEnabled(
+            command,
+            mode: presentationMode
+        )
+        item.state = .off
+        item.keyEquivalent = ""
+        item.keyEquivalentModifierMask = []
+        switch command {
+        case .toggleVisibility:
+            item.title = isPanelHiddenByUser ? "显示" : "隐藏"
+            item.keyEquivalent = chatBirdVisibilityHotKeyKeyEquivalent
+            item.keyEquivalentModifierMask = chatBirdVisibilityHotKeyModifierMask
+        case .selectMode(.petPanel):
+            item.title = "宠物面板"
+            item.state = presentationMode == .petPanel ? .on : .off
+        case .selectMode(.dynamicIsland):
+            item.title = "灵动岛"
+            item.state = presentationMode == .dynamicIsland ? .on : .off
+        case .moveToCurrentDisplay:
+            item.title = "移到当前显示器"
+        case .quit:
+            item.title = "退出 ChatBird"
+        }
+    }
+
+    @objc private func handlePresentationMenuItem(_ sender: NSMenuItem) {
+        guard let command = sender.representedObject as? PresentationCommand
+        else { return }
+        handlePresentationCommand(command)
+    }
+
+    private func handlePresentationCommand(_ command: PresentationCommand) {
+        guard isPresentationCommandEnabled(command, mode: presentationMode)
+        else { return }
+        switch command {
+        case .toggleVisibility:
+            if isPanelHiddenByUser {
+                showPanelFromStatusItem()
+            } else {
+                hidePanelByUser()
+            }
+        case .selectMode(let mode):
+            selectPresentationMode(mode)
+        case .moveToCurrentDisplay:
+            dynamicIslandController?.moveToScreenContainingMouse()
+        case .quit:
+            NSApp.terminate(nil)
+        }
     }
 
     private func startCodexDesktopMonitoring() {
@@ -234,6 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
         cachedCodexDesktopRunning = isCodexDesktopRunning()
+        dashboardStore.update { $0.codexDesktopRunning = cachedCodexDesktopRunning }
         codexOverlayNotificationSynchronizer.codexRunningStateDidChange(
             cachedCodexDesktopRunning
         )
@@ -266,21 +448,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateCodexDesktopRunningState(_ isRunning: Bool) {
         guard isRunning != cachedCodexDesktopRunning else { return }
         cachedCodexDesktopRunning = isRunning
+        dashboardStore.update { $0.codexDesktopRunning = isRunning }
         codexOverlayNotificationSynchronizer.codexRunningStateDidChange(
             isRunning
         )
         if !isRunning {
-            claudePermissionPanelController?.cancelAll()
+            claudePermissionCoordinator?.cancelAll()
         }
-        followPet(forceLocationPoll: true)
+        reconcilePresentationAfterCodexLifecycleChange(
+            codexDesktopRunning: isRunning
+        )
+        if !isRunning {
+            // DynamicIslandConfirmationPresenter returns to its prior tab on
+            // the next main-loop turn after dismissal. Reconcile once more
+            // after that callback so a lifecycle cancel ends in the requested
+            // capsule/hidden state instead of reopening the prior workspace.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.cachedCodexDesktopRunning else { return }
+                self.reconcilePresentationAfterCodexLifecycleChange(
+                    codexDesktopRunning: false
+                )
+            }
+        }
+    }
+
+    private func reconcilePresentationAfterCodexLifecycleChange(
+        codexDesktopRunning: Bool
+    ) {
+        let decision = codexLifecyclePresentationDecision(
+            mode: presentationMode,
+            hiddenByUser: isPanelHiddenByUser,
+            codexDesktopRunning: codexDesktopRunning
+        )
+        if presentationMode == .petPanel {
+            followPet(forceLocationPoll: true)
+        } else if decision.showDynamicIsland {
+            dynamicIslandController?.showCapsule()
+        } else {
+            dynamicIslandController?.hide()
+        }
     }
 
     private func startClaudePermissionHook() {
-        claudePermissionPanelController = ClaudePermissionPanelController(
-            anchorWindowProvider: { [weak self] in self?.panel },
+        claudePermissionCoordinator = ClaudePermissionCoordinator(
             openTerminal: { [weak self] prompt in
                 self?.openTerminalForClaudePermission(prompt)
+            },
+            onQueueChange: { [weak self] queue in
+                self?.dashboardStore.update { $0.permissionQueue = queue }
             }
+        )
+        claudePermissionPanelPresenter = ClaudePermissionPanelPresenter(
+            anchorWindowProvider: { [weak self] in self?.panel }
         )
 
         let server = ClaudePermissionHookServer()
@@ -302,13 +521,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 completion(.nativeFallback)
                 return
             }
-            self.claudePermissionPanelController.enqueue(
+            self.claudePermissionCoordinator.enqueue(
                 prompt: prompt,
                 completion: completion
             )
         }
         server.onRequestExpired = { [weak self] requestID in
-            self?.claudePermissionPanelController.expire(requestID: requestID)
+            self?.claudePermissionCoordinator.expire(requestID: requestID)
         }
         server.onStateChange = { state in
             switch state {
@@ -328,10 +547,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func startScreenParameterMonitoring() {
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.dynamicIslandController?.screenParametersDidChange()
+            if dynamicIslandScreen(displayID: self.petPanelFallbackDisplayID) == nil {
+                self.petPanelFallbackDisplayID = nil
+            }
+            self.followPet(forceLocationPoll: true)
+        }
+    }
+
     private func openTerminalForClaudePermission(_ prompt: ClaudePermissionPrompt) {
         let request = claudeTerminalOpenRequest(
             for: prompt,
-            taskItems: quotaView.taskProgress.items
+            taskItems: dashboardStore.snapshot.taskCollection.items
         )
         if openClaudeTerminal(request: request) {
             return
@@ -378,14 +612,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func updateStatusItem() {
-        statusItem?.button?.title = "ChatBird"
-        statusItem?.button?.toolTip = "显示 ChatBird 额度面板"
-        statusItem?.isVisible = isPanelHiddenByUser
+    private func updateStatusMenu() {
+        statusItem?.length = chatBirdStatusItemLength
+        configureChatBirdStatusButton(statusItem?.button)
+        statusItem?.isVisible = true
+        statusItem?.menu.map(menuNeedsUpdate)
     }
 
-    @objc private func handleStatusItem() {
-        showPanelFromStatusItem()
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        for item in menu.items {
+            guard let command = item.representedObject as? PresentationCommand
+            else { continue }
+            configure(menuItem: item, command: command)
+        }
     }
 
     private func startPetClickMonitor() {
@@ -400,6 +639,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handlePetClick(at location: NSPoint, clickCount: Int) {
+        guard shouldHandlePetClick(mode: presentationMode) else { return }
         let now = CFAbsoluteTimeGetCurrent()
         guard cachedCodexDesktopRunning, let pet = locator.locate() else { return }
         let action = petPanelClickAction(
@@ -424,10 +664,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hidePanelByUser() {
         isPanelHiddenByUser = true
         taskActivityPreviewController.hide()
+        dynamicIslandController?.hide()
         quotaView.setRunningTaskBadgeAnimationsEnabled(false)
         panel.level = panelDefaultWindowLevel
         panel.orderOut(nil)
-        updateStatusItem()
+        updateStatusMenu()
         healthWriter.write(
             status: "hidden-by-user",
             panelVisible: false,
@@ -440,12 +681,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showPanelFromStatusItem() {
         isPanelHiddenByUser = false
-        updateStatusItem()
-        followPet()
+        updateStatusMenu()
+        showCurrentPresentation()
+    }
+
+    private func applyInitialPresentationVisibility() {
+        hideCurrentPresentation()
+        showCurrentPresentation()
+    }
+
+    private func selectPresentationMode(_ mode: PresentationMode) {
+        guard presentationMode != mode else { return }
+        if mode == .petPanel, presentationMode == .dynamicIsland {
+            petPanelFallbackDisplayID = dynamicIslandController?.targetDisplayID
+        }
+        hideCurrentPresentation()
+        taskActivityPreviewController.hide()
+        presentationMode = mode
+        presentationModePreference.mode = mode
+        bindClaudePermissionPresenter(for: mode)
+        showCurrentPresentation()
+        updateStatusMenu()
+    }
+
+    private func hideCurrentPresentation() {
+        taskActivityPreviewController.hide()
+        quotaView.setRunningTaskBadgeAnimationsEnabled(false)
+        panel?.orderOut(nil)
+        dynamicIslandController?.hide()
+    }
+
+    private func showCurrentPresentation() {
+        let decision = presentationRuntimeDecision(
+            mode: presentationMode,
+            hiddenByUser: isPanelHiddenByUser
+        )
+        quotaView.setRunningTaskBadgeAnimationsEnabled(decision.showPetPanel)
+        if decision.showPetPanel {
+            followPet(forceLocationPoll: true)
+        } else {
+            panel?.orderOut(nil)
+        }
+        switch dynamicIslandVisibilityAction(
+            decision: decision,
+            hasCurrentPermissionRequest:
+                dashboardStore.snapshot.permissionQueue.current != nil
+        ) {
+        case .hidden:
+            dynamicIslandController?.hide()
+        case .capsule:
+            dynamicIslandController?.showCapsule()
+        case .confirmation:
+            dynamicIslandController?.expand(.confirmation)
+        }
+    }
+
+    private func bindClaudePermissionPresenter(for mode: PresentationMode) {
+        let decision = presentationRuntimeDecision(
+            mode: mode,
+            hiddenByUser: isPanelHiddenByUser
+        )
+        dynamicIslandConfirmationPresenter?.setPresentationActive(
+            decision.bindDynamicPermissionPresenter
+        )
+        if decision.bindDynamicPermissionPresenter {
+            claudePermissionCoordinator?.setPresenter(
+                dynamicIslandConfirmationPresenter
+            )
+        } else if decision.bindLegacyPermissionPresenter {
+            claudePermissionCoordinator?.setPresenter(
+                claudePermissionPanelPresenter
+            )
+        }
     }
 
     private func followPet(forceLocationPoll: Bool = true) {
         let now = CFAbsoluteTimeGetCurrent()
+        if presentationMode == .dynamicIsland {
+            if forceLocationPoll
+                || now - lastWindowStackCheckAt >= overlayStateRefreshInterval
+            {
+                lastWindowStackCheckAt = now
+                dynamicIslandController?.reconcileWindowLevel(
+                    entries: currentWindowStackEntries()
+                )
+            }
+            return
+        }
         guard cachedCodexDesktopRunning else {
             lastLocatedPet = nil
             lastLocatedAt = 0
@@ -465,6 +787,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             return
         }
+        guard !isPanelHiddenByUser else {
+            taskActivityPreviewController.hide()
+            quotaView.setRunningTaskBadgeAnimationsEnabled(false)
+            panel.level = panelDefaultWindowLevel
+            panel.orderOut(nil)
+            return
+        }
 
         guard shouldPollPetLocation(
             now: now,
@@ -475,43 +804,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastPetLocationPollAt = now
 
         let pet: LocatedPet
+        let panelStatus: String
         if let located = locator.locate() {
             if locatedPetGeometryDiffers(lastLocatedPet, from: located) {
                 lastPetMovementAt = now
             }
             lastLocatedPet = located
             lastLocatedAt = now
+            petPanelFallbackDisplayID = dynamicIslandDisplayID(for: located.screen)
             pet = located
+            panelStatus = "following-pet"
         } else if let recent = lastLocatedPet, now - lastLocatedAt <= 0.50 {
             // Preserve the last exact attachment only across a brief window-list
             // transition. Never leave the panel at an unrelated screen corner.
             pet = recent
+            panelStatus = "following-pet"
+        } else if let saved = locator.locateSavedState(
+            allowClosedOverlay: true,
+            preferredDisplayID: petPanelFallbackDisplayID
+        ) {
+            petPanelFallbackDisplayID = dynamicIslandDisplayID(for: saved.screen)
+            pet = saved
+            panelStatus = "pet-panel-saved-position-fallback"
         } else {
             taskActivityPreviewController.hide()
-            quotaView.setRunningTaskBadgeAnimationsEnabled(false)
-            panel.level = panelDefaultWindowLevel
-            panel.orderOut(nil)
-            healthWriter.write(
-                status: "waiting-for-pet-location",
-                panelVisible: false,
-                locationSource: nil,
-                panelScale: currentPanelScale,
-                panelSize: scaledPanelSize(currentBasePanelSize, scale: currentPanelScale)
-            )
+            presentDetachedPetPanel()
             return
         }
 
         let basePanelSize = currentBasePanelSize
         currentPanelScale = presentedPanelScale(pet.panelScale)
-        if isPanelHiddenByUser {
-            taskActivityPreviewController.hide()
-            quotaView.setRunningTaskBadgeAnimationsEnabled(false)
-            panel.level = panelDefaultWindowLevel
-            panel.orderOut(nil)
-            claudePermissionPanelController?.reposition()
-            return
-        }
-
         quotaView.setRunningTaskBadgeAnimationsEnabled(true)
 
         let currentPanelSize = scaledPanelSize(basePanelSize, scale: currentPanelScale)
@@ -555,7 +877,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if panelFrameChanged || contentGeometryChanged {
             quotaView.refreshHoveredTaskAnchor()
-            claudePermissionPanelController?.reposition()
+            claudePermissionPanelPresenter?.reposition()
         }
 
         var shouldReorderForNativeActivity = false
@@ -596,13 +918,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.orderFrontRegardless()
         }
         healthWriter.write(
-            status: "following-pet",
+            status: panelStatus,
             panelVisible: true,
             locationSource: pet.source,
             gap: placement.actualGap,
             centerError: placement.centerError,
             panelScale: currentPanelScale,
             panelSize: currentPanelSize
+        )
+    }
+
+    private func presentDetachedPetPanel() {
+        guard shouldPresentDetachedPetPanel(
+            codexDesktopRunning: cachedCodexDesktopRunning,
+            hiddenByUser: isPanelHiddenByUser
+        ) else {
+            quotaView.setRunningTaskBadgeAnimationsEnabled(false)
+            panel.orderOut(nil)
+            return
+        }
+        guard let screen = dynamicIslandScreen(
+            displayID: petPanelFallbackDisplayID
+        ) ?? dynamicIslandScreenContaining(
+            point: NSEvent.mouseLocation
+        ) ?? NSScreen.main ?? NSScreen.screens.first else {
+            quotaView.setRunningTaskBadgeAnimationsEnabled(false)
+            panel.orderOut(nil)
+            healthWriter.write(
+                status: "waiting-for-display",
+                panelVisible: false,
+                locationSource: nil,
+                force: true
+            )
+            return
+        }
+
+        petPanelFallbackDisplayID = dynamicIslandDisplayID(for: screen)
+        currentPanelScale = 1
+        let basePanelSize = currentBasePanelSize
+        let panelSize = scaledPanelSize(basePanelSize, scale: currentPanelScale)
+        let targetFrame = detachedPanelFrame(
+            panelSize: panelSize,
+            screenVisibleFrame: screen.visibleFrame
+        )
+        let targetViewFrame = NSRect(origin: .zero, size: panelSize)
+        let targetViewBounds = NSRect(origin: .zero, size: basePanelSize)
+        let panelFrameChanged = rectDiffers(panel.frame, from: targetFrame)
+        let contentGeometryChanged = rectDiffers(
+            quotaView.frame,
+            from: targetViewFrame
+        ) || rectDiffers(
+            quotaView.bounds,
+            from: targetViewBounds
+        )
+
+        quotaView.pointerSide = .bottom
+        quotaView.pointerCenterX = basePanelSize.width / 2
+        if panelFrameChanged {
+            panel.setFrame(targetFrame, display: false)
+        }
+        if contentGeometryChanged {
+            quotaView.frame = targetViewFrame
+            quotaView.bounds = targetViewBounds
+            quotaView.needsDisplay = true
+            panel.invalidateCursorRects(for: quotaView)
+        }
+        if panelFrameChanged || contentGeometryChanged {
+            quotaView.refreshHoveredTaskAnchor()
+            claudePermissionPanelPresenter?.reposition()
+        }
+
+        quotaView.setRunningTaskBadgeAnimationsEnabled(true)
+        panel.level = panelDefaultWindowLevel
+        if !panel.isVisible {
+            panel.orderFrontRegardless()
+        }
+        healthWriter.write(
+            status: "pet-panel-display-fallback",
+            panelVisible: true,
+            locationSource: "display-fallback",
+            panelScale: currentPanelScale,
+            panelSize: panelSize
         )
     }
 
@@ -616,35 +1012,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             preferred: preferredProvider,
             availableProviders: availableProviders
         )
-        quotaView.availableQuotaProviders = availableProviders
         if preferredProvider != resolvedProvider {
             quotaProviderPreference.selectedProvider = resolvedProvider
         }
-        if quotaView.selectedQuotaProvider != resolvedProvider {
-            quotaView.selectedQuotaProvider = resolvedProvider
-            quotaView.rows = quotaRowsByProvider[resolvedProvider] ?? []
-            quotaView.codexResetCredits = currentCodexResetCreditsSnapshot
-            quotaView.errorText = nil
-            quotaView.statusText = quotaView.rows.isEmpty
-                ? "正在读取额度…"
-                : "正在更新…"
+        dashboardStore.update {
+            $0.availableProviders = availableProviders
+            $0.selectedQuotaProvider = resolvedProvider
         }
         return availableProviders
     }
 
-    private func refreshQuota() {
-        synchronizeQuotaProviderAvailability()
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        let provider = quotaView.selectedQuotaProvider
-        quotaView.isQuotaRefreshing = true
-        if quotaView.rows.isEmpty {
-            quotaView.errorText = nil
-            quotaView.statusText = provider == .codex
-                ? "正在读取 Codex 额度…"
-                : "正在读取 Claude 额度…"
-        } else {
-            quotaView.statusText = "正在更新…"
+    private func refreshQuota(provider requestedProvider: QuotaProvider? = nil) {
+        let availableProviders = synchronizeQuotaProviderAvailability()
+        let provider = requestedProvider
+            ?? dashboardStore.snapshot.selectedQuotaProvider
+        guard availableProviders.contains(provider),
+              refreshingQuotaProviders.insert(provider).inserted
+        else { return }
+
+        dashboardStore.update {
+            let previous = $0.quotaStates[provider] ?? QuotaProviderState()
+            $0.quotaStates[provider] = quotaProviderStateRefreshing(previous)
         }
 
         switch provider {
@@ -685,111 +1073,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         provider: QuotaProvider,
         result: Result<QuotaRefreshPayload, Error>
     ) {
-        isRefreshing = false
-        guard quotaView.selectedQuotaProvider == provider else {
-            refreshQuota()
-            return
-        }
-        quotaView.isQuotaRefreshing = false
-
+        refreshingQuotaProviders.remove(provider)
+        let previous = dashboardStore.snapshot.quotaStates[provider]
+            ?? QuotaProviderState()
+        let next: QuotaProviderState
         switch result {
         case .success(let payload):
-            let updatedAt = Date()
-            let rows = payload.rows
-            cacheQuotaRows(rows, for: provider)
-            if provider == .codex {
-                currentCodexResetCreditsSnapshot = payload.resetCredits
-                quotaView.codexResetCredits = payload.resetCredits
-            }
-            quotaView.rows = rows
-            quotaView.errorText = rows.isEmpty
-                ? (provider == .codex
-                    ? "周额度暂不可用"
-                    : "Claude 额度暂不可用")
-                : nil
-            quotaView.statusText = rows.isEmpty
-                ? "没有可确认的额度数据"
-                : quotaSuccessStatusText(
-                    provider: provider,
-                    rows: rows,
-                    updatedAt: updatedAt
-                )
+            next = quotaProviderStateAfterSuccess(
+                previous,
+                rows: payload.rows,
+                resetCredits: payload.resetCredits,
+                provider: provider,
+                updatedAt: Date()
+            )
         case .failure(let error):
-            let existingRows = quotaRowsByProvider[provider] ?? []
-            quotaView.rows = existingRows
-            let presentation = quotaFailurePresentation(
-                for: error,
-                hasExistingRows: !existingRows.isEmpty,
+            next = quotaProviderStateAfterFailure(
+                previous,
+                error: error,
                 provider: provider
             )
-            quotaView.errorText = presentation.errorText
-            quotaView.statusText = presentation.statusText
-            if provider == .codex {
-                currentCodexResetCreditsSnapshot = nil
-                quotaView.codexResetCredits = nil
-            }
+        }
+        dashboardStore.update {
+            $0.quotaStates[provider] = next
         }
     }
 
     private func selectQuotaProvider(_ provider: QuotaProvider) {
-        guard quotaView.availableQuotaProviders.contains(provider) else { return }
+        guard dashboardStore.snapshot.availableProviders.contains(provider)
+        else { return }
         quotaProviderPreference.selectedProvider = provider
-        quotaView.selectedQuotaProvider = provider
-        quotaView.rows = quotaRowsByProvider[provider] ?? []
-        quotaView.codexResetCredits = currentCodexResetCreditsSnapshot
-        quotaView.errorText = nil
-        quotaView.statusText = quotaView.rows.isEmpty
-            ? "正在读取额度…"
-            : "正在更新…"
-        if !isRefreshing {
-            refreshQuota()
-        }
+        dashboardStore.update { $0.selectedQuotaProvider = provider }
+        refreshQuota(provider: provider)
     }
 
-    private func cacheQuotaRows(_ rows: [QuotaRow], for provider: QuotaProvider) {
-        quotaRowsByProvider[provider] = rows
-        quotaView.providerRemainingPercents = quotaProviderRemainingPercents(
-            afterCaching: rows,
-            for: provider,
-            existing: quotaView.providerRemainingPercents
-        )
-    }
-
-    private func refreshBackgroundQuotaSummary(for provider: QuotaProvider) {
-        switch provider {
+    private func openTask(_ item: TaskProgressItem) {
+        switch item.source {
         case .codex:
-            quotaClient.fetch { [weak self] result in
-                guard case .success(let response) = result else { return }
-                let rows = Self.makeRows(from: response)
-                let resetCredits = makeCodexResetCreditsSnapshot(
-                    from: response,
-                    now: Date()
-                )
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.cacheQuotaRows(rows, for: provider)
-                    self.currentCodexResetCreditsSnapshot = resetCredits
-                    self.quotaView.codexResetCredits = resetCredits
-                }
-            }
+            guard let threadID = item.threadID,
+                  let url = codexThreadURL(threadID: threadID)
+            else { return }
+            NSWorkspace.shared.open(url)
         case .claudeCode:
-            claudeQuotaClient.fetch { [weak self] result in
-                guard case .success(let snapshot) = result else { return }
-                DispatchQueue.main.async {
-                    self?.cacheQuotaRows(snapshot.rows, for: provider)
-                }
+            if claudePermissionCoordinator?
+                .handoffToTerminalIfPresenting(item) == true
+            {
+                return
             }
+            openClaudeTerminal(
+                request: claudeTerminalOpenRequest(for: item)
+            )
         }
+    }
+
+    private func copyWorkingDirectoryToPasteboard(_ path: String) -> Bool {
+        guard let normalizedPath = normalizedAbsolutePath(path) else {
+            return false
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        return pasteboard.writeObjects([normalizedPath as NSString])
+    }
+
+    private func acknowledgeTerminalTaskInStore(_ item: TaskProgressItem) {
+        dashboardStore.update {
+            acknowledgeTerminalTask(item, in: &$0.acknowledgedTerminalTaskKeys)
+        }
+    }
+
+    func bindDynamicIslandDashboardActions(
+        to controller: DynamicIslandWindowController
+    ) {
+        DynamicIslandDashboardActionBinding(
+            refreshDashboard: { [weak self] in
+                self?.refreshDashboard()
+            },
+            selectQuotaProvider: { [weak self] provider in
+                self?.selectQuotaProvider(provider)
+            }
+        ).bind(to: controller)
+    }
+
+    private func refreshDashboard() {
+        makeDynamicIslandDashboardRefreshDispatcher().refreshDashboard()
+    }
+
+    private func makeDynamicIslandDashboardRefreshDispatcher()
+        -> DynamicIslandDashboardRefreshDispatcher
+    {
+        DynamicIslandDashboardRefreshDispatcher(
+            availableProviders: { [weak self] in
+                self?.dashboardStore.snapshot.availableProviders ?? []
+            },
+            refreshTasks: { [weak self] in
+                self?.refreshTaskProgress()
+            },
+            refreshQuotaProvider: { [weak self] provider in
+                self?.refreshQuota(provider: provider)
+            }
+        )
     }
 
     private func refreshTaskProgress() {
         guard let generation = taskProgressRefreshGate.begin() else { return }
+        dashboardStore.update { $0.isTaskRefreshing = true }
         let claudeCodeAvailable = synchronizeQuotaProviderAvailability()
             .contains(.claudeCode)
         let readerStore = taskProgressReaderStore
         let reader = readerStore.leaseReader(for: generation)
         DispatchQueue.global(qos: .utility).async { [weak self, readerStore] in
-            let snapshot = reader.read(
+            let collection = reader.readCollection(
                 claudeCodeAvailable: claudeCodeAvailable
             )
             DispatchQueue.main.async {
@@ -802,16 +1194,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 readerStore.releaseReader(for: generation, reuse: shouldApply)
                 guard shouldApply else { return }
-                self.quotaView.taskProgress = snapshot
+                self.dashboardStore.update {
+                    $0.taskCollection = collection
+                    $0.isTaskRefreshing = false
+                }
                 // 终端里直接回答后 Claude 不会关闭 hook 连接，靠这次刷新的会话
                 // 状态收起已经不需要的问答弹窗。
-                self.claudePermissionPanelController?
-                    .dismissIfAnsweredInTerminal(in: snapshot.items)
-                let nextBaseSize = panelSizeForTaskRows(snapshot.rowCount)
-                if nextBaseSize != self.currentBasePanelSize {
-                    self.currentBasePanelSize = nextBaseSize
-                    self.followPet()
-                }
+                self.claudePermissionCoordinator?
+                    .dismissIfAnsweredInTerminal(in: collection.items)
             }
         }
     }
@@ -837,20 +1227,47 @@ private struct QuotaRefreshPayload {
     let resetCredits: CodexResetCreditsSnapshot?
 }
 
-func quotaProviderRemainingPercents(
-    afterCaching rows: [QuotaRow],
-    for provider: QuotaProvider,
-    existing: [QuotaProvider: Int]
-) -> [QuotaProvider: Int] {
-    var summaries = existing
-    if let remaining = rows.first(where: {
-        $0.name == provider.summaryRowName
-    })?.remainingPercent {
-        summaries[provider] = remaining
-    } else {
-        summaries.removeValue(forKey: provider)
+struct DynamicIslandDashboardActionBinding {
+    let refreshDashboard: () -> Void
+    let selectQuotaProvider: (QuotaProvider) -> Void
+
+    func bind(to controller: DynamicIslandWindowController) {
+        controller.onRefresh = refreshDashboard
+        controller.onQuotaProviderChange = selectQuotaProvider
     }
-    return summaries
+}
+
+struct DynamicIslandDashboardRefreshDispatcher {
+    let availableProviders: () -> [QuotaProvider]
+    let refreshTasks: () -> Void
+    let refreshQuotaProvider: (QuotaProvider) -> Void
+
+    func refreshDashboard() {
+        let providers = availableProviders()
+        refreshTasks()
+        for provider in providers {
+            refreshQuotaProvider(provider)
+        }
+    }
+}
+
+func dynamicIslandDashboardRefreshQuotaProviders(
+    snapshot: ActivityDashboardSnapshot
+) -> [QuotaProvider] {
+    snapshot.availableProviders
+}
+
+func quotaProviderRemainingPercents(
+    from states: [QuotaProvider: QuotaProviderState]
+) -> [QuotaProvider: Int] {
+    var result: [QuotaProvider: Int] = [:]
+    for provider in QuotaProvider.allCases {
+        guard let remaining = states[provider]?.rows.first(where: {
+            $0.name == provider.summaryRowName
+        })?.remainingPercent else { continue }
+        result[provider] = remaining
+    }
+    return result
 }
 
 final class TaskProgressRefreshReaderStore {

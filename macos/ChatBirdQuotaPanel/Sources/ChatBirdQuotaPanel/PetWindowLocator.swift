@@ -13,6 +13,13 @@ import CoreGraphics
 import Darwin
 import Foundation
 
+func shouldUseStoredPetPosition(
+    overlayOpen: Bool?,
+    allowClosedOverlay: Bool
+) -> Bool {
+    allowClosedOverlay || overlayOpen != false
+}
+
 final class PetWindowLocator {
     private struct NamedWindow {
         let id: CGWindowID
@@ -164,9 +171,15 @@ final class PetWindowLocator {
         return location
     }
 
-    func locateSavedState() -> LocatedPet? {
+    func locateSavedState(
+        allowClosedOverlay: Bool = false,
+        preferredDisplayID: CGDirectDisplayID? = nil
+    ) -> LocatedPet? {
         refreshStoredOverlayState()
-        return storedOverlayLocation()
+        return storedOverlayLocation(
+            allowClosedOverlay: allowClosedOverlay,
+            preferredDisplayID: preferredDisplayID
+        )
     }
 
     private func windowInfo(including windowID: CGWindowID) -> [String: Any]? {
@@ -657,26 +670,51 @@ final class PetWindowLocator {
         )
     }
 
-    private func storedOverlayLocation() -> LocatedPet? {
-        guard overlayOpen != false else { return nil }
+    private func storedOverlayLocation(
+        allowClosedOverlay: Bool = false,
+        preferredDisplayID: CGDirectDisplayID? = nil
+    ) -> LocatedPet? {
+        guard shouldUseStoredPetPosition(
+            overlayOpen: overlayOpen,
+            allowClosedOverlay: allowClosedOverlay
+        ) else { return nil }
 
-        for stored in storedOverlayLocations.sorted(by: { $0.isPrimary && !$1.isPrimary }) {
-            guard let mascot = stored.mascot else { continue }
-            guard let converted = convertToAppKit(stored.rect) else { continue }
-            cachedMascotMetrics = mascot
-            cachedOverlaySize = stored.rect.size
-            guard let appMetrics = scaledMetrics(mascot, from: stored.rect.size, to: converted.0.size) else {
-                continue
-            }
-            return LocatedPet(
-                overlayRect: converted.0,
-                visibleRect: visibleRect(in: converted.0, metrics: appMetrics),
-                panelScale: panelScale(for: mascot),
-                screen: converted.1,
-                source: "saved-\(mascot.source)"
+        let sourcePrefix = overlayOpen == false ? "saved-closed" : "saved"
+        let candidates = storedOverlayLocations.compactMap { stored
+            -> (stored: StoredOverlayLocation, location: LocatedPet)? in
+            guard let mascot = stored.mascot,
+                  let converted = convertToAppKit(stored.rect),
+                  let appMetrics = scaledMetrics(
+                      mascot,
+                      from: stored.rect.size,
+                      to: converted.0.size
+                  )
+            else { return nil }
+            return (
+                stored,
+                LocatedPet(
+                    overlayRect: converted.0,
+                    visibleRect: visibleRect(
+                        in: converted.0,
+                        metrics: appMetrics
+                    ),
+                    panelScale: panelScale(for: mascot),
+                    screen: converted.1,
+                    source: "\(sourcePrefix)-\(mascot.source)"
+                )
             )
         }
-        return nil
+        let selected = preferredDisplayID.flatMap { displayID in
+            candidates.first {
+                dynamicIslandDisplayID(for: $0.location.screen) == displayID
+            }
+        } ?? candidates.first(where: { $0.stored.isPrimary }) ?? candidates.first
+        guard let selected, let mascot = selected.stored.mascot else {
+            return nil
+        }
+        cachedMascotMetrics = mascot
+        cachedOverlaySize = selected.stored.rect.size
+        return selected.location
     }
 
     private func currentVisualMetrics(

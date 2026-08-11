@@ -286,18 +286,122 @@ func runWeeklyQuotaSelfTest() -> Never {
         updatedAt: statusUpdatedAt
     )
     let summaryClearedAfterEmptyRows = quotaProviderRemainingPercents(
-        afterCaching: [],
-        for: .codex,
-        existing: [.codex: 82, .claudeCode: 93]
+        from: [
+            .codex: QuotaProviderState(rows: []),
+            .claudeCode: QuotaProviderState(rows: [QuotaRow(
+                name: "5 小时",
+                remainingPercent: 93,
+                resetsAt: nil
+            )]),
+        ]
     )
     let summaryClearedAfterSummarylessRows = quotaProviderRemainingPercents(
-        afterCaching: [QuotaRow(
+        from: [
+            .codex: QuotaProviderState(rows: [QuotaRow(
+                name: "周额度",
+                remainingPercent: 82,
+                resetsAt: nil
+            )]),
+            .claudeCode: QuotaProviderState(rows: [QuotaRow(
+                name: "周额度",
+                remainingPercent: 91,
+                resetsAt: nil
+            )]),
+        ]
+    )
+    let cachedQuotaState = QuotaProviderState(
+        rows: [QuotaRow(
             name: "周额度",
-            remainingPercent: 91,
-            resetsAt: nil
+            remainingPercent: 64,
+            resetsAt: resetReferenceDate
         )],
-        for: .claudeCode,
-        existing: [.codex: 82, .claudeCode: 93]
+        resetCredits: resetCredits,
+        statusText: "12:00 更新",
+        errorText: nil,
+        updatedAt: resetReferenceDate,
+        isRefreshing: true,
+        isStale: false
+    )
+    var priorFailedCachedQuotaState = cachedQuotaState
+    priorFailedCachedQuotaState.statusText = "1 分钟后自动重试"
+    priorFailedCachedQuotaState.errorText = "额度服务暂不可用"
+    priorFailedCachedQuotaState.isRefreshing = false
+    priorFailedCachedQuotaState.isStale = true
+    let refreshingCachedQuotaState = quotaProviderStateRefreshing(
+        priorFailedCachedQuotaState
+    )
+    let refreshingEmptyQuotaState = quotaProviderStateRefreshing(
+        QuotaProviderState(
+            statusText: "1 分钟后自动重试",
+            errorText: "额度服务暂不可用"
+        )
+    )
+    let failedCachedQuotaState = quotaProviderStateAfterFailure(
+        cachedQuotaState,
+        error: QuotaClientError.noResponse,
+        provider: .codex
+    )
+    let firstFailureQuotaState = quotaProviderStateAfterFailure(
+        QuotaProviderState(isRefreshing: true),
+        error: QuotaClientError.noResponse,
+        provider: .codex
+    )
+    let emptySuccessUpdatedAt = resetReferenceDate.addingTimeInterval(60)
+    let emptySuccessQuotaState = quotaProviderStateAfterSuccess(
+        QuotaProviderState(isRefreshing: true),
+        rows: [],
+        resetCredits: nil,
+        provider: .codex,
+        updatedAt: emptySuccessUpdatedAt
+    )
+    let dynamicIslandRefreshingPhaseState = QuotaProviderState(
+        rows: [QuotaRow(
+            name: "周额度",
+            remainingPercent: 64,
+            resetsAt: resetReferenceDate
+        )],
+        resetCredits: resetCredits,
+        statusText: "正在更新…",
+        errorText: nil,
+        updatedAt: resetReferenceDate,
+        isRefreshing: true,
+        isStale: false
+    )
+    let dynamicIslandStalePhaseState = QuotaProviderState(
+        rows: dynamicIslandRefreshingPhaseState.rows,
+        resetCredits: resetCredits,
+        statusText: "1 分钟后自动重试",
+        errorText: nil,
+        updatedAt: resetReferenceDate,
+        isRefreshing: false,
+        isStale: true
+    )
+    let dynamicIslandErrorStalePhaseState = QuotaProviderState(
+        rows: dynamicIslandRefreshingPhaseState.rows,
+        resetCredits: nil,
+        statusText: "1 分钟后自动重试",
+        errorText: "额度服务暂不可用",
+        updatedAt: resetReferenceDate,
+        isRefreshing: false,
+        isStale: false
+    )
+    let dynamicIslandFirstFailurePhaseState = QuotaProviderState(
+        rows: [],
+        resetCredits: nil,
+        statusText: "1 分钟后自动重试",
+        errorText: "额度服务暂不可用",
+        updatedAt: nil,
+        isRefreshing: false,
+        isStale: false
+    )
+    let dynamicIslandEmptyCurrentPhaseState = QuotaProviderState(
+        rows: [],
+        resetCredits: nil,
+        statusText: "没有可确认的额度数据",
+        errorText: nil,
+        updatedAt: emptySuccessUpdatedAt,
+        isRefreshing: false,
+        isStale: false
     )
 
     guard weeklyRateLimitWindow(from: legacy)?.usedPercent == 42,
@@ -334,12 +438,84 @@ func runWeeklyQuotaSelfTest() -> Never {
           claudeStatus == "10:38 更新 · 1分钟",
           summaryClearedAfterEmptyRows == [.claudeCode: 93],
           summaryClearedAfterSummarylessRows == [.codex: 82],
+          refreshingCachedQuotaState.rows == priorFailedCachedQuotaState.rows,
+          refreshingCachedQuotaState.resetCredits == resetCredits,
+          refreshingCachedQuotaState.updatedAt == resetReferenceDate,
+          refreshingCachedQuotaState.statusText == "正在更新…",
+          refreshingCachedQuotaState.errorText == nil,
+          refreshingCachedQuotaState.isRefreshing,
+          refreshingCachedQuotaState.isStale,
+          refreshingEmptyQuotaState.rows.isEmpty,
+          refreshingEmptyQuotaState.resetCredits == nil,
+          refreshingEmptyQuotaState.updatedAt == nil,
+          refreshingEmptyQuotaState.statusText == "正在读取额度…",
+          refreshingEmptyQuotaState.errorText == nil,
+          refreshingEmptyQuotaState.isRefreshing,
+          !refreshingEmptyQuotaState.isStale,
+          failedCachedQuotaState.rows == cachedQuotaState.rows,
+          failedCachedQuotaState.resetCredits == resetCredits,
+          failedCachedQuotaState.updatedAt == cachedQuotaState.updatedAt,
+          failedCachedQuotaState.errorText == nil,
+          failedCachedQuotaState.statusText == "1 分钟后自动重试",
+          failedCachedQuotaState.isStale,
+          !failedCachedQuotaState.isRefreshing,
+          firstFailureQuotaState.rows.isEmpty,
+          firstFailureQuotaState.resetCredits == nil,
+          firstFailureQuotaState.errorText == "额度服务暂不可用",
+          firstFailureQuotaState.statusText == "1 分钟后自动重试",
+          !firstFailureQuotaState.isStale,
+          !firstFailureQuotaState.isRefreshing,
+          emptySuccessQuotaState.rows.isEmpty,
+          emptySuccessQuotaState.resetCredits == nil,
+          emptySuccessQuotaState.updatedAt == emptySuccessUpdatedAt,
+          emptySuccessQuotaState.statusText == "没有可确认的额度数据",
+          emptySuccessQuotaState.errorText == nil,
+          !emptySuccessQuotaState.isStale,
+          !emptySuccessQuotaState.isRefreshing,
+          dynamicIslandQuotaPhase(
+              state: nil,
+              providerAvailable: true
+          ) == .firstLoad,
+          dynamicIslandQuotaPhase(
+              state: dynamicIslandRefreshingPhaseState,
+              providerAvailable: true
+          ) == .refreshing,
+          dynamicIslandRefreshingPhaseState.rows
+              == [QuotaRow(
+                  name: "周额度",
+                  remainingPercent: 64,
+                  resetsAt: resetReferenceDate
+              )],
+          dynamicIslandRefreshingPhaseState.resetCredits == resetCredits,
+          dynamicIslandQuotaPhase(
+              state: dynamicIslandStalePhaseState,
+              providerAvailable: true
+          ) == .stale,
+          dynamicIslandStalePhaseState.resetCredits == resetCredits,
+          dynamicIslandQuotaPhase(
+              state: dynamicIslandErrorStalePhaseState,
+              providerAvailable: true
+          ) == .stale,
+          dynamicIslandQuotaPhase(
+              state: dynamicIslandFirstFailurePhaseState,
+              providerAvailable: true
+          ) == .firstFailure,
+          dynamicIslandQuotaPhase(
+              state: dynamicIslandEmptyCurrentPhaseState,
+              providerAvailable: true
+          ) == .current,
+          dynamicIslandEmptyCurrentPhaseState.statusText
+              == "没有可确认的额度数据",
+          dynamicIslandQuotaPhase(
+              state: dynamicIslandRefreshingPhaseState,
+              providerAvailable: false
+          ) == .unavailable,
           refreshInterval == 60
     else {
         fputs("weekly quota self-test failed\n", stderr)
         exit(1)
     }
-    print("weekly-quota-self-test: legacy-secondary=pass current-primary=pass retired-short-window=ignored metadata-free=ignored spend-control=ignored thresholds=7/7 reset-credits=available-only legacy-expires-at=iso+date-fallback+invalid-fails weekly-reset-status=dated+fallback failure-copy=pass stale-row=preserved provider-summary-clear=2/2 refresh=60s")
+    print("weekly-quota-self-test: legacy-secondary=pass current-primary=pass retired-short-window=ignored metadata-free=ignored spend-control=ignored thresholds=7/7 reset-credits=available-only stale-reset-credits=preserved legacy-expires-at=iso+date-fallback+invalid-fails weekly-reset-status=dated+fallback failure-copy=pass refresh-start=clears-error+preserves-cache stale-row=preserved empty-success=distinct dynamic-island-phases=6/6 provider-summary-clear=2/2 refresh=60s")
     exit(0)
 }
 
@@ -425,6 +601,10 @@ func runClaudeQuotaSelfTest() -> Never {
         }
         providerView.availableQuotaProviders = QuotaProvider.allCases
         providerView.mouseDown(with: event)
+        guard providerView.selectedQuotaProvider == .codex else {
+            fputs("provider click mutated view-owned selection\n", stderr)
+            exit(1)
+        }
     }
 
     let customClaudeURL = locateClaudeExecutable(

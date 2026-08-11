@@ -89,8 +89,39 @@ if CommandLine.arguments.contains("--self-test-claude-hook") {
     runClaudeHookSelfTest()
 }
 
+if CommandLine.arguments.contains("--self-test-dynamic-island") {
+    runDynamicIslandSelfTest()
+}
+
 if CommandLine.arguments.contains("--self-test-client-contract") {
     runClientContractSelfTest()
+}
+
+if let flag = CommandLine.arguments.firstIndex(
+    of: "--render-dynamic-island-preview"
+) {
+    guard CommandLine.arguments.indices.contains(flag + 2) else {
+        fputs(
+            "用法：--render-dynamic-island-preview <state> <path>\n",
+            stderr
+        )
+        exit(1)
+    }
+    let state = CommandLine.arguments[flag + 1]
+    let outputURL = URL(
+        fileURLWithPath: CommandLine.arguments[flag + 2]
+    )
+    do {
+        try renderDynamicIslandPreview(state: state, to: outputURL)
+        print(outputURL.path)
+        exit(0)
+    } catch {
+        fputs(
+            "写入灵动岛预览失败：\(error.localizedDescription)\n",
+            stderr
+        )
+        exit(1)
+    }
 }
 
 if CommandLine.arguments.contains("--install-claude-hook") {

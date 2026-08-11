@@ -19,6 +19,31 @@ struct PanelPlacement {
     let centerError: CGFloat
 }
 
+/// Keeps the legacy panel visible when Codex is running but the pet window is
+/// temporarily unavailable. The fallback stays on the selected display and
+/// yields to the exact pet-attached placement as soon as the locator recovers.
+func detachedPanelFrame(
+    panelSize: NSSize,
+    screenVisibleFrame: NSRect
+) -> NSRect {
+    let minimumX = screenVisibleFrame.minX + panelScreenMargin
+    let maximumX = max(
+        minimumX,
+        screenVisibleFrame.maxX - panelSize.width - panelScreenMargin
+    )
+    let x = maximumX
+
+    let minimumY = screenVisibleFrame.minY + panelScreenMargin
+    let maximumY = max(
+        minimumY,
+        screenVisibleFrame.maxY - panelSize.height - panelScreenMargin
+    )
+    let desiredY = screenVisibleFrame.maxY - panelSize.height - 12
+    let y = min(max(desiredY, minimumY), maximumY)
+
+    return NSRect(origin: NSPoint(x: x, y: y), size: panelSize)
+}
+
 /// Places the pointer tip on ChatBird's visible horizontal center and keeps its
 /// tip exactly 14 logical points above the visible top tuft. All calculations
 /// use AppKit points, so Retina and scaled displays preserve the same spacing.

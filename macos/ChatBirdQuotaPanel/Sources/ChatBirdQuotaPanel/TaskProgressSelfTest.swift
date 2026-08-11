@@ -26,7 +26,7 @@ func runTaskProgressSelfTest() -> Never {
     }
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
-    print("task-progress-self-test: lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; click-hit=pass; scroll-hit=pass; refresh-hit=pass; hover-live=pass; completed-unread=pass; read-state=6/6; top-level-filter=5/5; task-dedup=pass; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-agents-timeout=bounded; runtime-health-failure=logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
+    print("task-progress-self-test: lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; click-hit=pass; scroll-hit=pass; refresh-hit=pass; hover-live=pass; completed-unread=pass; read-state=6/6; top-level-filter=5/5; task-dedup=pass; full-collection=pass; codex-cwd=pass; events=bounded-3; privacy=pass; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-agents-timeout=bounded; runtime-health-failure=logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
     exit(0)
 }
 
@@ -169,6 +169,163 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
     let commandStarted = #"{"timestamp":"2026-07-25T10:03:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"tool-1","arguments":"secret command"}}"#
     let commandFinished = #"{"timestamp":"2026-07-25T10:04:00Z","type":"response_item","payload":{"type":"function_call_output","call_id":"tool-1","output":"secret output"}}"#
     let hiddenReasoning = #"{"timestamp":"2026-07-25T10:05:00Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"隐藏推理绝不显示"}]}}"#
+    let sessionMeta = #"{"type":"session_meta","payload":{"cwd":"/tmp/chatbird","thread_source":"root"}}"#
+    let openAITestCredential = ["sk", "proj", "ABCDEFGHIJKLMNOPQRSTUV"]
+        .joined(separator: "-")
+    let gitHubTestCredential = "gh" + "p_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+    let codexCommentaryCredential = ["sk", "proj", "CODEXCOMMENTARYSECRET"]
+        .joined(separator: "-")
+    let slackTestCredential = ["xoxb", "123456789012", "abcdefghijklmnop"]
+        .joined(separator: "-")
+    let publicCredentialText = "Authorization: Bearer codex-bearer-secret-1234567890 "
+        + "api_key=\(openAITestCredential) "
+        + "password=correct-horse-battery-staple "
+        + "\(gitHubTestCredential) "
+        + slackTestCredential
+    guard let redactedCredentialText = safePublicActivityParagraph(
+        from: publicCredentialText
+    ),
+          redactedCredentialText.contains("[已隐藏]"),
+          !redactedCredentialText.contains("codex-bearer-secret-1234567890"),
+          !redactedCredentialText.contains(openAITestCredential),
+          !redactedCredentialText.contains("correct-horse-battery-staple"),
+          !redactedCredentialText.contains(gitHubTestCredential),
+          !redactedCredentialText.contains(slackTestCredential),
+          safePublicActivityParagraph(
+              from: #"{"access_token":"raw-json-secret-123456"}"#
+          ) == nil,
+          safePublicActivityParagraph(
+              from: "-----BEGIN PRIVATE KEY-----\nprivate-key-secret\n-----END PRIVATE KEY-----"
+          ) == nil
+    else {
+        fputs("public activity credential sanitizer failed\n", stderr)
+        exit(1)
+    }
+    let codexCredentialCommentary = #"{"timestamp":"2026-07-25T10:07:00Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"Authorization: Bearer codex-commentary-secret-1234567890 api_key=\#(codexCommentaryCredential)"}}"#
+    let codexRawJSONCommentary = #"{"timestamp":"2026-07-25T10:08:00Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"{\"refresh_token\":\"codex-json-secret-123456\"}"}}"#
+    let codexCredentialSnapshot = CodexTaskProgressReader.parse(
+        lines: [
+            timestampedStarted,
+            codexCredentialCommentary,
+            codexRawJSONCommentary,
+        ],
+        modificationDate: now,
+        now: now
+    )
+    let codexCredentialSurface = ([
+        codexCredentialSnapshot.items.first?.activityText,
+    ] + (codexCredentialSnapshot.items.first?.events.map(\.text) ?? []))
+        .compactMap { $0 }
+        .joined(separator: " ")
+    guard codexCredentialSurface.contains("[已隐藏]"),
+          !codexCredentialSurface.contains("codex-commentary-secret-1234567890"),
+          !codexCredentialSurface.contains(codexCommentaryCredential),
+          !codexCredentialSurface.contains("codex-json-secret-123456")
+    else {
+        fputs("Codex public commentary credential filtering failed\n", stderr)
+        exit(1)
+    }
+    let parsedWithDirectory = CodexTaskProgressReader.parse(
+        lines: [sessionMeta, timestampedStarted, publicCommentary, commandStarted],
+        modificationDate: now,
+        now: now
+    )
+    guard parsedWithDirectory.items.first?.workingDirectory == "/tmp/chatbird",
+          parsedWithDirectory.items.first?.events.count == 3,
+          parsedWithDirectory.items.first?.events.allSatisfy({
+              $0.text.count <= 280
+                  && !$0.text.contains("secret")
+                  && !$0.text.contains("隐藏推理")
+          }) == true
+    else {
+        fputs("Codex cwd or bounded safe events failed\n", stderr)
+        exit(1)
+    }
+
+    let full = TaskProgressCollectionSnapshot.displaying(
+        (0..<7).map {
+            TaskProgressItem(
+                title: "Run \($0)",
+                kind: .running,
+                startedAt: now,
+                updatedAt: now.addingTimeInterval(TimeInterval($0))
+            )
+        } + [
+            TaskProgressItem(title: "Failed", kind: .failed, startedAt: now)
+        ]
+    )
+    guard full.items.count == 8,
+          full.compactProjection().items.count == 7,
+          full.filtered(source: .all, state: .failed).count == 1
+    else {
+        fputs("full task collection projection or filtering failed\n", stderr)
+        exit(1)
+    }
+
+    let claudeSessionID = "b687a9ef-4535-4bb4-a9d5-e692bbcdb0a6"
+    let claudePublicText = #"{"type":"assistant","timestamp":"2026-07-25T10:01:00.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"隐藏推理绝不显示"},{"type":"text","text":"正在检查 Claude 任务"}],"stop_reason":null}}"#
+    let claudeToolUse = #"{"type":"assistant","timestamp":"2026-07-25T10:02:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-claude-1","name":"Bash","input":{"command":"echo secret"}}],"stop_reason":null}}"#
+    let claudeToolResult = #"{"type":"user","timestamp":"2026-07-25T10:03:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-claude-1","content":"secret output"}]}}"#
+    let claudeSecondPublicText = #"{"type":"assistant","timestamp":"2026-07-25T10:04:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"继续整理公开状态"}],"stop_reason":null}}"#
+    let claudeGitHubTestCredential = "gh" + "o_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+    let claudeCredentialText = #"{"type":"assistant","timestamp":"2026-07-25T10:05:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"client_secret=claude-client-secret-123456 access_token=\#(claudeGitHubTestCredential)"}],"stop_reason":null}}"#
+    let claudeRawJSONText = #"{"type":"assistant","timestamp":"2026-07-25T10:06:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"{\"password\":\"claude-json-secret-123456\"}"}],"stop_reason":null}}"#
+    let claudeWithEvents = ClaudeTaskProgressReader.parseTranscript(
+        lines: [
+            claudePublicText,
+            claudeToolUse,
+            claudeToolResult,
+            claudeSecondPublicText,
+        ],
+        sessionID: claudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/claude-project",
+        activeKind: .running,
+        startedAt: now.addingTimeInterval(-30),
+        modificationDate: now,
+        now: now
+    )
+    let claudeEvents = claudeWithEvents?.events ?? []
+    guard claudeEvents.count == 3,
+          claudeEvents.map(\.kind) == [
+              .commentary,
+              .tool,
+              .commentary,
+          ],
+          claudeEvents.allSatisfy({
+              $0.text.count <= 280
+                  && !$0.text.contains("secret")
+                  && !$0.text.contains("隐藏推理")
+          }) == true
+    else {
+        fputs("Claude bounded safe events or privacy filtering failed\n", stderr)
+        exit(1)
+    }
+
+    let claudeCredentialSnapshot = ClaudeTaskProgressReader.parseTranscript(
+        lines: [claudeCredentialText, claudeRawJSONText],
+        sessionID: claudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/claude-project",
+        activeKind: .running,
+        startedAt: now.addingTimeInterval(-30),
+        modificationDate: now,
+        now: now
+    )
+    let claudeCredentialSurface = ([
+        claudeCredentialSnapshot?.activityText,
+    ] + (claudeCredentialSnapshot?.events.map(\.text) ?? []))
+        .compactMap { $0 }
+        .joined(separator: " ")
+    guard claudeCredentialSurface.contains("[已隐藏]"),
+          !claudeCredentialSurface.contains("claude-client-secret-123456"),
+          !claudeCredentialSurface.contains(claudeGitHubTestCredential),
+          !claudeCredentialSurface.contains("claude-json-secret-123456")
+    else {
+        fputs("Claude public text credential filtering failed\n", stderr)
+        exit(1)
+    }
+
     let toolActive = CodexTaskProgressReader.parse(
         lines: [timestampedStarted, publicCommentary, commandStarted, hiddenReasoning],
         modificationDate: now,

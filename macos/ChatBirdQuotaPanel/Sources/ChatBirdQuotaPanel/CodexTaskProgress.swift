@@ -44,7 +44,7 @@ final class CodexTaskProgressReader {
     private var hasCachedUnreadState = false
     private var nextRolloutScanAt = Date.distantPast
 
-    func read() -> TaskProgressSnapshot {
+    func readCollection() -> TaskProgressCollectionSnapshot {
         let now = Date()
         let threadTitles = readThreadTitleIndex()
         let unreadState = readUnreadThreadState()
@@ -82,7 +82,9 @@ final class CodexTaskProgressReader {
                 updatedAt: item.updatedAt,
                 activityText: item.activityText,
                 statusOverride: item.statusOverride,
-                threadID: threadID
+                threadID: threadID,
+                workingDirectory: item.workingDirectory,
+                events: item.events
             )
             guard Self.shouldDisplay(
                 kind: item.kind,
@@ -95,11 +97,11 @@ final class CodexTaskProgressReader {
             items.append(item)
         }
 
-        items.sort {
-            if $0.updatedAt == $1.updatedAt { return $0.title < $1.title }
-            return $0.updatedAt > $1.updatedAt
-        }
         return .displaying(items)
+    }
+
+    func read() -> TaskProgressSnapshot {
+        readCollection().compactProjection()
     }
 
     static func parse(
@@ -114,6 +116,8 @@ final class CodexTaskProgressReader {
         var activeTaskTitle: String?
         var publicCommentaryText = ""
         var latestPublicCommentary: String?
+        var workingDirectory: String?
+        var events: [TaskActivityEvent] = []
         var taskStartedAt = modificationDate
         var lastUpdatedAt = modificationDate
 
@@ -130,15 +134,25 @@ final class CodexTaskProgressReader {
                 || line.contains("custom_tool_call")
                 || line.contains("function_call_output")
                 || line.contains("custom_tool_call_output")
+                || line.contains("session_meta")
             else { continue }
 
             guard let data = line.data(using: .utf8),
                   let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let payload = record["payload"] as? [String: Any],
-                  let payloadType = payload["type"] as? String
+                  let payload = record["payload"] as? [String: Any]
             else { continue }
 
+            if record["type"] as? String == "session_meta",
+               let rawCwd = payload["cwd"] as? String,
+               let cwd = normalizedAbsolutePath(rawCwd) {
+                workingDirectory = cwd
+                continue
+            }
+
+            guard let payloadType = payload["type"] as? String else { continue }
+
             if record["type"] as? String == "event_msg" {
+                let eventDate = timestamp(from: record) ?? lastUpdatedAt
                 if payloadType == "user_message",
                    let message = payload["message"] as? String,
                    let title = taskTitle(from: message)
@@ -151,18 +165,42 @@ final class CodexTaskProgressReader {
                     publicCommentaryText = ""
                     latestPublicCommentary = nil
                     activeTaskTitle = latestUserTitle ?? activeTaskTitle
-                    taskStartedAt = timestamp(from: record) ?? modificationDate
-                    lastUpdatedAt = timestamp(from: record) ?? modificationDate
+                    taskStartedAt = eventDate
+                    lastUpdatedAt = eventDate
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(
+                            kind: .lifecycle,
+                            occurredAt: eventDate,
+                            text: "任务开始"
+                        ),
+                        to: events
+                    )
                 } else if payloadType == "task_complete" {
                     lifecycle = .completed
                     pendingUserInputCalls.removeAll()
                     activeTools.removeAll()
-                    lastUpdatedAt = timestamp(from: record) ?? lastUpdatedAt
+                    lastUpdatedAt = eventDate
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(
+                            kind: .lifecycle,
+                            occurredAt: eventDate,
+                            text: "任务完成"
+                        ),
+                        to: events
+                    )
                 } else if ["task_failed", "turn_aborted", "error"].contains(payloadType) {
                     lifecycle = .failed
                     pendingUserInputCalls.removeAll()
                     activeTools.removeAll()
-                    lastUpdatedAt = timestamp(from: record) ?? lastUpdatedAt
+                    lastUpdatedAt = eventDate
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(
+                            kind: .lifecycle,
+                            occurredAt: eventDate,
+                            text: "任务失败"
+                        ),
+                        to: events
+                    )
                 } else if payloadType == "agent_message",
                           payload["phase"] as? String == "commentary",
                           let message = payload["message"] as? String,
@@ -174,8 +212,16 @@ final class CodexTaskProgressReader {
                             commentary,
                             to: publicCommentaryText
                         )
+                        events = appendingTaskActivityEvent(
+                            TaskActivityEvent(
+                                kind: .commentary,
+                                occurredAt: eventDate,
+                                text: commentary
+                            ),
+                            to: events
+                        )
                     }
-                    lastUpdatedAt = timestamp(from: record) ?? lastUpdatedAt
+                    lastUpdatedAt = eventDate
                 }
                 continue
             }
@@ -189,10 +235,27 @@ final class CodexTaskProgressReader {
                 if name == "request_user_input" {
                     pendingUserInputCalls.insert(callID)
                     activeTools.removeValue(forKey: callID)
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(
+                            kind: .lifecycle,
+                            occurredAt: eventDate,
+                            text: "等待输入"
+                        ),
+                        to: events
+                    )
                 } else {
+                    let toolActivity = safeToolActivity(name: name)
                     activeTools[callID] = (
-                        text: safeToolActivity(name: name),
+                        text: toolActivity,
                         updatedAt: eventDate
+                    )
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(
+                            kind: .tool,
+                            occurredAt: eventDate,
+                            text: toolActivity
+                        ),
+                        to: events
                     )
                 }
                 continue
@@ -215,7 +278,9 @@ final class CodexTaskProgressReader {
                 title: title,
                 kind: .waitingForInput,
                 startedAt: taskStartedAt,
-                updatedAt: lastUpdatedAt
+                updatedAt: lastUpdatedAt,
+                workingDirectory: workingDirectory,
+                events: events
             )])
         }
         if let lifecycle {
@@ -233,7 +298,9 @@ final class CodexTaskProgressReader {
                 kind: lifecycle,
                 startedAt: taskStartedAt,
                 updatedAt: lastUpdatedAt,
-                activityText: activityText
+                activityText: activityText,
+                workingDirectory: workingDirectory,
+                events: events
             )])
         }
         if !pendingUserInputCalls.isEmpty {
@@ -241,7 +308,9 @@ final class CodexTaskProgressReader {
                 title: title,
                 kind: .waitingForInput,
                 startedAt: taskStartedAt,
-                updatedAt: lastUpdatedAt
+                updatedAt: lastUpdatedAt,
+                workingDirectory: workingDirectory,
+                events: events
             )])
         }
         if now.timeIntervalSince(modificationDate) <= 30 * 60 {
@@ -253,7 +322,9 @@ final class CodexTaskProgressReader {
                 activityText: runningActivityText(
                     activeTools: activeTools,
                     publicCommentaryText: publicCommentaryText
-                )
+                ),
+                workingDirectory: workingDirectory,
+                events: events
             )])
         }
         return .idle
@@ -321,7 +392,7 @@ final class CodexTaskProgressReader {
             lines.removeLast()
         }
         let joined = lines.joined(separator: " ")
-        return joined.isEmpty ? nil : joined
+        return safePublicActivityParagraph(from: joined)
     }
 
     private static func taskTitle(from rawMessage: String) -> String? {

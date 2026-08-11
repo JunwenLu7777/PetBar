@@ -13,7 +13,30 @@ import CoreGraphics
 import Darwin
 import Foundation
 
+struct QuotaPanelModeSwitchSnapshot: Equatable {
+    let buttonFrame: NSRect
+    let hideButtonFrame: NSRect
+    let title: String
+    let toolTip: String?
+    let accessibilityLabel: String?
+    let accessibilityHelp: String?
+}
+
+private final class QuotaPanelModeSwitchButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+}
+
 final class QuotaPanelView: NSView {
+    var currentDateProvider: () -> Date = { Date() } {
+        didSet { needsDisplay = true }
+    }
     var rows: [QuotaRow] = [] { didSet { needsDisplay = true } }
     var providerRemainingPercents: [QuotaProvider: Int] = [:] {
         didSet { needsDisplay = true }
@@ -66,6 +89,7 @@ final class QuotaPanelView: NSView {
         didSet {
             guard pointerSide != oldValue else { return }
             needsDisplay = true
+            needsLayout = true
             syncTaskSymbolViews()
             window?.invalidateCursorRects(for: self)
         }
@@ -77,12 +101,19 @@ final class QuotaPanelView: NSView {
         }
     }
     var onRequestHide: (() -> Void)?
+    var onRequestDynamicIsland: (() -> Void)?
     var onOpenTask: ((TaskProgressItem) -> Void)?
     var onRequestQuotaRefresh: (() -> Void)?
     var onSelectQuotaProvider: ((QuotaProvider) -> Void)?
     var onHoverRunningTask: ((TaskProgressItem?, NSRect?) -> Void)?
     private var interactiveTrackingAreas: [NSTrackingArea] = []
     private var isHideButtonHovered = false
+    private var isModeSwitchButtonHovered = false
+    private let modeSwitchButton = QuotaPanelModeSwitchButton(
+        title: "",
+        target: nil,
+        action: nil
+    )
     // 以下四个状态会被 QuotaPanelViewDrawing.swift 的绘制扩展读取，保持 internal。
     var hoveredQuotaProvider: QuotaProvider?
     var hoveredTaskIndex: Int?
@@ -98,6 +129,16 @@ final class QuotaPanelView: NSView {
 
     override var isFlipped: Bool { true }
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureModeSwitchButton()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureModeSwitchButton()
+    }
+
     deinit {
         animationTimer?.invalidate()
     }
@@ -107,10 +148,31 @@ final class QuotaPanelView: NSView {
         syncTaskSymbolViews()
     }
 
+    override func layout() {
+        super.layout()
+        modeSwitchButton.frame = modeSwitchButtonRect(in: panelBodyRect())
+    }
+
     func setRunningTaskBadgeAnimationsEnabled(_ enabled: Bool) {
         guard taskAnimationsEnabled != enabled else { return }
         taskAnimationsEnabled = enabled
         refreshAnimationTimerState()
+    }
+
+    func applyDashboardSnapshot(_ snapshot: ActivityDashboardSnapshot) {
+        let provider = snapshot.selectedQuotaProvider
+        let quota = snapshot.quotaStates[provider] ?? QuotaProviderState()
+        availableQuotaProviders = snapshot.availableProviders
+        selectedQuotaProvider = provider
+        rows = quota.rows
+        codexResetCredits = snapshot.quotaStates[.codex]?.resetCredits
+        statusText = quota.statusText
+        errorText = quota.errorText
+        isQuotaRefreshing = quota.isRefreshing
+        taskProgress = snapshot.taskCollection.compactProjection()
+        providerRemainingPercents = quotaProviderRemainingPercents(
+            from: snapshot.quotaStates
+        )
     }
 
     func scrollTaskList(by rowDelta: Int) {
@@ -331,6 +393,42 @@ final class QuotaPanelView: NSView {
         NSShadow().set()
 
         drawQuotaProviderButtons(in: bodyRect)
+        let modeSwitchButton = modeSwitchButtonRect(in: bodyRect)
+        let modeSwitchButtonPath = NSBezierPath(
+            roundedRect: modeSwitchButton,
+            xRadius: 8,
+            yRadius: 8
+        )
+        NSColor(
+            calibratedRed: 0.20,
+            green: 0.68,
+            blue: 1.0,
+            alpha: isModeSwitchButtonHovered ? 0.24 : 0.13
+        ).setFill()
+        modeSwitchButtonPath.fill()
+        NSColor(
+            calibratedRed: 0.42,
+            green: 0.82,
+            blue: 1.0,
+            alpha: isModeSwitchButtonHovered ? 0.72 : 0.42
+        ).setStroke()
+        modeSwitchButtonPath.lineWidth = 0.75
+        modeSwitchButtonPath.stroke()
+        drawText(
+            "灵动岛",
+            in: NSRect(
+                x: modeSwitchButton.minX,
+                y: modeSwitchButton.minY + 2,
+                width: modeSwitchButton.width,
+                height: 15
+            ),
+            font: .systemFont(ofSize: 9.5, weight: .semibold),
+            color: NSColor.white.withAlphaComponent(
+                isModeSwitchButtonHovered ? 1.0 : 0.92
+            ),
+            alignment: .center
+        )
+
         let hideButton = hideButtonRect(in: bodyRect)
         let hideButtonPath = NSBezierPath(roundedRect: hideButton, xRadius: 8, yRadius: 8)
         NSColor.white.withAlphaComponent(isHideButtonHovered ? 0.20 : 0.11).setFill()
@@ -427,6 +525,15 @@ final class QuotaPanelView: NSView {
         addTrackingArea(hideTrackingArea)
         interactiveTrackingAreas.append(hideTrackingArea)
 
+        let modeSwitchTrackingArea = NSTrackingArea(
+            rect: modeSwitchButtonRect(in: panelBodyRect()),
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: [Self.trackingKindKey: "mode-switch"]
+        )
+        addTrackingArea(modeSwitchTrackingArea)
+        interactiveTrackingAreas.append(modeSwitchTrackingArea)
+
         for provider in availableQuotaProviders {
             let providerTrackingArea = NSTrackingArea(
                 rect: quotaProviderButtonRect(for: provider, in: panelBodyRect()),
@@ -462,6 +569,8 @@ final class QuotaPanelView: NSView {
         else { return }
         if kind == "hide" {
             isHideButtonHovered = true
+        } else if kind == "mode-switch" {
+            isModeSwitchButtonHovered = true
         } else if kind == "quota-provider" {
             hoveredQuotaProvider = (
                 event.trackingArea?.userInfo?[Self.trackingProviderKey] as? String
@@ -479,6 +588,8 @@ final class QuotaPanelView: NSView {
         else { return }
         if kind == "hide" {
             isHideButtonHovered = false
+        } else if kind == "mode-switch" {
+            isModeSwitchButtonHovered = false
         } else if kind == "quota-provider" {
             if hoveredQuotaProvider?.rawValue
                 == event.trackingArea?.userInfo?[Self.trackingProviderKey] as? String
@@ -501,6 +612,10 @@ final class QuotaPanelView: NSView {
             onRequestHide?()
             return
         }
+        if modeSwitchButtonRect(in: bodyRect).contains(point) {
+            onRequestDynamicIsland?()
+            return
+        }
         if quotaRefreshButtonRect(in: bodyRect).contains(point) {
             onRequestQuotaRefresh?()
             return
@@ -508,7 +623,6 @@ final class QuotaPanelView: NSView {
         for provider in availableQuotaProviders
             where quotaProviderButtonRect(for: provider, in: bodyRect).contains(point)
         {
-            selectedQuotaProvider = provider
             onSelectQuotaProvider?(provider)
             return
         }
@@ -531,6 +645,7 @@ final class QuotaPanelView: NSView {
         super.resetCursorRects()
         let bodyRect = panelBodyRect()
         addCursorRect(hideButtonRect(in: bodyRect), cursor: .pointingHand)
+        addCursorRect(modeSwitchButtonRect(in: bodyRect), cursor: .pointingHand)
         for provider in availableQuotaProviders {
             addCursorRect(
                 quotaProviderButtonRect(for: provider, in: bodyRect),
@@ -600,6 +715,49 @@ final class QuotaPanelView: NSView {
 
     private func hideButtonRect(in bodyRect: NSRect) -> NSRect {
         NSRect(x: bodyRect.maxX - 48, y: 10, width: 38, height: 18)
+    }
+
+    private func modeSwitchButtonRect(in bodyRect: NSRect) -> NSRect {
+        NSRect(x: bodyRect.maxX - 116, y: 10, width: 60, height: 18)
+    }
+
+    func modeSwitchSnapshotForSelfTest() -> QuotaPanelModeSwitchSnapshot {
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        let bodyRect = panelBodyRect()
+        return QuotaPanelModeSwitchSnapshot(
+            buttonFrame: modeSwitchButton.frame,
+            hideButtonFrame: hideButtonRect(in: bodyRect),
+            title: "灵动岛",
+            toolTip: modeSwitchButton.toolTip,
+            accessibilityLabel:
+                modeSwitchButton.accessibilityLabel() as? String,
+            accessibilityHelp:
+                modeSwitchButton.accessibilityHelp() as? String
+        )
+    }
+
+    func performModeSwitchForSelfTest() {
+        modeSwitchButton.performClick(nil)
+    }
+
+    private func configureModeSwitchButton() {
+        modeSwitchButton.isBordered = false
+        modeSwitchButton.isTransparent = true
+        modeSwitchButton.focusRingType = .none
+        modeSwitchButton.target = self
+        modeSwitchButton.action = #selector(requestDynamicIsland)
+        modeSwitchButton.setAccessibilityRole(.button)
+        modeSwitchButton.setAccessibilityLabel("切换到灵动岛")
+        modeSwitchButton.setAccessibilityHelp(
+            "关闭宠物面板并显示灵动岛胶囊"
+        )
+        modeSwitchButton.toolTip = "切换到灵动岛"
+        addSubview(modeSwitchButton)
+    }
+
+    @objc private func requestDynamicIsland() {
+        onRequestDynamicIsland?()
     }
 
     func quotaProviderButtonRect(

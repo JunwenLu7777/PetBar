@@ -2,99 +2,42 @@
 //  ClaudePermissionPanel.swift
 //  ChatBirdQuotaPanel
 //
-//  模块职责：Claude 权限面板控制器与提示页——请求队列、面板定位与
-//  展示、工具审批/问答/计划审查三种交互的视图构建、用户决策回调。
+//  模块职责：Claude 权限面板展示器与提示页——面板定位与展示、
+//  工具审批/问答/计划审查三种交互的视图构建、用户决策回调。
 //  视觉组件见 ClaudePermissionViews.swift，问答表单见
 //  ClaudePermissionQuestions.swift。
 //
 
 import AppKit
 
-final class ClaudePermissionPanelController {
-    private struct Entry {
-        let prompt: ClaudePermissionPrompt
-        let completion: (ClaudePermissionUserDecision) -> Void
-    }
-
+final class ClaudePermissionPanelPresenter: ClaudePermissionPresenting {
     private let anchorWindowProvider: () -> NSWindow?
-    private let openTerminal: (ClaudePermissionPrompt) -> Void
-    private var entries: [Entry] = []
-    private var currentEntry: Entry?
     private var panel: ClaudePermissionPanel?
     private var promptController: ClaudePermissionPromptViewController?
-    // 当前弹窗对应会话是否已被观察到处于等待输入，供自动收起判断真实状态跃迁。
-    private var currentEntryWasWaitingForInput = false
 
-    init(
-        anchorWindowProvider: @escaping () -> NSWindow?,
-        openTerminal: @escaping (ClaudePermissionPrompt) -> Void
-    ) {
+    init(anchorWindowProvider: @escaping () -> NSWindow?) {
         self.anchorWindowProvider = anchorWindowProvider
-        self.openTerminal = openTerminal
     }
 
-    func enqueue(
-        prompt: ClaudePermissionPrompt,
-        completion: @escaping (ClaudePermissionUserDecision) -> Void
-    ) {
-        let alreadyQueued = currentEntry?.prompt.requestID == prompt.requestID
-            || entries.contains(where: { $0.prompt.requestID == prompt.requestID })
-        guard !alreadyQueued else { return }
-        entries.append(Entry(prompt: prompt, completion: completion))
-        showNextIfNeeded()
+    func present(_ presentation: ClaudePermissionPresentation) {
+        let controller = ClaudePermissionPromptViewController(
+            prompt: presentation.prompt,
+            queueCount: presentation.queue.count
+        )
+        controller.onDecision = presentation.onDecision
+        promptController = controller
+        let panel = makeOrReusePanel(size: controller.preferredPanelSize)
+        panel.setContentSize(controller.preferredPanelSize)
+        panel.contentViewController = controller
+        reposition()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
     }
 
-    func expire(requestID: UUID) {
-        if currentEntry?.prompt.requestID == requestID {
-            currentEntry = nil
-            hidePanel()
-            showNextIfNeeded()
-            return
-        }
-        entries.removeAll { $0.prompt.requestID == requestID }
-    }
-
-    // 在终端里直接回答时 Claude 不会关闭 hook 连接，也不会再读响应，弹窗因此
-    // 只能靠任务状态收起，否则要挂到请求超时。
-    //
-    // 收起前必须先观察到该会话处于等待输入：弹窗弹出的那一刻 Claude 还在执行
-    // 工具调用，会话是 running，直接按"非等待输入"判断会把刚弹出的窗立即关掉。
-    // 因此只认「先等待、后离开等待」这一次真实跃迁。读不到该会话同样不收起，
-    // 避免读取抖动关掉正要回答的弹窗。收起时不拉起终端——用户已经在终端里。
-    @discardableResult
-    func dismissIfAnsweredInTerminal(in tasks: [TaskProgressItem]) -> Bool {
-        guard let entry = currentEntry,
-              let task = claudeTaskItem(
-                  forSessionID: entry.prompt.sessionID,
-                  in: tasks
-              )
-        else {
-            return false
-        }
-        if task.kind == .waitingForInput {
-            currentEntryWasWaitingForInput = true
-            return false
-        }
-        guard currentEntryWasWaitingForInput else { return false }
-        currentEntry = nil
-        hidePanel()
-        entry.completion(.nativeFallback)
-        showNextIfNeeded()
-        return true
-    }
-
-    @discardableResult
-    func handoffToTerminalIfPresenting(_ task: TaskProgressItem) -> Bool {
-        guard let entry = currentEntry,
-              claudeTaskItem(
-                  forSessionID: entry.prompt.sessionID,
-                  in: [task]
-              ) != nil
-        else {
-            return false
-        }
-        completeCurrent(with: .nativeFallback)
-        return true
+    func dismiss() {
+        panel?.orderOut(nil)
+        panel?.contentViewController = nil
+        promptController = nil
     }
 
     func reposition() {
@@ -127,74 +70,30 @@ final class ClaudePermissionPanelController {
         panel.setFrameOrigin(origin)
     }
 
-    func cancelAll() {
-        let outstanding = ([currentEntry].compactMap { $0 } + entries)
-        currentEntry = nil
-        entries.removeAll()
-        hidePanel()
-        outstanding.forEach { $0.completion(.nativeFallback) }
-    }
-
-    private func showNextIfNeeded() {
-        guard currentEntry == nil, !entries.isEmpty else { return }
-        let entry = entries.removeFirst()
-        currentEntry = entry
-        // 每个弹窗独立判断状态跃迁，不能沿用上一个会话的观察结果。
-        currentEntryWasWaitingForInput = false
-
-        let controller = ClaudePermissionPromptViewController(
-            prompt: entry.prompt,
-            queueCount: entries.count + 1
+    private func makeOrReusePanel(size: NSSize) -> ClaudePermissionPanel {
+        if let panel { return panel }
+        let created = ClaudePermissionPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .utilityWindow],
+            backing: .buffered,
+            defer: false
         )
-        controller.onDecision = { [weak self] decision in
-            self?.completeCurrent(with: decision)
-        }
-        promptController = controller
-
-        let size = controller.preferredPanelSize
-        let panel: ClaudePermissionPanel
-        if let existing = self.panel {
-            panel = existing
-        } else {
-            panel = ClaudePermissionPanel(
-                contentRect: NSRect(origin: .zero, size: size),
-                styleMask: [.borderless, .utilityWindow],
-                backing: .buffered,
-                defer: false
-            )
-            panel.isOpaque = false
-            panel.backgroundColor = .clear
-            panel.hasShadow = true
-            panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 2)
-            panel.hidesOnDeactivate = false
-            panel.isMovable = false
-            panel.isReleasedWhenClosed = false
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-            self.panel = panel
-        }
-
-        panel.setContentSize(size)
-        panel.contentViewController = controller
-        reposition()
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-    }
-
-    private func completeCurrent(with decision: ClaudePermissionUserDecision) {
-        guard let entry = currentEntry else { return }
-        currentEntry = nil
-        hidePanel()
-        entry.completion(decision)
-        if case .nativeFallback = decision {
-            openTerminal(entry.prompt)
-        }
-        showNextIfNeeded()
-    }
-
-    private func hidePanel() {
-        panel?.orderOut(nil)
-        panel?.contentViewController = nil
-        promptController = nil
+        created.isOpaque = false
+        created.backgroundColor = .clear
+        created.hasShadow = true
+        created.level = NSWindow.Level(
+            rawValue: NSWindow.Level.statusBar.rawValue + 2
+        )
+        created.hidesOnDeactivate = false
+        created.isMovable = false
+        created.isReleasedWhenClosed = false
+        created.collectionBehavior = [
+            .canJoinAllSpaces,
+            .fullScreenAuxiliary,
+            .stationary,
+        ]
+        panel = created
+        return created
     }
 }
 
@@ -210,6 +109,7 @@ final class ClaudePermissionPromptViewController: NSViewController {
     private var questionPageIndicator: NSTextField?
     private var previousQuestionButton: NSButton?
     private var nextQuestionButton: NSButton?
+    private weak var planTextLabel: NSTextField?
     private var planFeedbackField: NSTextField?
     private var validationLabel: NSTextField?
 
@@ -606,6 +506,16 @@ final class ClaudePermissionPromptViewController: NSViewController {
         nextQuestionButton?.alphaValue = currentQuestionIndex + 1 < count ? 1 : 0.36
     }
 
+    func preparePlanForPreviewRendering() -> Bool {
+        guard prompt.interactionKind == .exitPlanMode,
+              let planTextLabel,
+              let cell = planTextLabel.cell
+        else { return false }
+        planTextLabel.isSelectable = false
+        cell.isHighlighted = false
+        return !planTextLabel.isSelectable && !cell.isHighlighted
+    }
+
     private func buildPlanReview(in stack: NSStackView) {
         let message = multilineLabel(prompt.message, fontSize: 12)
         message.maximumNumberOfLines = 1
@@ -615,6 +525,7 @@ final class ClaudePermissionPromptViewController: NSViewController {
 
         let planText = prompt.planText ?? "Claude 已完成计划。完整计划可在终端中查看。"
         let planLabel = NSTextField(wrappingLabelWithString: planText)
+        planTextLabel = planLabel
         planLabel.isSelectable = true
         planLabel.font = .systemFont(ofSize: 12)
         planLabel.textColor = ClaudePanelPalette.primaryText.withAlphaComponent(0.86)

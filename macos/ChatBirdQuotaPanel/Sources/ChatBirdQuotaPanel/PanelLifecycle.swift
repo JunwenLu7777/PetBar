@@ -20,6 +20,13 @@ func shouldPresentPanel(
     codexDesktopRunning && !hiddenByUser && hasPetLocation
 }
 
+func shouldPresentDetachedPetPanel(
+    codexDesktopRunning: Bool,
+    hiddenByUser: Bool
+) -> Bool {
+    codexDesktopRunning && !hiddenByUser
+}
+
 func shouldPresentClaudePermissionPanel(
     cachedCodexDesktopRunning: Bool,
     liveCodexDesktopRunning: Bool
@@ -30,6 +37,106 @@ func shouldPresentClaudePermissionPanel(
         return liveCodexDesktopRunning
     }
     return cachedCodexDesktopRunning
+}
+
+enum PresentationCommand: Equatable {
+    case toggleVisibility
+    case selectMode(PresentationMode)
+    case moveToCurrentDisplay
+    case quit
+}
+
+struct PresentationRuntimeDecision: Equatable {
+    let showPetPanel: Bool
+    let showDynamicIsland: Bool
+    let bindLegacyPermissionPresenter: Bool
+    let bindDynamicPermissionPresenter: Bool
+}
+
+enum DynamicIslandVisibilityAction: Equatable {
+    case hidden
+    case capsule
+    case confirmation
+}
+
+func dynamicIslandVisibilityAction(
+    decision: PresentationRuntimeDecision,
+    hasCurrentPermissionRequest: Bool
+) -> DynamicIslandVisibilityAction {
+    guard decision.showDynamicIsland else { return .hidden }
+    return hasCurrentPermissionRequest ? .confirmation : .capsule
+}
+
+func presentationRuntimeDecision(
+    mode: PresentationMode,
+    hiddenByUser: Bool
+) -> PresentationRuntimeDecision {
+    PresentationRuntimeDecision(
+        showPetPanel: !hiddenByUser && mode == .petPanel,
+        showDynamicIsland: !hiddenByUser && mode == .dynamicIsland,
+        bindLegacyPermissionPresenter: mode == .petPanel,
+        bindDynamicPermissionPresenter: mode == .dynamicIsland
+    )
+}
+
+func codexExitPresentationDecision(
+    mode: PresentationMode,
+    hiddenByUser: Bool
+) -> PresentationRuntimeDecision {
+    PresentationRuntimeDecision(
+        showPetPanel: false,
+        showDynamicIsland: !hiddenByUser && mode == .dynamicIsland,
+        bindLegacyPermissionPresenter: mode == .petPanel,
+        bindDynamicPermissionPresenter: mode == .dynamicIsland
+    )
+}
+
+func codexLifecyclePresentationDecision(
+    mode: PresentationMode,
+    hiddenByUser: Bool,
+    codexDesktopRunning: Bool
+) -> PresentationRuntimeDecision {
+    if codexDesktopRunning {
+        return presentationRuntimeDecision(
+            mode: mode,
+            hiddenByUser: hiddenByUser
+        )
+    }
+    return codexExitPresentationDecision(
+        mode: mode,
+        hiddenByUser: hiddenByUser
+    )
+}
+
+func shouldHandlePetClick(mode: PresentationMode) -> Bool {
+    mode == .petPanel
+}
+
+func isPresentationCommandEnabled(
+    _ command: PresentationCommand,
+    mode: PresentationMode
+) -> Bool {
+    switch command {
+    case .moveToCurrentDisplay:
+        return mode == .dynamicIsland
+    case .toggleVisibility, .selectMode, .quit:
+        return true
+    }
+}
+
+func acknowledgeTerminalTask(
+    _ item: TaskProgressItem,
+    in keys: inout Set<String>
+) {
+    guard let key = terminalTaskAcknowledgementKey(for: item) else { return }
+    keys.insert(key)
+}
+
+func dashboardSnapshotPreservedAcrossPresentationSwitch(
+    before: ActivityDashboardSnapshot,
+    after: ActivityDashboardSnapshot
+) -> Bool {
+    before == after
 }
 
 enum PetPanelClickAction: Equatable {

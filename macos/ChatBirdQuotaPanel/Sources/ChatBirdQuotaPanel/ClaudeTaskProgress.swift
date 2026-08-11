@@ -305,7 +305,7 @@ final class ClaudeTaskProgressReader {
     private var cachedAgents: [ClaudeAgentSnapshot] = []
     private var nextAgentRefreshAt = Date.distantPast
 
-    func read() -> TaskProgressSnapshot {
+    func readCollection() -> TaskProgressCollectionSnapshot {
         let now = Date()
         let cachedActiveSessionIDs = Set(
             cachedAgents.map { $0.sessionID.lowercased() }
@@ -406,6 +406,10 @@ final class ClaudeTaskProgressReader {
         return .displaying(items)
     }
 
+    func read() -> TaskProgressSnapshot {
+        readCollection().compactProjection()
+    }
+
     private func recentAgents(now: Date) -> [ClaudeAgentSnapshot] {
         if now < nextAgentRefreshAt {
             return cachedAgents
@@ -440,6 +444,7 @@ final class ClaudeTaskProgressReader {
         var lastStopReason: String?
         var lastMeaningfulRole: String?
         var failed = false
+        var events: [TaskActivityEvent] = []
 
         for line in lines {
             guard let data = line.data(using: .utf8),
@@ -497,20 +502,45 @@ final class ClaudeTaskProgressReader {
                     let blockType = (block["type"] as? String)?.lowercased()
                     if blockType == "text",
                        let text = block["text"] as? String,
-                       let paragraph = taskActivityParagraph(from: text) {
+                       let paragraph = safePublicActivityParagraph(from: text) {
                         publicActivity = appendingTaskActivityParagraph(
                             paragraph,
                             to: publicActivity
+                        )
+                        events = appendingTaskActivityEvent(
+                            TaskActivityEvent(
+                                kind: .commentary,
+                                occurredAt: timestamp,
+                                text: paragraph
+                            ),
+                            to: events
                         )
                     } else if blockType == "tool_use",
                               let name = block["name"] as? String {
                         let callID = block["id"] as? String ?? UUID().uuidString
                         if isUserInputTool(name) {
                             pendingUserInputCalls.insert(callID)
+                            events = appendingTaskActivityEvent(
+                                TaskActivityEvent(
+                                    kind: .lifecycle,
+                                    occurredAt: timestamp,
+                                    text: "等待输入"
+                                ),
+                                to: events
+                            )
                         } else {
+                            let toolActivity = safeToolActivity(name: name)
                             activeTools[callID] = (
-                                safeToolActivity(name: name),
+                                toolActivity,
                                 timestamp
+                            )
+                            events = appendingTaskActivityEvent(
+                                TaskActivityEvent(
+                                    kind: .tool,
+                                    occurredAt: timestamp,
+                                    text: toolActivity
+                                ),
+                                to: events
                             )
                         }
                     }
@@ -528,6 +558,14 @@ final class ClaudeTaskProgressReader {
         let kind: TaskProgressKind
         if failed {
             kind = .failed
+            events = appendingTaskActivityEvent(
+                TaskActivityEvent(
+                    kind: .lifecycle,
+                    occurredAt: lastUpdatedAt,
+                    text: "任务失败"
+                ),
+                to: events
+            )
         } else if !pendingUserInputCalls.isEmpty {
             kind = .waitingForInput
         } else if let activeKind {
@@ -535,11 +573,27 @@ final class ClaudeTaskProgressReader {
                lastStopReason == "end_turn",
                lastMeaningfulRole == "assistant" {
                 kind = .completed
+                events = appendingTaskActivityEvent(
+                    TaskActivityEvent(
+                        kind: .lifecycle,
+                        occurredAt: lastUpdatedAt,
+                        text: "任务完成"
+                    ),
+                    to: events
+                )
             } else {
                 kind = activeKind
             }
         } else if lastStopReason == "end_turn" {
             kind = .completed
+            events = appendingTaskActivityEvent(
+                TaskActivityEvent(
+                    kind: .lifecycle,
+                    occurredAt: lastUpdatedAt,
+                    text: "任务完成"
+                ),
+                to: events
+            )
         } else if now.timeIntervalSince(modificationDate) <= 30 * 60 {
             kind = .running
         } else {
@@ -579,7 +633,8 @@ final class ClaudeTaskProgressReader {
             sessionID: sessionID.lowercased(),
             workingDirectory: cwd.isEmpty ? nil : cwd,
             processID: processID,
-            processStartIdentity: processStartIdentity
+            processStartIdentity: processStartIdentity,
+            events: events
         )
     }
 
@@ -828,12 +883,14 @@ final class CombinedTaskProgressReader {
     private let codexReader = CodexTaskProgressReader()
     private let claudeReader = ClaudeTaskProgressReader()
 
-    func read(claudeCodeAvailable: Bool = true) -> TaskProgressSnapshot {
-        let codexItems = codexReader.read().items.filter {
+    func readCollection(
+        claudeCodeAvailable: Bool = true
+    ) -> TaskProgressCollectionSnapshot {
+        let codexItems = codexReader.readCollection().items.filter {
             $0.kind != .idle && $0.kind != .reading
         }
         let claudeItems = claudeCodeAvailable
-            ? claudeReader.read().items.filter {
+            ? claudeReader.readCollection().items.filter {
                 $0.kind != .idle && $0.kind != .reading
             }
             : []
@@ -842,5 +899,10 @@ final class CombinedTaskProgressReader {
             claudeItems: claudeItems,
             claudeCodeAvailable: claudeCodeAvailable
         ))
+    }
+
+    func read(claudeCodeAvailable: Bool = true) -> TaskProgressSnapshot {
+        readCollection(claudeCodeAvailable: claudeCodeAvailable)
+            .compactProjection()
     }
 }

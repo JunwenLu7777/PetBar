@@ -1,0 +1,1013 @@
+import AppKit
+import Foundation
+
+func resolvedSelectedTaskKey(
+    previousKey: String?,
+    preferredKey: String?,
+    visibleItems: [TaskProgressItem]
+) -> String? {
+    let visibleKeys = Set(visibleItems.map(\.identityKey))
+    if let previousKey, visibleKeys.contains(previousKey) {
+        return previousKey
+    }
+    if let preferredKey, visibleKeys.contains(preferredKey) {
+        return preferredKey
+    }
+    return visibleItems.first?.identityKey
+}
+
+func shortenedTaskIdentifier(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let compact = value.filter { $0.isLetter || $0.isNumber }
+    guard !compact.isEmpty else { return nil }
+    return String(compact.suffix(4)).uppercased()
+}
+
+func taskProgressDurationText(for item: TaskProgressItem, now: Date) -> String {
+    let endDate: Date
+    switch item.kind {
+    case .completed, .failed:
+        endDate = item.updatedAt
+    default:
+        endDate = now
+    }
+    return taskElapsedText(from: item.startedAt, to: endDate)
+}
+
+func dynamicIslandTaskEventStackFrame(
+    in cardFrame: NSRect,
+    eventCount: Int
+) -> NSRect {
+    let visibleRowCount = max(1, min(3, eventCount))
+    let rowHeight: CGFloat = 22
+    let rowSpacing: CGFloat = 4
+    let stackHeight = CGFloat(visibleRowCount) * rowHeight
+        + CGFloat(visibleRowCount - 1) * rowSpacing
+    return NSRect(
+        x: cardFrame.minX + 13,
+        y: cardFrame.maxY - 10 - stackHeight,
+        width: max(1, cardFrame.width - 26),
+        height: stackHeight
+    )
+}
+
+final class DynamicIslandTaskViewController:
+    NSViewController,
+    NSTableViewDataSource,
+    NSTableViewDelegate
+{
+    var onOpenTask: ((TaskProgressItem) -> Void)?
+    var onCopyWorkingDirectory: ((String) -> Bool)?
+    var onSelectedTaskKeyChange: ((String?) -> Void)?
+
+    private let leftPane = DynamicIslandCardView(
+        cornerRadius: 10,
+        backgroundColor: DynamicIslandPalette.surface
+    )
+    private let paneDivider = DynamicIslandDividerView()
+    private let detailScrollView = NSScrollView()
+    private let detailContentView = NSView()
+    private let queueTitleField = DynamicIslandTaskLabel(
+        size: 14,
+        weight: .semibold
+    )
+    private let queueCountField = DynamicIslandTaskLabel(size: 12, weight: .medium)
+    private let queueDivider = DynamicIslandDividerView()
+    private let stateFilterControl = DynamicIslandSegmentedControl(
+        labels: ["全部", "运行", "等待", "完成", "失败"]
+    )
+    private let tableScrollView = NSScrollView()
+    private let tableView = NSTableView()
+    private let emptyField = DynamicIslandTaskLabel(size: 13, weight: .medium)
+    private let providerField = DynamicIslandTaskLabel(size: 11, weight: .medium)
+    private let titleField = DynamicIslandTaskLabel(size: 19, weight: .semibold)
+    private let stateSymbol = NSImageView()
+    private let stateField = DynamicIslandTaskLabel(size: 13, weight: .medium)
+    private let elapsedField = DynamicIslandTaskLabel(
+        size: 13,
+        weight: .regular,
+        monospaced: true
+    )
+    private let workingDirectoryField = DynamicIslandTaskLabel(
+        size: 12,
+        weight: .regular
+    )
+    private let detailHeaderDivider = DynamicIslandDividerView()
+    private let activityTitleField = DynamicIslandTaskLabel(
+        size: 12,
+        weight: .semibold
+    )
+    private let activityCard = DynamicIslandCardView(
+        cornerRadius: 9,
+        backgroundColor: DynamicIslandPalette.raised
+    )
+    private let activityField = DynamicIslandTaskLabel(size: 13, weight: .regular)
+    private let activityMetaField = DynamicIslandTaskLabel(
+        size: 10.5,
+        weight: .medium,
+        monospaced: true
+    )
+    private let eventsTitleField = DynamicIslandTaskLabel(
+        size: 12,
+        weight: .semibold
+    )
+    private let eventsCard = DynamicIslandCardView(
+        cornerRadius: 9,
+        backgroundColor: DynamicIslandPalette.surface
+    )
+    private let eventsStack = NSStackView()
+    private let identityField = DynamicIslandTaskLabel(size: 12, weight: .regular)
+    private let footerDivider = DynamicIslandDividerView()
+    private let openButton = DynamicIslandButton(
+        title: "打开 Codex",
+        style: .secondary,
+        imageName: "arrow.up.forward.square"
+    )
+    private let copyButton = DynamicIslandButton(
+        title: "复制路径",
+        style: .secondary,
+        imageName: "doc.on.doc"
+    )
+    private let hoverController = DynamicIslandTaskHoverController()
+
+    private var collection = TaskProgressCollectionSnapshot(items: [])
+    private var sourceFilter = TaskSourceFilter.all
+    private var stateFilter = TaskStateFilter.all
+    private var visibleItems: [TaskProgressItem] = []
+    private var selectedTaskKey: String?
+    private var selectedItem: TaskProgressItem?
+    private var trackingArea: NSTrackingArea?
+    private var copyFeedbackWorkItem: DispatchWorkItem?
+
+    override func loadView() {
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 820, height: 560))
+        view.wantsLayer = true
+
+        view.addSubview(leftPane)
+        view.addSubview(paneDivider)
+        view.addSubview(detailScrollView)
+        leftPane.addSubview(queueTitleField)
+        leftPane.addSubview(queueCountField)
+        leftPane.addSubview(stateFilterControl)
+        leftPane.addSubview(queueDivider)
+        leftPane.addSubview(tableScrollView)
+        leftPane.addSubview(emptyField)
+
+        queueTitleField.stringValue = "任务队列"
+        queueTitleField.setAccessibilityLabel("任务队列")
+        queueCountField.alignment = .right
+        queueCountField.textColor = DynamicIslandPalette.secondaryText
+        stateFilterControl.onSelectionChange = { [weak self] index in
+            self?.stateFilterChanged(index: index)
+        }
+        stateFilterControl.selectSegment(0)
+        stateFilterControl.setAccessibilityLabel("任务状态筛选")
+        stateFilterControl.setAccentColor(DynamicIslandPalette.green, forSegment: 0)
+        stateFilterControl.setAccentColor(DynamicIslandPalette.green, forSegment: 1)
+        stateFilterControl.setAccentColor(DynamicIslandPalette.amber, forSegment: 2)
+        stateFilterControl.setAccentColor(DynamicIslandPalette.secondaryText, forSegment: 3)
+        stateFilterControl.setAccentColor(DynamicIslandPalette.red, forSegment: 4)
+
+        tableView.headerView = nil
+        tableView.rowHeight = 66
+        tableView.intercellSpacing = NSSize(width: 0, height: 4)
+        tableView.selectionHighlightStyle = .none
+        tableView.addTableColumn(NSTableColumn(identifier: .init("task")))
+        tableView.delegate = self
+        tableView.dataSource = self
+        tableView.target = self
+        tableView.action = #selector(tableSelectionChanged)
+        tableView.setAccessibilityLabel("完整任务列表")
+
+        tableScrollView.documentView = tableView
+        tableScrollView.hasVerticalScroller = true
+        tableScrollView.drawsBackground = false
+        tableView.backgroundColor = .clear
+
+        detailScrollView.documentView = detailContentView
+        detailScrollView.hasVerticalScroller = true
+        detailScrollView.drawsBackground = false
+        detailContentView.addSubview(providerField)
+        detailContentView.addSubview(titleField)
+        detailContentView.addSubview(stateSymbol)
+        detailContentView.addSubview(stateField)
+        detailContentView.addSubview(elapsedField)
+        detailContentView.addSubview(workingDirectoryField)
+        detailContentView.addSubview(detailHeaderDivider)
+        detailContentView.addSubview(activityTitleField)
+        detailContentView.addSubview(activityCard)
+        detailContentView.addSubview(activityField)
+        detailContentView.addSubview(activityMetaField)
+        detailContentView.addSubview(eventsTitleField)
+        detailContentView.addSubview(eventsCard)
+        detailContentView.addSubview(eventsStack)
+        detailContentView.addSubview(identityField)
+        detailContentView.addSubview(footerDivider)
+        detailContentView.addSubview(openButton)
+        detailContentView.addSubview(copyButton)
+
+        eventsStack.orientation = .vertical
+        eventsStack.alignment = .leading
+        eventsStack.spacing = 4
+        eventsStack.distribution = .fillEqually
+
+        emptyField.alignment = .center
+        emptyField.stringValue = "没有匹配任务"
+        emptyField.setAccessibilityLabel("没有匹配任务")
+
+        eventsTitleField.stringValue = "最近事件"
+        eventsTitleField.setAccessibilityLabel("最近事件")
+        activityTitleField.stringValue = "当前活动"
+        activityTitleField.setAccessibilityLabel("当前活动")
+        activityTitleField.textColor = DynamicIslandPalette.secondaryText
+        eventsTitleField.textColor = DynamicIslandPalette.secondaryText
+        providerField.textColor = DynamicIslandPalette.secondaryText
+        workingDirectoryField.textColor = DynamicIslandPalette.secondaryText
+        identityField.textColor = DynamicIslandPalette.secondaryText
+        activityMetaField.textColor = DynamicIslandPalette.tertiaryText
+        activityField.lineBreakMode = .byWordWrapping
+        activityField.maximumNumberOfLines = 2
+        openButton.target = self
+        openButton.action = #selector(openSelectedTask)
+        openButton.setAccessibilityLabel("打开当前任务")
+        copyButton.target = self
+        copyButton.action = #selector(copySelectedWorkingDirectory)
+        copyButton.setAccessibilityLabel("复制工作目录")
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        leftPane.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: 316,
+            height: view.bounds.height
+        )
+        paneDivider.frame = NSRect(x: 324, y: 8, width: 1, height: max(1, view.bounds.height - 16))
+        detailScrollView.frame = NSRect(
+            x: 336,
+            y: 0,
+            width: max(1, view.bounds.width - 336),
+            height: view.bounds.height
+        )
+        queueTitleField.frame = NSRect(
+            x: 14,
+            y: leftPane.bounds.height - 30,
+            width: 160,
+            height: 20
+        )
+        queueCountField.frame = NSRect(
+            x: leftPane.bounds.width - 84,
+            y: leftPane.bounds.height - 29,
+            width: 68,
+            height: 18
+        )
+        stateFilterControl.frame = NSRect(
+            x: 12,
+            y: leftPane.bounds.height - 72,
+            width: leftPane.bounds.width - 24,
+            height: 32
+        )
+        queueDivider.frame = NSRect(
+            x: 12,
+            y: leftPane.bounds.height - 82,
+            width: leftPane.bounds.width - 24,
+            height: 1
+        )
+        tableScrollView.frame = NSRect(
+            x: 8,
+            y: 8,
+            width: leftPane.bounds.width - 16,
+            height: max(1, leftPane.bounds.height - 96)
+        )
+        emptyField.frame = tableScrollView.frame.insetBy(dx: 10, dy: 10)
+        layoutDetail()
+        refreshTrackingArea()
+    }
+
+    private func refreshTrackingArea() {
+        if let trackingArea {
+            tableView.removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: tableView.bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: nil
+        )
+        tableView.addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hoverController.hide()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = tableView.convert(event.locationInWindow, from: nil)
+        let row = tableView.row(at: point)
+        guard row >= 0, visibleItems.indices.contains(row) else {
+            hoverController.hide()
+            return
+        }
+        let rowRect = tableView.rect(ofRow: row)
+        let screenRect = tableView.window?.convertToScreen(
+            tableView.convert(rowRect, to: nil)
+        ) ?? rowRect
+        hoverController.show(item: visibleItems[row], sourceRect: screenRect)
+    }
+
+    func apply(
+        collection: TaskProgressCollectionSnapshot,
+        sourceFilter: TaskSourceFilter,
+        preferredTaskKey: String?
+    ) {
+        _ = view
+        self.collection = collection
+        self.sourceFilter = sourceFilter
+        updateCounts()
+        let previousKey = selectedTaskKey
+        visibleItems = collection.filtered(source: sourceFilter, state: stateFilter)
+        selectedTaskKey = resolvedSelectedTaskKey(
+            previousKey: previousKey,
+            preferredKey: preferredTaskKey,
+            visibleItems: visibleItems
+        )
+        selectedItem = visibleItems.first { $0.identityKey == selectedTaskKey }
+        tableView.reloadData()
+        syncSelectionToTable()
+        renderDetail()
+        onSelectedTaskKeyChange?(selectedTaskKey)
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        visibleItems.count
+    }
+
+    func tableView(
+        _ tableView: NSTableView,
+        viewFor tableColumn: NSTableColumn?,
+        row: Int
+    ) -> NSView? {
+        guard visibleItems.indices.contains(row) else { return nil }
+        let cell = DynamicIslandTaskRowView()
+        cell.apply(
+            item: visibleItems[row],
+            selected: visibleItems[row].identityKey == selectedTaskKey
+        )
+        return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        updateSelectedItemFromTable()
+    }
+
+    @objc private func tableSelectionChanged() {
+        updateSelectedItemFromTable()
+    }
+
+    private func stateFilterChanged(index: Int) {
+        switch index {
+        case 1: stateFilter = .running
+        case 2: stateFilter = .waitingForInput
+        case 3: stateFilter = .completed
+        case 4: stateFilter = .failed
+        default: stateFilter = .all
+        }
+        hoverController.hide()
+        apply(
+            collection: collection,
+            sourceFilter: sourceFilter,
+            preferredTaskKey: nil
+        )
+    }
+
+    @objc private func openSelectedTask() {
+        guard let selectedItem, selectedItem.canOpen else { return }
+        onOpenTask?(selectedItem)
+    }
+
+    @objc private func copySelectedWorkingDirectory() {
+        guard let path = copyPathForSelfTest() else { return }
+        guard onCopyWorkingDirectory?(path) == true else { return }
+        copyButton.setDisplayTitle("已复制")
+        copyFeedbackWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.copyButton.setDisplayTitle("复制路径")
+        }
+        copyFeedbackWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: workItem)
+    }
+
+    private func updateSelectedItemFromTable() {
+        let row = tableView.selectedRow
+        guard row >= 0, visibleItems.indices.contains(row) else { return }
+        selectedItem = visibleItems[row]
+        selectedTaskKey = selectedItem?.identityKey
+        hoverController.hide()
+        renderDetail()
+        tableView.reloadData()
+        onSelectedTaskKeyChange?(selectedTaskKey)
+    }
+
+    private func syncSelectionToTable() {
+        guard let selectedTaskKey,
+              let row = visibleItems.firstIndex(where: {
+                  $0.identityKey == selectedTaskKey
+              })
+        else {
+            tableView.deselectAll(nil)
+            return
+        }
+        tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        tableView.scrollRowToVisible(row)
+    }
+
+    private func updateCounts() {
+        let filteredBySource = TaskProgressCollectionSnapshot(
+            items: collection.filtered(source: sourceFilter, state: .all)
+        )
+        let labels: [(String, TaskStateFilter)] = [
+            ("全部", .all),
+            ("运行", .running),
+            ("等待", .waitingForInput),
+            ("完成", .completed),
+            ("失败", .failed),
+        ]
+        for (index, entry) in labels.enumerated() {
+            let count = filteredBySource.filtered(
+                source: .all,
+                state: entry.1
+            ).count
+            stateFilterControl.setLabel(
+                "  \(entry.0) \(count)",
+                forSegment: index
+            )
+        }
+        queueCountField.stringValue = "\(filteredBySource.items.count) 项"
+        stateFilterControl.selectSegment(segmentIndex(for: stateFilter))
+        stateFilterControl.setAccessibilityValue(
+            labels.map {
+                "\($0.0) \(filteredBySource.filtered(source: .all, state: $0.1).count)"
+            }.joined(separator: "，")
+        )
+    }
+
+    private func segmentIndex(for filter: TaskStateFilter) -> Int {
+        switch filter {
+        case .all: return 0
+        case .running: return 1
+        case .waitingForInput: return 2
+        case .completed: return 3
+        case .failed: return 4
+        }
+    }
+
+    private func renderDetail() {
+        emptyField.isHidden = !visibleItems.isEmpty
+        tableScrollView.isHidden = visibleItems.isEmpty
+        guard let item = selectedItem else {
+            providerField.stringValue = "ChatBird"
+            titleField.stringValue = "没有匹配任务"
+            stateField.stringValue = "无任务"
+            elapsedField.stringValue = ""
+            workingDirectoryField.stringValue = "工作目录不可用"
+            activityField.stringValue = "当前没有符合筛选条件的任务"
+            activityMetaField.stringValue = "0 条安全事件"
+            identityField.stringValue = ""
+            stateSymbol.image = NSImage(
+                systemSymbolName: "circle",
+                accessibilityDescription: "无任务"
+            )
+            openButton.isEnabled = false
+            copyButton.isEnabled = false
+            renderEvents([])
+            view.needsLayout = true
+            return
+        }
+        providerField.stringValue = "\(providerName(for: item.source)) · ChatBird"
+        titleField.stringValue = item.title
+        stateField.stringValue = item.statusText
+        elapsedField.stringValue = taskProgressDurationText(
+            for: item,
+            now: dynamicIslandCurrentDate()
+        )
+        workingDirectoryField.stringValue = copyPathForSelfTest()
+            ?? "工作目录不可用"
+        activityField.stringValue = dynamicIslandSanitizedTaskActivityText(
+            item.activityText
+        ) ?? "暂无当前活动"
+        activityMetaField.stringValue = "\(item.events.count) 条安全事件 · 更新 \(eventTimeFormatter.string(from: item.updatedAt))"
+        identityField.stringValue = secondaryIdentityText(for: item) ?? ""
+        stateSymbol.image = NSImage(
+            systemSymbolName: taskProgressSymbolName(for: item.kind),
+            accessibilityDescription: item.statusText
+        )
+        stateSymbol.contentTintColor = tintColor(for: item.kind)
+        openButton.setDisplayTitle(
+            item.source == .claudeCode ? "回到终端" : "打开 Codex"
+        )
+        openButton.isEnabled = item.canOpen
+        copyButton.isEnabled = copyPathForSelfTest() != nil
+        copyButton.setDisplayTitle("复制路径")
+        renderEvents(Array(item.events.suffix(3)))
+        updateDetailAccessibility()
+        view.needsLayout = true
+    }
+
+    private func layoutDetail() {
+        let width = max(1, detailScrollView.bounds.width)
+        let contentHeight = max(470, detailScrollView.bounds.height)
+        detailContentView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: width,
+            height: contentHeight
+        )
+        let inset: CGFloat = 16
+        let fieldWidth = max(1, width - inset * 2)
+        providerField.frame = NSRect(
+            x: inset,
+            y: contentHeight - 27,
+            width: fieldWidth,
+            height: 16
+        )
+        titleField.frame = NSRect(
+            x: inset,
+            y: contentHeight - 58,
+            width: fieldWidth - 138,
+            height: 25
+        )
+        stateSymbol.frame = NSRect(
+            x: width - 130,
+            y: contentHeight - 55,
+            width: 15,
+            height: 15
+        )
+        stateField.frame = NSRect(
+            x: width - 108,
+            y: contentHeight - 58,
+            width: 92,
+            height: 20
+        )
+        elapsedField.frame = NSRect(
+            x: width - 106,
+            y: contentHeight - 88,
+            width: 90,
+            height: 20
+        )
+        workingDirectoryField.frame = NSRect(
+            x: inset,
+            y: contentHeight - 90,
+            width: fieldWidth - 110,
+            height: 20
+        )
+        detailHeaderDivider.frame = NSRect(
+            x: inset,
+            y: contentHeight - 108,
+            width: fieldWidth,
+            height: 1
+        )
+        activityTitleField.frame = NSRect(
+            x: inset,
+            y: contentHeight - 134,
+            width: fieldWidth,
+            height: 18
+        )
+        activityCard.frame = NSRect(
+            x: inset,
+            y: contentHeight - 218,
+            width: fieldWidth,
+            height: 72
+        )
+        activityField.frame = NSRect(
+            x: activityCard.frame.minX + 13,
+            y: activityCard.frame.minY + 28,
+            width: activityCard.frame.width - 26,
+            height: 34
+        )
+        activityMetaField.frame = NSRect(
+            x: activityCard.frame.minX + 13,
+            y: activityCard.frame.minY + 8,
+            width: activityCard.frame.width - 26,
+            height: 16
+        )
+        eventsTitleField.frame = NSRect(
+            x: inset,
+            y: contentHeight - 246,
+            width: fieldWidth,
+            height: 18
+        )
+        eventsCard.frame = NSRect(
+            x: inset,
+            y: 64,
+            width: fieldWidth,
+            height: max(96, contentHeight - 320)
+        )
+        eventsStack.frame = dynamicIslandTaskEventStackFrame(
+            in: eventsCard.frame,
+            eventCount: eventsStack.arrangedSubviews.count
+        )
+        footerDivider.frame = NSRect(x: inset, y: 52, width: fieldWidth, height: 1)
+        openButton.frame = NSRect(x: inset, y: 10, width: 112, height: 32)
+        copyButton.frame = NSRect(x: inset + 122, y: 10, width: 100, height: 32)
+        identityField.frame = NSRect(
+            x: max(inset + 232, width - 132),
+            y: 16,
+            width: 116,
+            height: 20
+        )
+        identityField.alignment = .right
+    }
+
+    private func renderEvents(_ events: [TaskActivityEvent]) {
+        eventsStack.arrangedSubviews.forEach {
+            eventsStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        if events.isEmpty {
+            let label = DynamicIslandTaskLabel(size: 12, weight: .regular)
+            label.stringValue = "暂无安全事件"
+            label.setAccessibilityLabel("暂无安全事件")
+            eventsStack.addArrangedSubview(label)
+            return
+        }
+        for (index, event) in events.reversed().enumerated() {
+            let row = DynamicIslandTaskEventRowView(
+                time: eventTimeFormatter.string(from: event.occurredAt),
+                text: event.text,
+                highlighted: index == 0
+            )
+            eventsStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: eventsStack.widthAnchor).isActive = true
+        }
+    }
+
+    private func updateDetailAccessibility() {
+        let value = [
+            providerField.stringValue,
+            titleField.stringValue,
+            stateField.stringValue,
+            workingDirectoryField.stringValue,
+            activityField.stringValue,
+            activityMetaField.stringValue,
+            "最近事件",
+        ].joined(separator: "，")
+        detailContentView.setAccessibilityLabel("任务详情")
+        detailContentView.setAccessibilityValue(value)
+    }
+
+    private func providerName(for source: TaskSource) -> String {
+        switch source {
+        case .codex: return "Codex"
+        case .claudeCode: return "Claude Code"
+        }
+    }
+
+    private func tintColor(for kind: TaskProgressKind) -> NSColor {
+        switch kind {
+        case .running, .completed:
+            return DynamicIslandPalette.green
+        case .waitingForInput:
+            return DynamicIslandPalette.amber
+        case .failed:
+            return DynamicIslandPalette.red
+        case .reading, .idle:
+            return DynamicIslandPalette.secondaryText
+        }
+    }
+
+    private func secondaryIdentityText(for item: TaskProgressItem) -> String? {
+        if let thread = shortenedTaskIdentifier(item.threadID) {
+            return "Thread \(thread)"
+        }
+        if let session = shortenedTaskIdentifier(item.sessionID) {
+            return "Session \(session)"
+        }
+        return nil
+    }
+
+    private var eventTimeFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }
+
+    func visibleTaskKeysForSelfTest() -> [String] {
+        _ = view
+        return visibleItems.map(\.identityKey)
+    }
+
+    func selectedTaskKeyForSelfTest() -> String? {
+        _ = view
+        return selectedTaskKey
+    }
+
+    func setStateFilterForSelfTest(_ filter: TaskStateFilter) {
+        _ = view
+        stateFilter = filter
+        stateFilterControl.selectSegment(segmentIndex(for: filter))
+        apply(
+            collection: collection,
+            sourceFilter: sourceFilter,
+            preferredTaskKey: nil
+        )
+    }
+
+    func accessibilitySnapshotForSelfTest() -> String {
+        _ = view
+        return [
+            stateFilterControl.accessibilityValue() as? String,
+            emptyField.stringValue,
+            detailContentView.accessibilityValue() as? String,
+            openButton.accessibilityLabel(),
+            copyButton.accessibilityLabel(),
+        ].compactMap { $0 }.joined(separator: " ")
+    }
+
+    func detailEventTextsForSelfTest() -> [String] {
+        selectedItem.map { Array($0.events.suffix(3)).map(\.text) } ?? []
+    }
+
+    func copyPathForSelfTest() -> String? {
+        selectedItem?.workingDirectory.flatMap(normalizedAbsolutePath)
+    }
+
+    func openButtonTitleForSelfTest() -> String {
+        _ = view
+        return openButton.title
+    }
+
+    func showHoverForSelfTest(item: TaskProgressItem) {
+        hoverController.show(
+            item: item,
+            sourceRect: NSRect(x: 0, y: 0, width: 1, height: 1)
+        )
+    }
+
+    func hideHoverForSelfTest() {
+        hoverController.hide()
+    }
+
+    func hoverEventTextsForSelfTest() -> [String] {
+        hoverController.eventTextsForSelfTest()
+    }
+
+    func hoverVisibleForSelfTest() -> Bool {
+        hoverController.isVisibleForSelfTest()
+    }
+
+    func performOpenSelectedTaskForSelfTest() {
+        openSelectedTask()
+    }
+}
+
+final class DynamicIslandTaskHoverController {
+    private let panel: NSPanel
+    private let titleField = DynamicIslandTaskLabel(size: 13, weight: .semibold)
+    private let stack = NSStackView()
+    private var currentEventTexts: [String] = []
+
+    init() {
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 96),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        let content = NSView(frame: panel.contentView?.bounds ?? .zero)
+        content.wantsLayer = true
+        content.layer?.backgroundColor = DynamicIslandPalette.raised.cgColor
+        content.layer?.cornerRadius = 8
+        content.layer?.borderWidth = 1
+        content.layer?.borderColor = DynamicIslandPalette.hairline.cgColor
+        panel.contentView = content
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        content.addSubview(titleField)
+        content.addSubview(stack)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 3
+    }
+
+    func show(item: TaskProgressItem, sourceRect: NSRect) {
+        titleField.stringValue = item.title
+        currentEventTexts = Array(item.events.suffix(3)).map(\.text)
+        stack.arrangedSubviews.forEach {
+            stack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        let lines = currentEventTexts.isEmpty ? ["暂无安全事件"] : currentEventTexts
+        for text in lines {
+            let label = DynamicIslandTaskLabel(size: 12, weight: .regular)
+            label.stringValue = text
+            label.setAccessibilityLabel(text)
+            stack.addArrangedSubview(label)
+        }
+        layout()
+        panel.setFrameOrigin(clampedOrigin(beside: sourceRect))
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel.orderOut(nil)
+    }
+
+    func eventTextsForSelfTest() -> [String] {
+        currentEventTexts
+    }
+
+    func isVisibleForSelfTest() -> Bool {
+        panel.isVisible
+    }
+
+    private func layout() {
+        guard let content = panel.contentView else { return }
+        titleField.frame = NSRect(x: 12, y: 68, width: 336, height: 18)
+        stack.frame = NSRect(x: 12, y: 12, width: 336, height: 52)
+        content.frame = NSRect(origin: .zero, size: panel.frame.size)
+    }
+
+    private func clampedOrigin(beside sourceRect: NSRect) -> NSPoint {
+        let visibleFrame = NSScreen.screens.first(where: {
+            $0.visibleFrame.intersects(sourceRect)
+        })?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1_024, height: 768)
+        let size = panel.frame.size
+        var origin = NSPoint(x: sourceRect.maxX + 12, y: sourceRect.midY - size.height / 2)
+        if origin.x + size.width > visibleFrame.maxX {
+            origin.x = sourceRect.minX - size.width - 12
+        }
+        origin.x = min(max(origin.x, visibleFrame.minX), visibleFrame.maxX - size.width)
+        origin.y = min(max(origin.y, visibleFrame.minY), visibleFrame.maxY - size.height)
+        return origin
+    }
+}
+
+private final class DynamicIslandTaskRowView: NSTableCellView {
+    private let selectionAccent = NSView()
+    private let providerBadge = NSView()
+    private let providerMonogram = DynamicIslandTaskLabel(size: 11, weight: .semibold)
+    private let statusDot = NSView()
+    private let providerField = DynamicIslandTaskLabel(size: 12, weight: .medium)
+    private let titleField = DynamicIslandTaskLabel(size: 13, weight: .semibold)
+    private let statusField = DynamicIslandTaskLabel(size: 12, weight: .regular)
+    private let timeField = DynamicIslandTaskLabel(
+        size: 12,
+        weight: .regular,
+        monospaced: true
+    )
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 1
+        providerBadge.wantsLayer = true
+        providerBadge.layer?.cornerRadius = 17
+        providerBadge.layer?.borderWidth = 1
+        providerBadge.layer?.borderColor = DynamicIslandPalette.strongHairline.cgColor
+        statusDot.wantsLayer = true
+        statusDot.layer?.cornerRadius = 4
+        selectionAccent.wantsLayer = true
+        for subview in [
+            selectionAccent,
+            providerBadge,
+            providerMonogram,
+            statusDot,
+            providerField,
+            titleField,
+            statusField,
+            timeField,
+        ] {
+            addSubview(subview)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        selectionAccent.frame = NSRect(x: 0, y: 0, width: 3, height: bounds.height)
+        providerBadge.frame = NSRect(x: 10, y: 16, width: 34, height: 34)
+        providerMonogram.frame = NSRect(x: 10, y: 24, width: 34, height: 18)
+        providerMonogram.alignment = .center
+        providerField.frame = NSRect(x: 54, y: 38, width: 90, height: 16)
+        titleField.frame = NSRect(x: 54, y: 17, width: bounds.width - 152, height: 20)
+        statusDot.frame = NSRect(x: bounds.width - 20, y: 40, width: 8, height: 8)
+        statusField.frame = NSRect(x: bounds.width - 100, y: 35, width: 72, height: 17)
+        timeField.frame = NSRect(x: bounds.width - 100, y: 15, width: 88, height: 17)
+        statusField.alignment = .right
+        timeField.alignment = .right
+    }
+
+    func apply(item: TaskProgressItem, selected: Bool) {
+        let tint: NSColor
+        switch item.kind {
+        case .running, .completed:
+            tint = DynamicIslandPalette.green
+        case .waitingForInput:
+            tint = DynamicIslandPalette.amber
+        case .failed:
+            tint = DynamicIslandPalette.red
+        case .reading, .idle:
+            tint = DynamicIslandPalette.secondaryText
+        }
+        selectionAccent.layer?.backgroundColor = tint.cgColor
+        selectionAccent.isHidden = !selected
+        layer?.backgroundColor = selected
+            ? tint.withAlphaComponent(0.13).cgColor
+            : NSColor.clear.cgColor
+        layer?.borderColor = selected
+            ? tint.withAlphaComponent(0.42).cgColor
+            : NSColor.clear.cgColor
+        statusDot.layer?.backgroundColor = tint.cgColor
+        providerBadge.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.035).cgColor
+        providerMonogram.stringValue = item.source == .codex ? "C" : "AI"
+        providerField.stringValue = item.source == .codex ? "Codex" : "Claude"
+        providerField.textColor = DynamicIslandPalette.secondaryText
+        titleField.stringValue = item.title
+        statusField.stringValue = item.statusText
+        statusField.textColor = tint
+        timeField.stringValue = taskProgressDurationText(
+            for: item,
+            now: dynamicIslandCurrentDate()
+        )
+        setAccessibilityLabel(
+            "\(providerField.stringValue)，\(item.title)，\(item.statusText)"
+        )
+        setAccessibilityValue(timeField.stringValue)
+    }
+}
+
+private final class DynamicIslandTaskEventRowView: NSView {
+    private let dot = NSView()
+    private let timeField = DynamicIslandTaskLabel(
+        size: 11,
+        weight: .medium,
+        monospaced: true
+    )
+    private let textField = DynamicIslandTaskLabel(size: 12, weight: .regular)
+
+    init(time: String, text: String, highlighted: Bool) {
+        super.init(frame: .zero)
+        dot.wantsLayer = true
+        dot.layer?.cornerRadius = 3.5
+        dot.layer?.backgroundColor = (highlighted
+            ? DynamicIslandPalette.green
+            : DynamicIslandPalette.secondaryText).cgColor
+        timeField.stringValue = time
+        timeField.textColor = DynamicIslandPalette.secondaryText
+        textField.stringValue = text
+        addSubview(dot)
+        addSubview(timeField)
+        addSubview(textField)
+        setAccessibilityLabel("\(time) \(text)")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: 360, height: 22)
+    }
+
+    override func layout() {
+        super.layout()
+        dot.frame = NSRect(x: 0, y: 8, width: 7, height: 7)
+        timeField.frame = NSRect(x: 16, y: 3, width: 58, height: 18)
+        textField.frame = NSRect(x: 80, y: 3, width: max(1, bounds.width - 80), height: 18)
+    }
+}
+
+private final class DynamicIslandTaskLabel: NSTextField {
+    init(size: CGFloat, weight: NSFont.Weight, monospaced: Bool = false) {
+        super.init(frame: .zero)
+        isBezeled = false
+        isEditable = false
+        drawsBackground = false
+        lineBreakMode = .byTruncatingTail
+        textColor = DynamicIslandPalette.primaryText
+        font = monospaced
+            ? .monospacedDigitSystemFont(ofSize: size, weight: weight)
+            : .systemFont(ofSize: size, weight: weight)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}

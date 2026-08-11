@@ -16,6 +16,10 @@
 - 任务状态约每 2 秒读取本机 Codex 与 Claude Code 会话状态，显示执行中、等待确认、已完成和执行失败；点击任务行可打开 Codex 任务或在 Terminal 恢复 Claude 会话。
 - 运行中任务悬停预览只显示助手公开输出，并以固定三行字符滑窗持续替换旧内容；不展示 thinking、工具参数或原始工具输出。
 - 点击“收起”会隐藏窗口；单击宠物或点击菜单栏 “ChatBird” 都可恢复显示。
+- 菜单栏可在“宠物面板”和“灵动岛”模式之间切换；默认使用宠物面板，选择会写入本机 `presentation-mode` 并在下次启动恢复。
+- 灵动岛模式使用 404×58 pt 单行胶囊，依次显示状态点、状态、任务标题、耗时和展开箭头；整颗胶囊可点击且不抢焦点，也可拖到其他屏幕后释放并吸附到该屏幕顶部中央，展开后仍使用完整的任务、确认和额度工作区。
+- 灵动岛展开态右上角分别提供刷新、收起和隐藏：收起只返回胶囊，隐藏会让灵动岛完全消失且不响应后续任务刷新；从菜单栏选择“显示”可恢复胶囊。隐藏待确认请求不会同意、拒绝或丢弃该请求。
+- 灵动岛最近事件只显示本机公开任务输出，不展示 thinking、工具参数、原始工具输出或推断式数字步骤进度。
 - 启动后写入不含个人数据的运行状态文件，供安装器确认进程确实已启动。
 - Codex 额度通过本机 `codex app-server` 的 `account/rateLimits/read` 读取；Claude 额度通过已登录 Claude CLI 的只读 `/usage` PTY 读取。
 - Claude 任务通过 `claude agents --json` 与顶层会话 transcript 读取；任务名称、公开输出和已读状态只在本机显示，不写入面板日志，也不上传。
@@ -50,6 +54,64 @@ Finder 快捷入口：`~/Applications/ChatBird 额度面板.app`
 ./build/ChatBird\ 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel --self-test-weekly-quota
 ./build/ChatBird\ 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel --self-test-claude-quota
 ./build/ChatBird\ 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel --self-test-chatbird-edition
+./build/ChatBird\ 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel --self-test-dynamic-island
+```
+
+灵动岛确定性预览：
+
+```bash
+./build/ChatBird\ 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel \
+  --render-dynamic-island-preview <state> <path>
+```
+
+支持的 `state` 固定为：
+
+```text
+capsule-confirmation
+capsule-running
+capsule-waiting
+capsule-completed
+capsule-failed
+capsule-idle
+capsule-codex-exited
+tasks
+confirm-tool
+confirm-question
+confirm-plan
+quota-codex
+quota-claude
+quota-loading
+quota-stale
+quota-first-failure
+quota-unavailable
+```
+
+本地完整验证序列：
+
+```bash
+./macos/ChatBirdQuotaPanel/scripts/build.sh
+BIN="macos/ChatBirdQuotaPanel/build/ChatBird 额度面板.app/Contents/MacOS/ChatBirdQuotaPanel"
+"$BIN" --self-test-placement
+"$BIN" --self-test-lifecycle
+"$BIN" --self-test-native-notification-state
+"$BIN" --self-test-task-progress
+"$BIN" --self-test-weekly-quota
+"$BIN" --self-test-claude-quota
+"$BIN" --self-test-claude-hook
+"$BIN" --self-test-client-contract
+"$BIN" --self-test-chatbird-edition
+"$BIN" --self-test-dynamic-island
+OUT="output/audit/dynamic-island-implementation/previews"
+mkdir -p "$OUT"
+for STATE in \
+  capsule-confirmation capsule-running capsule-waiting capsule-completed \
+  capsule-failed capsule-idle capsule-codex-exited \
+  tasks confirm-tool confirm-question confirm-plan \
+  quota-codex quota-claude quota-loading quota-stale \
+  quota-first-failure quota-unavailable
+do
+  "$BIN" --render-dynamic-island-preview "$STATE" "$OUT/$STATE.png"
+done
 ```
 
 ## 卸载

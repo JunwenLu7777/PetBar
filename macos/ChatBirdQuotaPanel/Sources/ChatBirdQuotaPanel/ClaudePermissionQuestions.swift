@@ -325,6 +325,18 @@ func renderClaudePermissionPreview(kind: String, to outputURL: URL) throws {
     if kind == "question-second" {
         controller.showQuestionPage(at: 1)
     }
+    if kind == "plan" {
+        guard controller.preparePlanForPreviewRendering() else {
+            throw NSError(
+                domain: "ChatBirdClaudeHook",
+                code: 22,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "无法固定计划预览的非选中状态",
+                ]
+            )
+        }
+    }
+    window.makeFirstResponder(nil)
     controller.view.layoutSubtreeIfNeeded()
     window.displayIfNeeded()
 

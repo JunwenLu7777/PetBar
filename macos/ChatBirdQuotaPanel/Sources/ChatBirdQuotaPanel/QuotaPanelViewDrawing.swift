@@ -50,7 +50,10 @@ extension QuotaPanelView {
     }
 
     private func drawQuotaResetCard(in rect: NSRect) {
-        let presentation = codexResetCreditsPresentation(snapshot: codexResetCredits)
+        let presentation = codexResetCreditsPresentation(
+            snapshot: codexResetCredits,
+            now: currentDateProvider()
+        )
         let card = NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9)
         NSColor.black.withAlphaComponent(0.16).setFill()
         card.fill()
@@ -139,6 +142,7 @@ extension QuotaPanelView {
         x: CGFloat,
         width: CGFloat
     ) {
+        let now = currentDateProvider()
         let isDense = rows.count >= 3
         for (index, row) in rows.enumerated() {
             let remaining = max(0, min(100, row.remainingPercent))
@@ -215,7 +219,7 @@ extension QuotaPanelView {
 
             let resetText: String
             if let date = row.resetsAt {
-                resetText = "\(quotaResetTimeDescription(date)) 重置"
+                resetText = "\(quotaResetTimeDescription(date, now: now)) 重置"
             } else if row.resetDescription != nil {
                 resetText = "重置时间以 Claude 为准"
             } else if level == .exhausted {

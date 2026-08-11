@@ -15,7 +15,7 @@ enum ClaudeHookConstants {
     static let authenticationHeader = "X-ChatBird-Hook-Token"
 }
 
-enum ClaudePermissionInteractionKind {
+enum ClaudePermissionInteractionKind: Equatable {
     case toolApproval
     case askUserQuestion
     case exitPlanMode
@@ -805,7 +805,7 @@ func runClaudeHookSelfTest() -> Never {
     }
 
     // 尺寸契约：长选项文本与满额选项数都不得改变面板尺寸。真实展示路径
-    // （ClaudePermissionPanelController.showNextIfNeeded）把控制器交给
+    // （ClaudePermissionPanelPresenter.present）把控制器交给
     // contentViewController，窗口会按 view 的 fittingSize 定尺，所以这里
     // 刻意不预设 frame，直接校验 fittingSize 与卡片是否溢出各自容器。
     let longChoiceFixture = """
@@ -876,17 +876,21 @@ func runClaudeHookSelfTest() -> Never {
     var panelWasHiddenBeforeTerminalOpen = false
     var hookWasReleasedBeforeTerminalOpen = false
     var completedWithNativeFallback = false
-    let panelController = ClaudePermissionPanelController(
-        anchorWindowProvider: { nil },
+    let panelPresenter = ClaudePermissionPanelPresenter(
+        anchorWindowProvider: { nil }
+    )
+    let coordinator = ClaudePermissionCoordinator(
         openTerminal: {
             openedPromptID = $0.requestID
             hookWasReleasedBeforeTerminalOpen = completedWithNativeFallback
             panelWasHiddenBeforeTerminalOpen = NSApp.windows.allSatisfy {
                 !($0 is ClaudePermissionPanel) || !$0.isVisible
             }
-        }
+        },
+        onQueueChange: { _ in }
     )
-    panelController.enqueue(prompt: questionPrompt) { decision in
+    coordinator.setPresenter(panelPresenter)
+    coordinator.enqueue(prompt: questionPrompt) { decision in
         if case .nativeFallback = decision {
             completedWithNativeFallback = true
         }
@@ -905,11 +909,11 @@ func runClaudeHookSelfTest() -> Never {
         sessionID: questionPrompt.sessionID?.uppercased(),
         workingDirectory: "/tmp/chatbird"
     )
-    guard panelController.handoffToTerminalIfPresenting(unrelatedTask) == false,
+    guard coordinator.handoffToTerminalIfPresenting(unrelatedTask) == false,
           NSApp.windows.contains(where: {
               $0 is ClaudePermissionPanel && $0.isVisible
           }),
-          panelController.handoffToTerminalIfPresenting(matchingTask),
+          coordinator.handoffToTerminalIfPresenting(matchingTask),
           openedPromptID == questionPrompt.requestID,
           panelWasHiddenBeforeTerminalOpen,
           hookWasReleasedBeforeTerminalOpen,
@@ -926,11 +930,15 @@ func runClaudeHookSelfTest() -> Never {
     // 保持，避免读取抖动关掉正要回答的弹窗；只有明确不再等待才收起，且不拉起终端。
     var terminalOpenedForAutoDismiss = false
     var autoDismissReleasedHook = false
-    let autoDismissController = ClaudePermissionPanelController(
-        anchorWindowProvider: { nil },
-        openTerminal: { _ in terminalOpenedForAutoDismiss = true }
+    let autoDismissPresenter = ClaudePermissionPanelPresenter(
+        anchorWindowProvider: { nil }
     )
-    autoDismissController.enqueue(prompt: questionPrompt) { decision in
+    let autoDismissCoordinator = ClaudePermissionCoordinator(
+        openTerminal: { _ in terminalOpenedForAutoDismiss = true },
+        onQueueChange: { _ in }
+    )
+    autoDismissCoordinator.setPresenter(autoDismissPresenter)
+    autoDismissCoordinator.enqueue(prompt: questionPrompt) { decision in
         if case .nativeFallback = decision {
             autoDismissReleasedHook = true
         }
@@ -949,25 +957,25 @@ func runClaudeHookSelfTest() -> Never {
         sessionID: questionPrompt.sessionID?.uppercased(),
         workingDirectory: "/tmp/chatbird"
     )
-    guard autoDismissController.dismissIfAnsweredInTerminal(in: []) == false,
+    guard autoDismissCoordinator.dismissIfAnsweredInTerminal(in: []) == false,
           // 弹窗刚弹出时 Claude 仍在执行工具调用，会话是 running。此时收起会
           // 让弹窗一出现就消失，所以在观察到等待输入之前必须拒绝收起。
-          autoDismissController.dismissIfAnsweredInTerminal(
+          autoDismissCoordinator.dismissIfAnsweredInTerminal(
               in: [answeredTask]
           ) == false,
           NSApp.windows.contains(where: {
               $0 is ClaudePermissionPanel && $0.isVisible
           }),
-          autoDismissController.dismissIfAnsweredInTerminal(
+          autoDismissCoordinator.dismissIfAnsweredInTerminal(
               in: [stillWaitingTask]
           ) == false,
-          autoDismissController.dismissIfAnsweredInTerminal(
+          autoDismissCoordinator.dismissIfAnsweredInTerminal(
               in: [unrelatedTask]
           ) == false,
           NSApp.windows.contains(where: {
               $0 is ClaudePermissionPanel && $0.isVisible
           }),
-          autoDismissController.dismissIfAnsweredInTerminal(in: [answeredTask]),
+          autoDismissCoordinator.dismissIfAnsweredInTerminal(in: [answeredTask]),
           autoDismissReleasedHook,
           !terminalOpenedForAutoDismiss,
           NSApp.windows.allSatisfy({
@@ -1036,9 +1044,30 @@ func runClaudeHookSelfTest() -> Never {
     guard let planPrompt = try? ClaudePermissionProtocol.decodePrompt(
         from: Data(planFixture.utf8)
     ), planPrompt.interactionKind == .exitPlanMode,
-       planPrompt.planText == "先检查，再修改，最后验证。"
+       planPrompt.planText == "先检查，再修改，最后验证。",
+       let planAllowBody = ClaudePermissionProtocol.responseBody(
+            for: .allowOnce,
+            prompt: planPrompt
+       ),
+       let planAllowJSON = try? JSONSerialization.jsonObject(with: planAllowBody)
+            as? [String: Any],
+       let planAllowOutput = planAllowJSON["hookSpecificOutput"] as? [String: Any],
+       let planAllowDecision = planAllowOutput["decision"] as? [String: Any],
+       planAllowDecision["behavior"] as? String == "allow",
+       let planFeedbackBody = ClaudePermissionProtocol.responseBody(
+            for: .planFeedback("请补充风险"),
+            prompt: planPrompt
+       ),
+       let planFeedbackJSON = try? JSONSerialization.jsonObject(
+            with: planFeedbackBody
+       ) as? [String: Any],
+       let planFeedbackOutput = planFeedbackJSON["hookSpecificOutput"]
+            as? [String: Any],
+       let planFeedbackDecision = planFeedbackOutput["decision"] as? [String: Any],
+       planFeedbackDecision["behavior"] as? String == "deny",
+       planFeedbackDecision["message"] as? String == "请补充风险"
     else {
-        fail("ExitPlanMode 解析")
+        fail("ExitPlanMode 解析或决策响应")
     }
 
     let toolFixture = """
@@ -1059,9 +1088,45 @@ func runClaudeHookSelfTest() -> Never {
     ), toolPrompt.interactionKind == .toolApproval,
        toolPrompt.message == "运行项目测试",
        !toolPrompt.message.contains("secret-command"),
-       toolPrompt.suggestions.count == 1
+       toolPrompt.suggestions.count == 1,
+       let allowBody = ClaudePermissionProtocol.responseBody(
+            for: .allowOnce,
+            prompt: toolPrompt
+       ),
+       let allowJSON = try? JSONSerialization.jsonObject(with: allowBody)
+            as? [String: Any],
+       let allowOutput = allowJSON["hookSpecificOutput"] as? [String: Any],
+       let allowDecision = allowOutput["decision"] as? [String: Any],
+       allowDecision["behavior"] as? String == "allow",
+       allowDecision["updatedPermissions"] == nil,
+       let suggestionBody = ClaudePermissionProtocol.responseBody(
+            for: .allowWithSuggestion(toolPrompt.suggestions[0].rawValue),
+            prompt: toolPrompt
+       ),
+       let suggestionJSON = try? JSONSerialization.jsonObject(
+            with: suggestionBody
+       ) as? [String: Any],
+       let suggestionOutput = suggestionJSON["hookSpecificOutput"]
+            as? [String: Any],
+       let suggestionDecision = suggestionOutput["decision"] as? [String: Any],
+       suggestionDecision["behavior"] as? String == "allow",
+       (suggestionDecision["updatedPermissions"] as? [[String: Any]])?.count == 1,
+       let denyBody = ClaudePermissionProtocol.responseBody(
+            for: .deny("用户在 ChatBird 中拒绝了这次操作"),
+            prompt: toolPrompt
+       ),
+       let denyJSON = try? JSONSerialization.jsonObject(with: denyBody)
+            as? [String: Any],
+       let denyOutput = denyJSON["hookSpecificOutput"] as? [String: Any],
+       let denyDecision = denyOutput["decision"] as? [String: Any],
+       denyDecision["behavior"] as? String == "deny",
+       denyDecision["message"] as? String == "用户在 ChatBird 中拒绝了这次操作",
+       ClaudePermissionProtocol.responseBody(
+            for: .nativeFallback,
+            prompt: toolPrompt
+       ) == nil
     else {
-        fail("普通权限解析或隐私边界")
+        fail("普通权限解析、决策响应或隐私边界")
     }
 
     let manager = FileManager.default
@@ -1223,6 +1288,9 @@ func runClaudeHookSelfTest() -> Never {
             + "question-detail=2/2; terminal-handoff=matched+hidden+released; "
             + "auto-dismiss=prewait-kept+waiting-kept+unknown-kept"
             + "+answered-dismissed; "
+            + "presenter-switch=no-completion; decision=exactly-once; "
+            + "tool-decision=allow+suggestion+deny+nativeFallback; "
+            + "plan-decision=allowOnce+feedback; "
             + "privacy=pass; auth=header; queue=bounded; "
             + "config=optional+install+conflict-preserved+idempotent+uninstall+crlf+strict-json"
     )
