@@ -61,6 +61,53 @@ func runAgentIntegrationSelfTest() {
         failAgentIntegrationSelfTest("registry extension/deduplication")
     }
 
+    let runtimePlaceholders = agentRuntimeStatusPlaceholders(registry: registry)
+    let runtimeNow = Date(timeIntervalSince1970: 1_786_500_000)
+    let runtimeIdentity = AgentSessionIdentity(
+        agentID: mock.metadata.id,
+        nativeID: "mock-runtime-session"
+    )
+    let runtimeSnapshot = AgentSessionSnapshot(
+        identity: runtimeIdentity,
+        adapterVersion: "self-test",
+        executionState: .running,
+        attentionReason: .question,
+        actionability: .viewOnly,
+        evidenceQuality: .nativeState,
+        freshness: Freshness(observedAt: runtimeNow, expiresAt: nil),
+        title: "Mock runtime",
+        activitySummary: nil,
+        workingDirectory: nil,
+        latestEventID: "mock-runtime-event",
+        updatedAt: runtimeNow
+    )
+    let runtimeAttention = AgentAttentionItem(
+        identity: runtimeIdentity,
+        reason: .question,
+        actionability: .viewOnly,
+        evidenceQuality: .nativeState,
+        updatedAt: runtimeNow,
+        isInterrupting: true
+    )
+    let runtimeStatuses = agentRuntimeStatusesWithActivity(
+        runtimePlaceholders,
+        snapshots: [runtimeSnapshot],
+        attentionItems: [runtimeAttention]
+    )
+    guard runtimePlaceholders.count == registry.count,
+          runtimePlaceholders.first(where: {
+              $0.metadata.id == mock.metadata.id
+          })?.integrationStatus == .notManaged,
+          runtimeStatuses.first(where: {
+              $0.metadata.id == mock.metadata.id
+          })?.activeSessionCount == 1,
+          runtimeStatuses.first(where: {
+              $0.metadata.id == mock.metadata.id
+          })?.attentionCount == 1
+    else {
+        failAgentIntegrationSelfTest("runtime health placeholders/activity")
+    }
+
     for id in expectedBuiltIns {
         guard let metadata = registry.metadata(for: id),
               !metadata.displayName.isEmpty,

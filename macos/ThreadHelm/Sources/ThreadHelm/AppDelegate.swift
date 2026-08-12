@@ -138,6 +138,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startCodexDesktopMonitoring()
         startClaudePermissionHook()
         agentEventChannelAvailable = startAgentEventSocket()
+        dashboardStore.update { snapshot in
+            snapshot.agentEventChannelAvailable = agentEventChannelAvailable
+            snapshot.agentStatuses = agentRuntimeStatusPlaceholders(
+                registry: agentRegistry
+            )
+        }
+        refreshAgentRuntimeStatuses()
         startScreenParameterMonitoring()
         makeStatusItem()
         makeVisibilityHotKey()
@@ -436,6 +443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     snapshot.taskCollection = projected.taskCollection
                     snapshot.agentSnapshots = projected.snapshots
                     snapshot.attentionItems = projected.attentionItems
+                    self.updateAgentRuntimeActivity(in: &snapshot)
                 }
             }
         )
@@ -769,6 +777,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshDashboard() {
+        refreshAgentRuntimeStatuses()
         makeDynamicIslandDashboardRefreshDispatcher().refreshDashboard()
     }
 
@@ -786,6 +795,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.refreshQuota(provider: provider)
             }
         )
+    }
+
+    private func refreshAgentRuntimeStatuses() {
+        let registry = agentRegistry
+        let previousStatuses = dashboardStore.snapshot.agentStatuses
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let probed = probedAgentRuntimeStatuses(
+                registry: registry,
+                preserving: previousStatuses
+            )
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.dashboardStore.update { snapshot in
+                    snapshot.agentStatuses = agentRuntimeStatusesWithActivity(
+                        probed,
+                        snapshots: snapshot.agentSnapshots,
+                        attentionItems: snapshot.attentionItems
+                    )
+                    snapshot.agentEventChannelAvailable =
+                        self.agentEventChannelAvailable
+                }
+            }
+        }
+    }
+
+    private func updateAgentRuntimeActivity(
+        in snapshot: inout ActivityDashboardSnapshot
+    ) {
+        let statuses = snapshot.agentStatuses.isEmpty
+            ? agentRuntimeStatusPlaceholders(registry: agentRegistry)
+            : snapshot.agentStatuses
+        snapshot.agentStatuses = agentRuntimeStatusesWithActivity(
+            statuses,
+            snapshots: snapshot.agentSnapshots,
+            attentionItems: snapshot.attentionItems
+        )
+        snapshot.agentEventChannelAvailable = agentEventChannelAvailable
     }
 
     private func refreshTaskProgress() {
@@ -806,24 +852,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 readerStore.releaseReader(for: generation, reuse: shouldApply)
                 guard shouldApply else { return }
                 self.lastPolledTaskCollection = collection
-                self.dashboardStore.update {
+                self.dashboardStore.update { snapshot in
                     let liveUpdate = self.agentLiveEventStore.snapshotUpdate()
                     guard self.agentLiveReductionGate.shouldApply(
                         revision: liveUpdate.revision
                     ) else {
-                        $0.isTaskRefreshing = false
+                        snapshot.isTaskRefreshing = false
                         return
                     }
                     let projected = agentDashboardProjection(
                         collection: collection,
-                        permissionQueue: $0.permissionQueue,
+                        permissionQueue: snapshot.permissionQueue,
                         liveReduction: liveUpdate.reduction,
                         registry: self.agentRegistry
                     )
-                    $0.taskCollection = projected.taskCollection
-                    $0.agentSnapshots = projected.snapshots
-                    $0.attentionItems = projected.attentionItems
-                    $0.isTaskRefreshing = false
+                    snapshot.taskCollection = projected.taskCollection
+                    snapshot.agentSnapshots = projected.snapshots
+                    snapshot.attentionItems = projected.attentionItems
+                    self.updateAgentRuntimeActivity(in: &snapshot)
+                    snapshot.isTaskRefreshing = false
                 }
                 // 终端里直接回答后 Claude 不会关闭 hook 连接，靠这次刷新的会话
                 // 状态收起已经不需要的问答弹窗。
@@ -872,6 +919,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             snapshot.taskCollection = projected.taskCollection
             snapshot.agentSnapshots = projected.snapshots
             snapshot.attentionItems = projected.attentionItems
+            updateAgentRuntimeActivity(in: &snapshot)
         }
     }
 

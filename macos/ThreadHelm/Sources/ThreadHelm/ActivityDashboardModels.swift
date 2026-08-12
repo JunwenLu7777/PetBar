@@ -7,6 +7,7 @@ enum PresentationMode: String, CaseIterable {
 
 enum DynamicIslandTab: String, CaseIterable {
     case tasks
+    case agents
     case confirmation
     case quota
 }
@@ -44,6 +45,44 @@ enum TaskStateFilter: String, CaseIterable {
     case waitingForInput
     case completed
     case failed
+}
+
+enum TaskQueueGroup: String, CaseIterable, Equatable {
+    case needsYou
+    case running
+    case review
+
+    var title: String {
+        switch self {
+        case .needsYou: return "Needs you"
+        case .running: return "Running"
+        case .review: return "Review"
+        }
+    }
+
+    fileprivate func contains(_ kind: TaskProgressKind) -> Bool {
+        switch self {
+        case .needsYou:
+            return kind == .waitingForInput || kind == .failed
+        case .running:
+            return kind == .running || kind == .reading || kind == .idle
+        case .review:
+            return kind == .completed
+        }
+    }
+}
+
+struct TaskQueueSection: Equatable {
+    let group: TaskQueueGroup
+    let items: [TaskProgressItem]
+}
+
+func taskQueueSections(for items: [TaskProgressItem]) -> [TaskQueueSection] {
+    TaskQueueGroup.allCases.compactMap { group in
+        let groupedItems = items.filter { group.contains($0.kind) }
+        guard !groupedItems.isEmpty else { return nil }
+        return TaskQueueSection(group: group, items: groupedItems)
+    }
 }
 
 enum TaskActivityEventKind: String, Equatable {
@@ -258,6 +297,8 @@ struct ActivityDashboardSnapshot: Equatable {
     var permissionQueue = ClaudePermissionQueueSnapshot.empty
     var agentSnapshots: [AgentSessionSnapshot] = []
     var attentionItems: [AgentAttentionItem] = []
+    var agentStatuses: [AgentRuntimeStatus] = []
+    var agentEventChannelAvailable: Bool? = nil
     var acknowledgedTerminalTaskKeys = Set<String>()
     var isTaskRefreshing = false
     var codexDesktopRunning = false

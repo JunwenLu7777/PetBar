@@ -1332,7 +1332,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     )
     private let titleField = DynamicIslandLabel(size: 15, weight: .semibold)
     private let tabs = DynamicIslandSegmentedControl(
-        labels: ["任务", "额度"]
+        labels: ["任务", "Agents", "额度"]
     )
     private let sourceFilter = DynamicIslandSegmentedControl(
         labels: TaskSourceFilter.options(for: AgentID.builtInOrder).map {
@@ -1357,6 +1357,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     private let headerDivider = DynamicIslandDividerView()
     private let childContainer = NSView()
     private let taskController = DynamicIslandTaskViewController()
+    private let agentHealthController = DynamicIslandAgentHealthViewController()
     private let quotaController = DynamicIslandQuotaViewController()
     private var confirmationController: DynamicIslandConfirmationViewController?
     private let statusSymbol = NSImageView()
@@ -1385,6 +1386,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             view.addSubview(subview)
         }
         addChild(taskController)
+        addChild(agentHealthController)
         addChild(quotaController)
         childContainer.addSubview(statusSymbol)
         childContainer.addSubview(statusField)
@@ -1399,6 +1401,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         tabs.setAccessibilityLabel("活动分页")
         tabs.setAccentColor(DynamicIslandPalette.green, forSegment: 0)
         tabs.setAccentColor(DynamicIslandPalette.green, forSegment: 1)
+        tabs.setAccentColor(DynamicIslandPalette.green, forSegment: 2)
 
         sourceFilter.onSelectionChange = { [weak self] index in
             self?.sourceChanged(index: index)
@@ -1453,11 +1456,11 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         let width = view.bounds.width
         let height = view.bounds.height
         titleField.frame = NSRect(x: 22, y: height - 39, width: 118, height: 22)
-        tabs.frame = NSRect(x: 146, y: height - 44, width: 160, height: 32)
+        tabs.frame = NSRect(x: 146, y: height - 44, width: 234, height: 32)
         sourceFilter.frame = NSRect(
-            x: 314,
+            x: 388,
             y: height - 44,
-            width: max(1, width - 468),
+            width: max(1, width - 542),
             height: 32
         )
         refreshButton.frame = NSRect(x: width - 134, y: height - 44, width: 32, height: 32)
@@ -1490,6 +1493,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             height: max(20, childHeight - 72)
         )
         taskController.view.frame = childContainer.bounds
+        agentHealthController.view.frame = childContainer.bounds
         quotaController.view.frame = childContainer.bounds
     }
 
@@ -1523,11 +1527,12 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             forSegment: 0
         )
         tabs.setLabel(
-            "  额度",
+            "  Agents \(snapshot.availableAgentIDs.count)",
             forSegment: 1
         )
+        tabs.setLabel("  额度", forSegment: 2)
         tabs.setAccessibilityValue(
-            "任务 \(taskCount)，额度"
+            "任务 \(taskCount)，Agents \(snapshot.availableAgentIDs.count)，额度"
         )
         if let segmentIndex = tabSegmentIndex(for: state) {
             tabs.selectSegment(segmentIndex)
@@ -1561,6 +1566,16 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             statusSymbol.contentTintColor = DynamicIslandPalette.amber
             statusField.stringValue = "等待确认"
             placeholderField.stringValue = "确认队列 \(confirmationCount) 项"
+        case .expanded(.agents):
+            showAgentHealthContent()
+            agentHealthController.apply(snapshot)
+            statusSymbol.image = NSImage(
+                systemSymbolName: "heart.text.square",
+                accessibilityDescription: "Agent 健康状态"
+            )
+            statusSymbol.contentTintColor = DynamicIslandPalette.green
+            statusField.stringValue = "Agent 健康状态"
+            placeholderField.stringValue = "\(snapshot.availableAgentIDs.count) 个 Agent"
         case .expanded(.quota):
             showQuotaContent()
             quotaController.apply(snapshot)
@@ -1598,7 +1613,8 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         switch tab {
         case .tasks: return 0
         case .confirmation: return nil
-        case .quota: return 1
+        case .agents: return 1
+        case .quota: return 2
         }
     }
 
@@ -1622,7 +1638,8 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
 
     private func tabChanged(index: Int) {
         switch index {
-        case 1: onTabChange?(.quota)
+        case 1: onTabChange?(.agents)
+        case 2: onTabChange?(.quota)
         default: onTabChange?(.tasks)
         }
     }
@@ -1653,6 +1670,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         statusSymbol.removeFromSuperview()
         statusField.removeFromSuperview()
         placeholderField.removeFromSuperview()
+        agentHealthController.view.removeFromSuperview()
         quotaController.view.removeFromSuperview()
         confirmationController?.view.removeFromSuperview()
         if taskController.view.superview !== childContainer {
@@ -1665,6 +1683,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     private func showPlaceholderContent() {
         taskController.hideHoverForSelfTest()
         taskController.view.removeFromSuperview()
+        agentHealthController.view.removeFromSuperview()
         quotaController.view.removeFromSuperview()
         confirmationController?.view.removeFromSuperview()
         for subview in [statusSymbol, statusField, placeholderField]
@@ -1679,6 +1698,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     ) {
         taskController.hideHoverForSelfTest()
         taskController.view.removeFromSuperview()
+        agentHealthController.view.removeFromSuperview()
         quotaController.view.removeFromSuperview()
         statusSymbol.removeFromSuperview()
         statusField.removeFromSuperview()
@@ -1696,6 +1716,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     private func showQuotaContent() {
         taskController.hideHoverForSelfTest()
         taskController.view.removeFromSuperview()
+        agentHealthController.view.removeFromSuperview()
         confirmationController?.view.removeFromSuperview()
         statusSymbol.removeFromSuperview()
         statusField.removeFromSuperview()
@@ -1705,6 +1726,21 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         }
         quotaController.view.frame = childContainer.bounds
         quotaController.view.autoresizingMask = [.width, .height]
+    }
+
+    private func showAgentHealthContent() {
+        taskController.hideHoverForSelfTest()
+        taskController.view.removeFromSuperview()
+        quotaController.view.removeFromSuperview()
+        confirmationController?.view.removeFromSuperview()
+        statusSymbol.removeFromSuperview()
+        statusField.removeFromSuperview()
+        placeholderField.removeFromSuperview()
+        if agentHealthController.view.superview !== childContainer {
+            childContainer.addSubview(agentHealthController.view)
+        }
+        agentHealthController.view.frame = childContainer.bounds
+        agentHealthController.view.autoresizingMask = [.width, .height]
     }
 
     private func reapplyTaskControllerIfVisible(preferredTaskKey: String?) {
@@ -1753,6 +1789,14 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
 
     func quotaAccessibilitySnapshotForSelfTest() -> String {
         quotaController.accessibilitySnapshotForSelfTest()
+    }
+
+    func agentHealthAccessibilitySnapshotForSelfTest() -> String {
+        agentHealthController.accessibilitySnapshotForSelfTest()
+    }
+
+    func agentHealthRowSummariesForSelfTest() -> [String] {
+        agentHealthController.rowSummariesForSelfTest()
     }
 
     func refreshForSelfTest() {

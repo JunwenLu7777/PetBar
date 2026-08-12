@@ -59,6 +59,16 @@ func dynamicIslandTaskEventRowHeight(
     return max(30, ceil(bounds.height) + 12)
 }
 
+private enum DynamicIslandTaskQueueRow {
+    case section(TaskQueueSection)
+    case task(TaskProgressItem)
+
+    var item: TaskProgressItem? {
+        guard case .task(let item) = self else { return nil }
+        return item
+    }
+}
+
 final class DynamicIslandTaskViewController:
     NSViewController,
     NSTableViewDataSource,
@@ -148,6 +158,8 @@ final class DynamicIslandTaskViewController:
     private var collection = TaskProgressCollectionSnapshot(items: [])
     private var sourceFilter = TaskSourceFilter.all
     private var stateFilter = TaskStateFilter.all
+    private var visibleSections: [TaskQueueSection] = []
+    private var queueRows: [DynamicIslandTaskQueueRow] = []
     private var visibleItems: [TaskProgressItem] = []
     private var selectedTaskKey: String?
     private var selectedItem: TaskProgressItem?
@@ -336,7 +348,10 @@ final class DynamicIslandTaskViewController:
     override func mouseMoved(with event: NSEvent) {
         let point = tableView.convert(event.locationInWindow, from: nil)
         let row = tableView.row(at: point)
-        guard row >= 0, visibleItems.indices.contains(row) else {
+        guard row >= 0,
+              queueRows.indices.contains(row),
+              let item = queueRows[row].item
+        else {
             hoverController.hide()
             return
         }
@@ -344,7 +359,7 @@ final class DynamicIslandTaskViewController:
         let screenRect = tableView.window?.convertToScreen(
             tableView.convert(rowRect, to: nil)
         ) ?? rowRect
-        hoverController.show(item: visibleItems[row], sourceRect: screenRect)
+        hoverController.show(item: item, sourceRect: screenRect)
     }
 
     func apply(
@@ -356,8 +371,24 @@ final class DynamicIslandTaskViewController:
         self.collection = collection
         self.sourceFilter = sourceFilter
         updateCounts()
-        let previousKey = selectedTaskKey
-        visibleItems = collection.filtered(source: sourceFilter, state: stateFilter)
+        // An explicit navigation target must beat the controller's incidental
+        // prior selection. Grouping puts Needs you first, so retaining an old
+        // first row here could otherwise open a different task than requested.
+        let previousKey = preferredTaskKey == nil
+            || preferredTaskKey == selectedTaskKey
+            ? selectedTaskKey
+            : nil
+        let filteredItems = collection.filtered(
+            source: sourceFilter,
+            state: stateFilter
+        )
+        visibleSections = taskQueueSections(for: filteredItems)
+        visibleItems = visibleSections.flatMap(\.items)
+        queueRows = visibleSections.flatMap { section in
+            [.section(section)] + section.items.map {
+                DynamicIslandTaskQueueRow.task($0)
+            }
+        }
         selectedTaskKey = resolvedSelectedTaskKey(
             previousKey: previousKey,
             preferredKey: preferredTaskKey,
@@ -374,7 +405,7 @@ final class DynamicIslandTaskViewController:
         if tableView === eventsTableView {
             return max(1, displayedEvents.count)
         }
-        return visibleItems.count
+        return queueRows.count
     }
 
     func tableView(
@@ -397,23 +428,31 @@ final class DynamicIslandTaskViewController:
                 highlighted: row == displayedEvents.count - 1
             )
         }
-        guard visibleItems.indices.contains(row) else { return nil }
-        let cell = DynamicIslandTaskRowView()
-        cell.apply(
-            item: visibleItems[row],
-            selected: visibleItems[row].identityKey == selectedTaskKey
-        )
-        return cell
+        guard queueRows.indices.contains(row) else { return nil }
+        switch queueRows[row] {
+        case .section(let section):
+            return DynamicIslandTaskSectionRowView(section: section)
+        case .task(let item):
+            let cell = DynamicIslandTaskRowView()
+            cell.apply(
+                item: item,
+                selected: item.identityKey == selectedTaskKey
+            )
+            return cell
+        }
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        guard tableView === eventsTableView,
-              displayedEvents.indices.contains(row)
-        else { return tableView === eventsTableView ? 32 : tableView.rowHeight }
-        return dynamicIslandTaskEventRowHeight(
-            text: displayedEvents[row].text,
-            availableWidth: max(1, eventsScrollView.contentSize.width)
-        )
+        if tableView === eventsTableView {
+            guard displayedEvents.indices.contains(row) else { return 32 }
+            return dynamicIslandTaskEventRowHeight(
+                text: displayedEvents[row].text,
+                availableWidth: max(1, eventsScrollView.contentSize.width)
+            )
+        }
+        guard queueRows.indices.contains(row) else { return tableView.rowHeight }
+        if case .section = queueRows[row] { return 28 }
+        return tableView.rowHeight
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
@@ -424,7 +463,18 @@ final class DynamicIslandTaskViewController:
         _ tableView: NSTableView,
         shouldSelectRow row: Int
     ) -> Bool {
-        tableView !== eventsTableView
+        guard tableView !== eventsTableView,
+              queueRows.indices.contains(row)
+        else { return false }
+        return queueRows[row].item != nil
+    }
+
+    func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
+        guard tableView !== eventsTableView,
+              queueRows.indices.contains(row)
+        else { return false }
+        if case .section = queueRows[row] { return true }
+        return false
     }
 
     @objc private func tableSelectionChanged() {
@@ -474,8 +524,11 @@ final class DynamicIslandTaskViewController:
 
     private func updateSelectedItemFromTable() {
         let row = tableView.selectedRow
-        guard row >= 0, visibleItems.indices.contains(row) else { return }
-        selectedItem = visibleItems[row]
+        guard row >= 0,
+              queueRows.indices.contains(row),
+              let item = queueRows[row].item
+        else { return }
+        selectedItem = item
         selectedTaskKey = selectedItem?.identityKey
         hoverController.hide()
         renderDetail()
@@ -485,8 +538,8 @@ final class DynamicIslandTaskViewController:
 
     private func syncSelectionToTable() {
         guard let selectedTaskKey,
-              let row = visibleItems.firstIndex(where: {
-                  $0.identityKey == selectedTaskKey
+              let row = queueRows.firstIndex(where: {
+                  $0.item?.identityKey == selectedTaskKey
               })
         else {
             tableView.deselectAll(nil)
@@ -886,6 +939,7 @@ final class DynamicIslandTaskViewController:
         _ = view
         return [
             stateFilterControl.accessibilityValue() as? String,
+            visibleTaskGroupSummariesForSelfTest().joined(separator: "，"),
             emptyField.stringValue,
             detailContentView.accessibilityValue() as? String,
             openButton.accessibilityLabel(),
@@ -924,7 +978,9 @@ final class DynamicIslandTaskViewController:
     func visibleProviderIconsAreConcreteForSelfTest() -> Bool {
         _ = view
         view.layoutSubtreeIfNeeded()
-        return visibleItems.indices.allSatisfy { row in
+        return queueRows.indices.filter {
+            queueRows[$0].item != nil
+        }.allSatisfy { row in
             guard let cell = tableView.view(
                 atColumn: 0,
                 row: row,
@@ -932,6 +988,10 @@ final class DynamicIslandTaskViewController:
             ) as? DynamicIslandTaskRowView else { return false }
             return cell.providerIconIsConcreteForSelfTest
         }
+    }
+
+    func visibleTaskGroupSummariesForSelfTest() -> [String] {
+        visibleSections.map { "\($0.group.title) \($0.items.count)" }
     }
 
     func footerButtonGapForSelfTest() -> CGFloat {
@@ -1060,6 +1120,59 @@ final class DynamicIslandTaskHoverController {
         origin.x = min(max(origin.x, visibleFrame.minX), visibleFrame.maxX - size.width)
         origin.y = min(max(origin.y, visibleFrame.minY), visibleFrame.maxY - size.height)
         return origin
+    }
+}
+
+private final class DynamicIslandTaskSectionRowView: NSTableCellView {
+    private let titleField = DynamicIslandTaskLabel(size: 11, weight: .semibold)
+    private let countField = DynamicIslandTaskLabel(size: 11, weight: .medium)
+    private let divider = DynamicIslandDividerView()
+
+    init(section: TaskQueueSection) {
+        super.init(frame: .zero)
+        titleField.stringValue = section.group.title
+        titleField.textColor = section.group.tintColor
+        countField.stringValue = "\(section.items.count)"
+        countField.textColor = DynamicIslandPalette.tertiaryText
+        countField.alignment = .right
+        addSubview(titleField)
+        addSubview(countField)
+        addSubview(divider)
+        setAccessibilityLabel(
+            "\(section.group.title)，\(section.items.count) 项"
+        )
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        titleField.frame = NSRect(x: 8, y: 7, width: 120, height: 16)
+        countField.frame = NSRect(
+            x: max(136, bounds.width - 40),
+            y: 7,
+            width: 30,
+            height: 16
+        )
+        divider.frame = NSRect(
+            x: 8,
+            y: 1,
+            width: max(1, bounds.width - 16),
+            height: 1
+        )
+    }
+}
+
+private extension TaskQueueGroup {
+    var tintColor: NSColor {
+        switch self {
+        case .needsYou: return DynamicIslandPalette.amber
+        case .running: return DynamicIslandPalette.green
+        case .review: return DynamicIslandPalette.secondaryText
+        }
     }
 }
 

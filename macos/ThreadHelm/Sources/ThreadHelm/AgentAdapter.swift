@@ -85,6 +85,101 @@ struct AgentDiagnostics: Equatable {
     let counters: [String: Int]
 }
 
+struct AgentRuntimeStatus: Equatable {
+    let metadata: AgentMetadata
+    let discovery: AgentDiscovery
+    let integrationStatus: AgentIntegrationStatus?
+    let diagnostics: AgentDiagnostics
+    let activeSessionCount: Int
+    let attentionCount: Int
+}
+
+func agentRuntimeStatusPlaceholders(
+    registry: AgentRegistry = .builtIn
+) -> [AgentRuntimeStatus] {
+    registry.agentIDs.compactMap { agentID in
+        guard let metadata = registry.metadata(for: agentID) else { return nil }
+        let integrationStatus: AgentIntegrationStatus? = metadata.capabilities
+            .status(for: .managedIntegration) == .unsupported
+            ? .notManaged
+            : nil
+        return AgentRuntimeStatus(
+            metadata: metadata,
+            discovery: AgentDiscovery(
+                isInstalled: false,
+                version: nil,
+                compatibility: .unknown
+            ),
+            integrationStatus: integrationStatus,
+            diagnostics: AgentDiagnostics(
+                health: .unknown,
+                summary: "尚未检查",
+                counters: [:]
+            ),
+            activeSessionCount: 0,
+            attentionCount: 0
+        )
+    }
+}
+
+func probedAgentRuntimeStatuses(
+    registry: AgentRegistry = .builtIn,
+    preserving previousStatuses: [AgentRuntimeStatus] = []
+) -> [AgentRuntimeStatus] {
+    let previousByID = Dictionary(
+        uniqueKeysWithValues: previousStatuses.map { ($0.metadata.id, $0) }
+    )
+    return registry.agentIDs.compactMap { agentID in
+        guard let adapter = registry.adapter(for: agentID) else { return nil }
+        let previous = previousByID[agentID]
+        let integrationStatus: AgentIntegrationStatus?
+        if adapter.metadata.capabilities.status(for: .managedIntegration)
+            == .unsupported
+        {
+            integrationStatus = .notManaged
+        } else {
+            // Reading a live vendor configuration is deliberately deferred to
+            // the explicit integration lifecycle. Discovery must not silently
+            // become permission to inspect or mutate user configuration.
+            integrationStatus = previous?.integrationStatus
+        }
+        return AgentRuntimeStatus(
+            metadata: adapter.metadata,
+            discovery: adapter.discover(),
+            integrationStatus: integrationStatus,
+            diagnostics: adapter.diagnostics(),
+            activeSessionCount: previous?.activeSessionCount ?? 0,
+            attentionCount: previous?.attentionCount ?? 0
+        )
+    }
+}
+
+func agentRuntimeStatusesWithActivity(
+    _ statuses: [AgentRuntimeStatus],
+    snapshots: [AgentSessionSnapshot],
+    attentionItems: [AgentAttentionItem]
+) -> [AgentRuntimeStatus] {
+    statuses.map { status in
+        let agentID = status.metadata.id
+        let activeCount = snapshots.filter {
+            $0.identity.agentID == agentID
+                && ($0.executionState == .discovering
+                    || $0.executionState == .running)
+        }.count
+        let attentionCount = attentionItems.filter {
+            $0.identity.agentID == agentID
+        }.count
+        return AgentRuntimeStatus(
+            metadata: status.metadata,
+            discovery: status.discovery,
+            integrationStatus: status.integrationStatus,
+            diagnostics: status.diagnostics,
+            activeSessionCount: activeCount,
+            attentionCount: attentionCount
+        )
+    }
+}
+
 protocol AgentAdapter {
     var metadata: AgentMetadata { get }
     func discover() -> AgentDiscovery

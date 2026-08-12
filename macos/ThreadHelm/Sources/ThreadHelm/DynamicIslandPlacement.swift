@@ -32,7 +32,7 @@ func dynamicIslandRequestedSize(
     switch state {
     case .hidden, .capsule:
         return dynamicIslandCapsuleSize
-    case .expanded(.tasks):
+    case .expanded(.tasks), .expanded(.agents):
         return dynamicIslandTaskSize
     case .expanded(.confirmation):
         return dynamicIslandConfirmationSize

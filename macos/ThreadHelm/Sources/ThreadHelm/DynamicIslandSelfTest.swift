@@ -794,6 +794,24 @@ private func assertDynamicIslandTaskWorkspace() {
         claudeFailed,
     ])
 
+    let queueSections = taskQueueSections(for: collection.items)
+    guard queueSections.map(\.group) == [.needsYou, .running, .review],
+          queueSections.map(\.items.count) == [2, 1, 1],
+          queueSections[0].items.map(\.identityKey) == [
+              claudeWaiting.identityKey,
+              claudeFailed.identityKey,
+          ],
+          queueSections[1].items.map(\.identityKey) == [
+              codexRunning.identityKey,
+          ],
+          queueSections[2].items.map(\.identityKey) == [
+              codexCompleted.identityKey,
+          ]
+    else {
+        fputs("dynamic island task queue grouping self-test failed\n", stderr)
+        exit(1)
+    }
+
     guard collection.filtered(source: .codex, state: .running)
         .map(\.identityKey) == [codexRunning.identityKey],
           collection.filtered(source: .claudeCode, state: .failed)
@@ -860,6 +878,12 @@ private func assertDynamicIslandTaskWorkspace() {
           controller.activityScrollerIsEnabledForSelfTest(),
           controller.eventsScrollerIsEnabledForSelfTest(),
           controller.visibleProviderIconsAreConcreteForSelfTest(),
+          controller.visibleTaskGroupSummariesForSelfTest() == [
+              "Running 1",
+              "Review 1",
+          ],
+          controller.accessibilitySnapshotForSelfTest().contains("Running 1"),
+          controller.accessibilitySnapshotForSelfTest().contains("Review 1"),
           controller.footerButtonGapForSelfTest() >= 14,
           controller.copyPathForSelfTest() == "/tmp/threadhelm",
           controller.openButtonTitleForSelfTest() == "打开 Codex"
@@ -952,7 +976,11 @@ private func assertDynamicIslandTaskWorkspace() {
         $0.trimmingCharacters(in: .whitespaces)
     }
     guard !workspace.sourceFilterIsHiddenForSelfTest(),
-          topLevelTabLabels == ["任务 \(collection.items.count)", "额度"],
+          topLevelTabLabels == [
+              "任务 \(collection.items.count)",
+              "Agents 5",
+              "额度",
+          ],
           workspace.sourceFilterLabelsForSelfTest()
               == ["全部", "Codex", "Claude", "Cursor", "ZCode", "Pi"],
           workspace.selectedTopLevelTabForSelfTest() == 0,
@@ -998,6 +1026,49 @@ private func assertDynamicIslandTaskWorkspace() {
         fputs("dynamic island sixth agent rendering self-test failed\n", stderr)
         exit(1)
     }
+
+    var agentHealthSnapshot = ActivityDashboardSnapshot(
+        taskCollection: collection
+    )
+    agentHealthSnapshot.agentEventChannelAvailable = false
+    agentHealthSnapshot.agentStatuses = builtInAgentMetadata().map { metadata in
+        AgentRuntimeStatus(
+            metadata: metadata,
+            discovery: AgentDiscovery(
+                isInstalled: metadata.id != .zcode,
+                version: metadata.id == .codex ? "0.145.0" : nil,
+                compatibility: metadata.id == .zcode ? .unknown : .supported
+            ),
+            integrationStatus: metadata.id == .cursor ? .installed : nil,
+            diagnostics: AgentDiagnostics(
+                health: metadata.id == .zcode ? .unavailable : .healthy,
+                summary: metadata.id == .zcode ? "未发现 ZCode" : "本机可用",
+                counters: [:]
+            ),
+            activeSessionCount: metadata.id == .codex ? 2 : 0,
+            attentionCount: metadata.id == .claudeCode ? 1 : 0
+        )
+    }
+    workspace.apply(
+        snapshot: agentHealthSnapshot,
+        state: .expanded(.agents)
+    )
+    guard workspace.sourceFilterIsHiddenForSelfTest(),
+          workspace.selectedTopLevelTabForSelfTest() == 1,
+          workspace.agentHealthRowSummariesForSelfTest().count == 5,
+          workspace.agentHealthAccessibilitySnapshotForSelfTest()
+              .contains("本地事件通道已降级"),
+          workspace.agentHealthAccessibilitySnapshotForSelfTest()
+              .contains("Cursor"),
+          workspace.agentHealthAccessibilitySnapshotForSelfTest()
+              .contains("集成已安装"),
+          workspace.agentHealthAccessibilitySnapshotForSelfTest()
+              .contains("未发现 ZCode")
+    else {
+        fputs("dynamic island agent health workspace self-test failed\n", stderr)
+        exit(1)
+    }
+
     workspace.setSourceFilterForSelfTest(.claudeCode)
     workspace.apply(
         snapshot: ActivityDashboardSnapshot(taskCollection: collection),
@@ -1062,7 +1133,12 @@ private func assertDynamicIslandTaskWorkspace() {
     guard openedItems.map(\.identityKey) == [codexRunning.identityKey],
           acknowledgedDetails.isEmpty
     else {
-        fputs("dynamic island task open propagation or ack isolation failed\n", stderr)
+        fputs(
+            "dynamic island task open propagation or ack isolation failed "
+                + "opened=\(openedItems.map(\.identityKey)) "
+                + "ack=\(acknowledgedDetails)\n",
+            stderr
+        )
         exit(1)
     }
     openStore.update { $0.isTaskRefreshing = true }
@@ -2829,7 +2905,7 @@ func runDynamicIslandSelfTest() -> Never {
             + "collection=full+compact store-observer=pass quota-snapshot=pass "
             + "quota-workspace=left-228+rows+reset-credits "
             + "quota-phases=6/6 stale-data=preserved+scroll-no-overlap "
-            + "top-tabs=tasks+quota confirmation=transient "
+            + "top-tabs=tasks+agents+quota confirmation=transient "
             + "manual-refresh=tasks+all-providers "
             + "window-actions=refresh+hide+provider+copy+detail-ack "
             + "passive-refresh=no-ack "
