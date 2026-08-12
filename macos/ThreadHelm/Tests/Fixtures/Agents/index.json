@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "f7cb4843eea3aa5aae9ee6045092c007f7cd9452",
+  "capturedAt": "2026-08-12T09:31:19Z",
+  "scope": "single-owner-local-mac",
+  "agents": [
+    "codex",
+    "claudeCode",
+    "cursor",
+    "zcode",
+    "pi"
+  ],
+  "scenarioFiles": {
+    "codex": "scenarios/codex.json",
+    "claudeCode": "scenarios/claudeCode.json",
+    "cursor": "scenarios/cursor.json",
+    "zcode": "scenarios/zcode.json",
+    "pi": "scenarios/pi.json"
+  },
+  "counts": {
+    "total": 80,
+    "byAgent": {
+      "codex": 16,
+      "claudeCode": 16,
+      "cursor": 16,
+      "zcode": 16,
+      "pi": 16
+    }
+  },
+  "replayContract": "docs/superpowers/specs/2026-08-12-threadhelm-truth-spec.md",
+  "redactionStatus": "redacted",
+  "explicitUnknowns": [
+    "Cursor arbitrary IDE session return is not proven end to end.",
+    "ZCode exact session return and already-running-session hook pickup are not proven.",
+    "Pi exact session return is not advertised until an end-to-end check exists."
+  ]
+}

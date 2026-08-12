@@ -77,6 +77,7 @@ confirm-question
 confirm-plan
 quota-codex
 quota-claude
+quota-refreshing
 quota-loading
 quota-stale
 quota-first-failure
@@ -104,7 +105,7 @@ for STATE in \
   capsule-confirmation capsule-running capsule-waiting capsule-completed \
   capsule-failed capsule-idle capsule-codex-exited \
   tasks confirm-tool confirm-question confirm-plan \
-  quota-codex quota-claude quota-loading quota-stale \
+  quota-codex quota-claude quota-refreshing quota-loading quota-stale \
   quota-first-failure quota-unavailable
 do
   "$BIN" --render-dynamic-island-preview "$STATE" "$OUT/$STATE.png"

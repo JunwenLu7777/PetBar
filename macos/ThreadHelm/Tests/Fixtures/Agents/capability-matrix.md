@@ -1,0 +1,101 @@
+# ThreadHelm five-agent capability matrix
+
+Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-12. This is an owner-only, version-pinned description of the locally installed tools. “Unknown” is deliberate: it means the behavior was not proven end to end on this Mac and must not be advertised.
+
+| Agent | Installed version | Installation discovery | Lifecycle events | Stable identity |
+| --- | --- | --- | --- | --- |
+| Codex | 0.145.0 | `codex --version`, local process/session state | Existing ThreadHelm reader observes active turns, terminal states, and retained recent sessions | Supported: native thread UUID |
+| Claude Code | 2.1.226 | `claude --version`, `claude agents --json` | Agent snapshot, top-level transcript, live process, and existing permission hook | Supported: Claude session ID plus a separately checked live process |
+| Cursor | Desktop 3.15.6; Agent CLI 2026.04.14-ee4b43a | Application bundle plus separate desktop and Agent CLI commands | Official local hooks expose session/tool/stop signals; the current ThreadHelm runtime has no Cursor reader yet | Candidate `session_id` is documented; resumable identity mapping remains unknown until an end-to-end fixture passes |
+| ZCode | 3.7.6 (build 3.7.6.4691) | Application bundle `dev.zcode.app`; bundled CLI exists inside the app | Bundled documentation lists SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, and Stop | Unknown; no stable session identity has been proven from this installed version |
+| Pi | 0.84.1 | `pi --version`, installed package, bundled extension documentation | Extension API documents session, agent, tool, compact, settled, and shutdown events | Candidate session ID/path exists in the CLI; exact mapping remains unknown until an end-to-end fixture passes |
+
+## Exact return
+
+| Agent | Result on this Mac |
+| --- | --- |
+| Codex | Supported when the native thread UUID is present, using `codex://threads/<UUID>`. |
+| Claude Code | Supported when a matching live process or verified session resume target exists. |
+| Cursor | Unknown. `cursor agent --resume [chatId]` exists, but arbitrary desktop-session mapping is not proven. |
+| ZCode | Unknown. The `zcode` URL scheme and bundled CLI do not prove arbitrary-session return. |
+| Pi | Unknown. `--resume` and `--session` exist, but ThreadHelm must not call them as exact return until identity is independently confirmed. |
+
+## Fallback return
+
+| Agent | Result on this Mac |
+| --- | --- |
+| Codex | Focus the native Codex application; label this as app focus, never exact return. |
+| Claude Code | Resume by session when possible, then open the recorded project location in a terminal as an explicitly labeled fallback. |
+| Cursor | Open/focus Cursor or open a project location; do not report an arbitrary IDE window as exact. |
+| ZCode | Focus ZCode, then use a project-location fallback only when locally available. |
+| Pi | Unsupported in the first state-only adapter. ThreadHelm does not focus a terminal, navigate, or call Pi session APIs. |
+
+## Permission / question / plan
+
+| Agent | Result on this Mac |
+| --- | --- |
+| Codex | A pending `request_user_input` is observable as a question that needs attention; ThreadHelm opens Codex rather than answering it in-app. Generic permission and plan controls are unsupported. |
+| Claude Code | Existing ThreadHelm behavior supports a bounded local permission/question/plan queue and the verified in-app response path. |
+| Cursor | Native handling only in the first local adapter. Detection of blocked/input states is unknown until an official payload proves it. |
+| ZCode | PermissionRequest exists in bundled hook documentation, but the first local adapter intentionally does not register or intercept it. Question/plan semantics are unknown. |
+| Pi | Unsupported by ThreadHelm. The first adapter is state-only and must not invoke approval, message, cancellation, navigation, or session-mutation APIs. |
+
+## Quota
+
+| Agent | Result on this Mac |
+| --- | --- |
+| Codex | Supported by the existing local app-server rate-limit reader. |
+| Claude Code | Supported by the existing read-only local usage reader. |
+| Cursor | Unsupported in this project scope. |
+| ZCode | Unsupported in this project scope. |
+| Pi | Unsupported in this project scope. |
+
+## Offline behavior
+
+| Agent | Result on this Mac |
+| --- | --- |
+| Codex | Existing local snapshot reads do not block Codex. |
+| Claude Code | Existing state reads fail independently; the verified native Claude path remains available. |
+| Cursor | Required adapter contract: hooks return a valid success response quickly when ThreadHelm is absent; runtime conformance is not yet implemented. |
+| ZCode | Required adapter contract: managed hooks fail open and never prevent ZCode work; runtime conformance is not yet implemented. |
+| Pi | Required adapter contract: extension failures are contained and Pi continues normally; runtime conformance is not yet implemented. |
+
+## Freshness
+
+| Agent | Rule |
+| --- | --- |
+| Codex | Explicit active/terminal state wins. Retained terminal sessions may remain visible for up to 24 hours; an ambiguous non-terminal record becomes stale after the existing 30-minute freshness window. |
+| Claude Code | Live process and agents snapshot are strongest; transcript-only state is bounded by existing stale/process checks. |
+| Cursor | Unknown until hook payload timestamps and restart behavior are replayed; the future adapter must expose a documented expiry. |
+| ZCode | Stop plus process observation and a documented stale timeout are required because SessionEnd is unavailable in the bundled hook list. |
+| Pi | `agent_end` is not terminal by itself because retry/compact may follow; `agent_settled` or shutdown plus expiry is required. |
+
+## Duplicate / out-of-order
+
+| Agent | Rule |
+| --- | --- |
+| Codex | Native thread UUID is the deduplication identity; terminal state must not regress to an older active snapshot. |
+| Claude Code | Session/request identity and FIFO coordinator semantics are authoritative; completed requests must not be resurrected by older transcript data. |
+| Cursor | Future reducer must deduplicate by agent + native session candidate + reason and ignore regressive sequences. |
+| ZCode | Future reducer must tolerate repeated hooks and timestamps without inventing a SessionEnd event. |
+| Pi | Future reducer must tolerate `agent_end` followed by compact/retry and wait for `agent_settled` before terminal classification. |
+
+## Supported attention
+
+| Agent | Interrupting reasons supported by this truth set | Default non-interrupting results |
+| --- | --- | --- |
+| Codex | Question requiring user input; task-level failure | Running, ordinary tool failure, completion/review-ready, idle |
+| Claude Code | Permission, question, plan approval, task-level failure | Running, ordinary tool failure, completion/review-ready, idle |
+| Cursor | Verified task-level failure only; blocked/input remains unknown | Lifecycle churn, ordinary tool failure, completion/review-ready |
+| ZCode | Verified task-level failure only in the first adapter | Lifecycle churn, ordinary tool failure, completion/review-ready |
+| Pi | Verified settled task-level failure only; state-only | Lifecycle churn, intermediate `agent_end`, ordinary tool failure, completion/review-ready |
+
+## Unsupported or unknown
+
+- Cursor cloud agents are out of scope; Cursor in-app approval and arbitrary IDE-session deep links are not claimed.
+- ZCode user CLI configuration was absent at capture time. Its absence does not mean ZCode is uninstalled, and discovery must not create the file.
+- ZCode exact return, already-running-session hook pickup, question/plan semantics, and SessionEnd are unknown or unavailable in the observed surface.
+- Pi approval, input injection, cancellation, navigation, and other session mutation are intentionally unsupported. Exact return remains unknown.
+- No adapter may turn a normal tool failure into a task failure, an app focus into exact success, or an inferred state into official evidence.
+
+This matrix must be revalidated whenever any listed installed version changes.
