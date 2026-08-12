@@ -128,17 +128,23 @@ struct AgentIntegrationManager {
                 ))
             }
         } catch {
+            let primaryError = error
             let rollbackSucceeded: Bool
+            let rollbackFailure: String?
             do {
                 try backupStore.restoreContents(id: backup.id)
                 rollbackSucceeded = true
+                rollbackFailure = nil
             } catch {
                 rollbackSucceeded = false
+                rollbackFailure = error.localizedDescription
             }
             throw AgentIntegrationManagerError(
                 operation: operation,
                 agentID: activeAgentID,
-                reason: error.localizedDescription,
+                reason: rollbackFailure.map {
+                    "\(primaryError.localizedDescription)；自动恢复失败：\($0)"
+                } ?? primaryError.localizedDescription,
                 didRollback: rollbackSucceeded
             )
         }
@@ -168,11 +174,13 @@ struct AgentIntegrationManager {
                 agents: current.agents
             )
         } catch {
+            let didRollback = (error as? AgentIntegrationBackupError)?
+                .restoredSafetyBackup == true
             throw AgentIntegrationManagerError(
                 operation: .restore,
                 agentID: nil,
                 reason: error.localizedDescription,
-                didRollback: false
+                didRollback: didRollback
             )
         }
     }
@@ -254,7 +262,7 @@ enum AgentIntegrationAtomicFileWriter {
     }
 }
 
-private struct AgentIntegrationBackup {
+struct AgentIntegrationBackup {
     let id: String
 }
 
@@ -276,30 +284,73 @@ private struct AgentIntegrationBackupManifest: Codable {
     let items: [AgentIntegrationBackupItem]
 }
 
-private enum AgentIntegrationBackupError: LocalizedError {
+enum AgentIntegrationBackupError: LocalizedError {
     case invalidBackupID
     case invalidManifest
     case missingPayload(String)
+    case primaryRestoreFailed(primary: String, safetyBackupID: String)
+    case safetyRestoreFailed(
+        primary: String,
+        rollback: String,
+        safetyBackupID: String
+    )
+    case restoreRollbackFailed(primary: String, transactionPath: String)
+
+    var restoredSafetyBackup: Bool {
+        if case .primaryRestoreFailed = self { return true }
+        return false
+    }
 
     var errorDescription: String? {
         switch self {
         case .invalidBackupID: return "备份编号无效"
         case .invalidManifest: return "备份清单无效"
         case .missingPayload(let path): return "备份内容缺失：\(path)"
+        case .primaryRestoreFailed(let primary, let safetyBackupID):
+            return "恢复目标备份失败：\(primary)（安全备份：\(safetyBackupID)）"
+        case .safetyRestoreFailed(
+            let primary,
+            let rollback,
+            let safetyBackupID
+        ):
+            return "恢复目标备份失败：\(primary)；安全备份 "
+                + "\(safetyBackupID) 自动恢复也失败：\(rollback)"
+        case .restoreRollbackFailed(let primary, let transactionPath):
+            return "恢复失败：\(primary)；撤销暂存未能完整放回，恢复材料保留在："
+                + transactionPath
         }
     }
 }
 
-private struct AgentIntegrationBackupStore {
+private struct AgentIntegrationPreparedRestoreItem {
+    let index: Int
+    let relativePath: String
+    let targetURL: URL
+    let stagedURL: URL?
+    let undoURL: URL
+}
+
+private struct AgentIntegrationAppliedRestoreItem {
+    let prepared: AgentIntegrationPreparedRestoreItem
+    let hadOriginal: Bool
+}
+
+struct AgentIntegrationBackupStore {
     private let scope: AgentIntegrationScope
     private let fileManager: FileManager
+    private let beforeRestoredItemInstall: (_ index: Int, _ path: String) throws -> Void
 
     init(
         scope: AgentIntegrationScope,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        beforeRestoredItemInstall: @escaping (
+            _ index: Int,
+            _ path: String
+        ) throws -> Void = { _, _ in }
     ) {
         self.scope = scope
         self.fileManager = fileManager
+        self.beforeRestoredItemInstall = beforeRestoredItemInstall
     }
 
     func create(relativePaths: [String]) throws -> AgentIntegrationBackup {
@@ -338,7 +389,7 @@ private struct AgentIntegrationBackupStore {
             var items: [AgentIntegrationBackupItem] = []
             for (index, relativePath) in relativePaths.enumerated() {
                 let sourceURL = try managedURL(relativePath: relativePath)
-                guard fileManager.fileExists(atPath: sourceURL.path) else {
+                guard try integrationPathState(sourceURL) == .exists else {
                     items.append(AgentIntegrationBackupItem(
                         relativePath: relativePath,
                         payloadName: nil,
@@ -394,8 +445,20 @@ private struct AgentIntegrationBackupStore {
             try restoreContents(id: id)
             return safety.id
         } catch {
-            try? restoreContents(id: safety.id)
-            throw error
+            let primaryDescription = error.localizedDescription
+            do {
+                try restoreContents(id: safety.id)
+            } catch {
+                throw AgentIntegrationBackupError.safetyRestoreFailed(
+                    primary: primaryDescription,
+                    rollback: error.localizedDescription,
+                    safetyBackupID: safety.id
+                )
+            }
+            throw AgentIntegrationBackupError.primaryRestoreFailed(
+                primary: primaryDescription,
+                safetyBackupID: safety.id
+            )
         }
     }
 
@@ -406,46 +469,175 @@ private struct AgentIntegrationBackupStore {
             "payload",
             isDirectory: true
         )
-        for item in manifest.items {
+        let transactionDirectory = backupRootURL.appendingPathComponent(
+            ".restore-transaction-\(UUID().uuidString.lowercased())",
+            isDirectory: true
+        )
+        let stagedDirectory = transactionDirectory.appendingPathComponent(
+            "staged",
+            isDirectory: true
+        )
+        let undoDirectory = transactionDirectory.appendingPathComponent(
+            "undo",
+            isDirectory: true
+        )
+        var preserveTransaction = false
+        defer {
+            if !preserveTransaction {
+                try? fileManager.removeItem(at: transactionDirectory)
+            }
+        }
+
+        try fileManager.createDirectory(
+            at: stagedDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try fileManager.createDirectory(
+            at: undoDirectory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+
+        var preparedItems: [AgentIntegrationPreparedRestoreItem] = []
+        for (index, item) in manifest.items.enumerated() {
             let targetURL = try managedURL(relativePath: item.relativePath)
+            let stagedURL: URL?
             switch item.kind {
             case .missing:
-                if fileManager.fileExists(atPath: targetURL.path) {
-                    try fileManager.removeItem(at: targetURL)
+                guard item.payloadName == nil else {
+                    throw AgentIntegrationBackupError.invalidManifest
                 }
+                stagedURL = nil
             case .file, .directory:
-                guard let payloadName = item.payloadName else {
+                guard let payloadName = item.payloadName,
+                      payloadName.range(
+                          of: #"^[0-9]+$"#,
+                          options: .regularExpression
+                      ) != nil
+                else {
                     throw AgentIntegrationBackupError.invalidManifest
                 }
                 let payloadURL = payloadDirectory.appendingPathComponent(
                     payloadName
                 )
-                guard fileManager.fileExists(atPath: payloadURL.path) else {
+                guard try integrationPathState(payloadURL) == .exists else {
                     throw AgentIntegrationBackupError.missingPayload(
                         item.relativePath
                     )
                 }
-                try fileManager.createDirectory(
-                    at: targetURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true,
-                    attributes: [.posixPermissions: 0o700]
+                let destination = stagedDirectory.appendingPathComponent(
+                    String(index)
                 )
-                let stagedURL = targetURL.deletingLastPathComponent()
-                    .appendingPathComponent(
-                        ".\(targetURL.lastPathComponent).threadhelm-restore-"
-                            + UUID().uuidString
-                    )
-                do {
-                    try fileManager.copyItem(at: payloadURL, to: stagedURL)
-                    if fileManager.fileExists(atPath: targetURL.path) {
-                        try fileManager.removeItem(at: targetURL)
+                try fileManager.copyItem(at: payloadURL, to: destination)
+                stagedURL = destination
+            }
+            preparedItems.append(AgentIntegrationPreparedRestoreItem(
+                index: index,
+                relativePath: item.relativePath,
+                targetURL: targetURL,
+                stagedURL: stagedURL,
+                undoURL: undoDirectory.appendingPathComponent(String(index))
+            ))
+        }
+
+        var appliedItems: [AgentIntegrationAppliedRestoreItem] = []
+        var createdParentDirectories: [URL] = []
+        var createdParentPaths: Set<String> = []
+        do {
+            for prepared in preparedItems {
+                let missingDirectories = try managedParentDirectoriesToCreate(
+                    for: prepared.targetURL
+                )
+                if prepared.stagedURL != nil {
+                    for directory in missingDirectories
+                    where createdParentPaths.insert(directory.path).inserted {
+                        createdParentDirectories.append(directory)
                     }
-                    try fileManager.moveItem(at: stagedURL, to: targetURL)
-                } catch {
-                    try? fileManager.removeItem(at: stagedURL)
-                    throw error
+                    try fileManager.createDirectory(
+                        at: prepared.targetURL.deletingLastPathComponent(),
+                        withIntermediateDirectories: true,
+                        attributes: [.posixPermissions: 0o700]
+                    )
+                    guard try managedParentDirectoriesToCreate(
+                        for: prepared.targetURL
+                    ).isEmpty else {
+                        throw AgentIntegrationError.invalidManagedPath
+                    }
+                }
+                let hadOriginal = try integrationPathState(
+                    prepared.targetURL
+                ) == .exists
+                if hadOriginal {
+                    try fileManager.moveItem(
+                        at: prepared.targetURL,
+                        to: prepared.undoURL
+                    )
+                }
+                appliedItems.append(AgentIntegrationAppliedRestoreItem(
+                    prepared: prepared,
+                    hadOriginal: hadOriginal
+                ))
+                try beforeRestoredItemInstall(
+                    prepared.index,
+                    prepared.relativePath
+                )
+                if let stagedURL = prepared.stagedURL {
+                    guard try managedParentDirectoriesToCreate(
+                        for: prepared.targetURL
+                    ).isEmpty else {
+                        throw AgentIntegrationError.invalidManagedPath
+                    }
+                    try fileManager.moveItem(
+                        at: stagedURL,
+                        to: prepared.targetURL
+                    )
                 }
             }
+        } catch {
+            let primaryError = error
+            var rollbackFailed = false
+            for applied in appliedItems.reversed() {
+                do {
+                    let targetExists = try integrationPathState(
+                        applied.prepared.targetURL
+                    ) == .exists
+                    if !applied.hadOriginal && !targetExists {
+                        continue
+                    }
+                    guard try managedParentDirectoriesToCreate(
+                        for: applied.prepared.targetURL
+                    ).isEmpty else {
+                        throw AgentIntegrationError.invalidManagedPath
+                    }
+                    if targetExists {
+                        try fileManager.removeItem(at: applied.prepared.targetURL)
+                    }
+                    if applied.hadOriginal {
+                        try fileManager.moveItem(
+                            at: applied.prepared.undoURL,
+                            to: applied.prepared.targetURL
+                        )
+                    }
+                } catch {
+                    rollbackFailed = true
+                }
+            }
+            for directory in createdParentDirectories.reversed() {
+                do {
+                    try removeCreatedParentDirectoryIfEmpty(directory)
+                } catch {
+                    rollbackFailed = true
+                }
+            }
+            if rollbackFailed {
+                preserveTransaction = true
+                throw AgentIntegrationBackupError.restoreRollbackFailed(
+                    primary: primaryError.localizedDescription,
+                    transactionPath: transactionDirectory.path
+                )
+            }
+            throw primaryError
         }
     }
 
@@ -503,13 +695,118 @@ private struct AgentIntegrationBackupStore {
         else {
             throw AgentIntegrationError.invalidManagedPath
         }
-        let root = scope.rootDirectory.standardizedFileURL
+        let root = managedRootURL
         let url = try scope.managedURL(relativePath: relativePath)
         guard url.path.hasPrefix(root.path + "/") else {
             throw AgentIntegrationError.invalidManagedPath
         }
+        _ = try managedParentDirectoriesToCreate(for: url)
         return url
     }
+
+    private var managedRootURL: URL {
+        scope.rootDirectory.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
+    private func managedParentDirectoriesToCreate(
+        for targetURL: URL
+    ) throws -> [URL] {
+        let root = managedRootURL
+        let parent = targetURL.deletingLastPathComponent().standardizedFileURL
+        guard integrationPath(parent, isWithin: root) else {
+            throw AgentIntegrationError.invalidManagedPath
+        }
+        let rootComponents = root.pathComponents
+        let parentComponents = parent.pathComponents
+        guard parentComponents.starts(with: rootComponents) else {
+            throw AgentIntegrationError.invalidManagedPath
+        }
+
+        var current = root
+        var foundMissingParent = false
+        var missingDirectories: [URL] = []
+        for component in parentComponents.dropFirst(rootComponents.count) {
+            current.appendPathComponent(component, isDirectory: true)
+            if foundMissingParent {
+                missingDirectories.append(current)
+                continue
+            }
+            var pathStat = stat()
+            if lstat(current.path, &pathStat) != 0 {
+                let code = errno
+                guard code == ENOENT else {
+                    throw integrationPOSIXError(code)
+                }
+                foundMissingParent = true
+                missingDirectories.append(current)
+                continue
+            }
+            let type = pathStat.st_mode & S_IFMT
+            if type == S_IFLNK {
+                var destinationStat = stat()
+                guard stat(current.path, &destinationStat) == 0,
+                      (destinationStat.st_mode & S_IFMT) == S_IFDIR
+                else {
+                    throw AgentIntegrationError.invalidManagedPath
+                }
+            } else if type != S_IFDIR {
+                throw AgentIntegrationError.invalidManagedPath
+            }
+            let resolved = current.resolvingSymlinksInPath()
+                .standardizedFileURL
+            guard integrationPath(resolved, isWithin: root) else {
+                throw AgentIntegrationError.invalidManagedPath
+            }
+        }
+        return missingDirectories
+    }
+
+    private func removeCreatedParentDirectoryIfEmpty(_ url: URL) throws {
+        _ = try managedParentDirectoriesToCreate(for: url)
+        var pathStat = stat()
+        guard lstat(url.path, &pathStat) == 0 else {
+            let code = errno
+            if code == ENOENT { return }
+            throw integrationPOSIXError(code)
+        }
+        guard (pathStat.st_mode & S_IFMT) == S_IFDIR,
+              try fileManager.contentsOfDirectory(atPath: url.path).isEmpty
+        else {
+            throw AgentIntegrationError.invalidManagedPath
+        }
+        try fileManager.removeItem(at: url)
+    }
+}
+
+private enum IntegrationPathState {
+    case missing
+    case exists
+}
+
+private func integrationPathState(_ url: URL) throws -> IntegrationPathState {
+    var statBuffer = stat()
+    if lstat(url.path, &statBuffer) == 0 {
+        return .exists
+    }
+    let code = errno
+    if code == ENOENT {
+        return .missing
+    }
+    throw integrationPOSIXError(code)
+}
+
+private func integrationPath(_ candidate: URL, isWithin root: URL) -> Bool {
+    candidate.path == root.path || candidate.path.hasPrefix(root.path + "/")
+}
+
+private func integrationPOSIXError(_ code: Int32) -> NSError {
+    NSError(
+        domain: NSPOSIXErrorDomain,
+        code: Int(code),
+        userInfo: [
+            NSLocalizedDescriptionKey: String(cString: strerror(code)),
+        ]
+    )
 }
 
 struct AgentIntegrationCLICommand {

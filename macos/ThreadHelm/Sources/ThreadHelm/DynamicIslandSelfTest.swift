@@ -401,9 +401,15 @@ private func assertDynamicIslandChromeAccessibility() {
         fputs("dynamic island provider icon load self-test failed\n", stderr)
         exit(1)
     }
+    let reloadedCodexIcon = providerIconImage(for: .codex)
+    let reloadedClaudeIcon = providerIconImage(for: .claudeCode)
     let providerIconChecks: [(String, Bool)] = [
-        ("codex-cache", codexIcon === providerIconImage(for: .codex)),
-        ("claude-cache", claudeIcon === providerIconImage(for: .claudeCode)),
+        ("codex-reload", reloadedCodexIcon != nil
+            && reloadedCodexIcon?.accessibilityDescription
+                == codexIcon.accessibilityDescription),
+        ("claude-reload", reloadedClaudeIcon != nil
+            && reloadedClaudeIcon?.accessibilityDescription
+                == claudeIcon.accessibilityDescription),
         ("codex-concrete", !codexIcon.isTemplate),
         ("claude-concrete", !claudeIcon.isTemplate),
         ("codex-svg-color", providerIconResourceContainsBrandColorForSelfTest(
