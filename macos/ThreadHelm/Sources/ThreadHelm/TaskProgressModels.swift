@@ -215,6 +215,10 @@ func claudeTerminalNavigationPlan(
             sessionID: sessionID,
             workingDirectory: workingDirectory
         ))
+        // A failed resume may still leave a useful project-location fallback.
+        // It remains explicitly non-exact, which is safe even when multiple
+        // Claude sessions share the same directory.
+        actions.append(.focusWorkingDirectory(workingDirectory))
     } else if let workingDirectory = request.workingDirectory {
         // A directory is not a session identity. Only use it when no resumable
         // Claude session is available and the caller has no stronger target.

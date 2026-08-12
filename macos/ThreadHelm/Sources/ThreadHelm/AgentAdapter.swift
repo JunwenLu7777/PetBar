@@ -198,7 +198,7 @@ protocol AgentAdapter {
         for snapshot: AgentSessionSnapshot,
         now: Date
     ) -> Freshness
-    func open(session: AgentSessionSnapshot) -> OpenResult
+    func open(session: AgentSessionSnapshot) -> AgentOpenReport
     func diagnostics() -> AgentDiagnostics
 }
 
@@ -244,8 +244,14 @@ extension AgentAdapter {
         snapshot.freshness
     }
 
-    func open(session: AgentSessionSnapshot) -> OpenResult {
-        .unavailable
+    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
+        AgentOpenReport(
+            agentID: metadata.id,
+            advertisedActionability: session.actionability,
+            result: .unavailable,
+            invokedExactTarget: false,
+            independentlyConfirmedIdentity: false
+        )
     }
 
     func diagnostics() -> AgentDiagnostics {
@@ -338,13 +344,27 @@ struct CodexAgentAdapter: AgentAdapter {
         readCollection()
     }
 
-    func open(session: AgentSessionSnapshot) -> OpenResult {
+    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
         guard session.identity.agentID == .codex,
               let url = codexThreadURL(threadID: session.identity.nativeID)
-        else { return .unavailable }
-        // NSWorkspace only confirms dispatch of the deep link. Phase 6 may
-        // upgrade this to exact after independent native-session confirmation.
-        return openURL(url) ? .unknown : .failed
+        else {
+            return AgentOpenReport(
+                agentID: metadata.id,
+                advertisedActionability: session.actionability,
+                result: .unavailable,
+                invokedExactTarget: false,
+                independentlyConfirmedIdentity: false
+            )
+        }
+        // NSWorkspace only confirms dispatch of the deep link. A future
+        // independent destination check may upgrade this result to exact.
+        return AgentOpenReport(
+            agentID: metadata.id,
+            advertisedActionability: session.actionability,
+            result: openURL(url) ? .unknown : .failed,
+            invokedExactTarget: true,
+            independentlyConfirmedIdentity: false
+        )
     }
 
     func diagnostics() -> AgentDiagnostics {
@@ -470,16 +490,35 @@ struct ClaudeCodeAgentAdapter: AgentAdapter {
         readCollection()
     }
 
-    func open(session: AgentSessionSnapshot) -> OpenResult {
+    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
         guard session.identity.agentID == .claudeCode else {
-            return .unavailable
+            return AgentOpenReport(
+                agentID: metadata.id,
+                advertisedActionability: session.actionability,
+                result: .unavailable,
+                invokedExactTarget: false,
+                independentlyConfirmedIdentity: false
+            )
         }
-        return openTerminal(ClaudeTerminalOpenRequest(
+        let request = ClaudeTerminalOpenRequest(
             sessionID: session.identity.nativeID,
             workingDirectory: session.workingDirectory,
             processID: session.identity.processID,
             processStartIdentity: session.identity.processStartIdentity
-        ))
+        )
+        let result = openTerminal(request)
+        let hasVerifiedProcessTarget = request.processID != nil
+            && request.processStartIdentity != nil
+        let hasResumeTarget = request.sessionID != nil
+            && request.workingDirectory != nil
+        return AgentOpenReport(
+            agentID: metadata.id,
+            advertisedActionability: session.actionability,
+            result: result,
+            invokedExactTarget: hasVerifiedProcessTarget || hasResumeTarget,
+            independentlyConfirmedIdentity: result == .exactSession
+                && hasVerifiedProcessTarget
+        )
     }
 
     func diagnostics() -> AgentDiagnostics {
@@ -526,12 +565,13 @@ func agentSessionSnapshot(
           let nativeID = item.threadID ?? item.sessionID
     else { return nil }
     let queueReasons = claudeQueueReasons(permissionQueue)
-    let reason = queueReasons[item.sessionID?.lowercased() ?? ""]
-        ?? normalizedAttentionReason(for: item)
+    let queuedReason = queueReasons[item.sessionID?.lowercased() ?? ""]
+    let reason = queuedReason ?? normalizedAttentionReason(for: item)
     let actionability = normalizedActionability(
         for: item,
         agentID: metadata.id,
-        reason: reason
+        reason: reason,
+        hasInAppAction: queuedReason != nil
     )
     return AgentSessionSnapshot(
         identity: AgentSessionIdentity(
@@ -578,9 +618,11 @@ private func normalizedAttentionReason(
 private func normalizedActionability(
     for item: TaskProgressItem,
     agentID: AgentID,
-    reason: AttentionReason
+    reason: AttentionReason,
+    hasInAppAction: Bool
 ) -> Actionability {
     if agentID == .claudeCode,
+       hasInAppAction,
        [.permission, .question, .planApproval].contains(reason) {
         return .inApp
     }

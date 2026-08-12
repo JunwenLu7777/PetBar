@@ -16,6 +16,7 @@
 - 任务状态在本机读取 Codex 会话状态，以及 Claude CLI `agents --json` 与 `~/.claude/projects` 下的顶层会话 transcript，用于显示执行中、等待确认、已完成和执行失败。
 - Claude 任务只提取公开的 assistant `text` 作为悬停预览；不读取或展示 thinking、工具参数和原始工具输出，也会排除 subagent 与 ThreadHelm 额度探针 transcript。
 - 任务名称、任务文字、已读状态、额度百分比和重置时间不写入 ThreadHelm 日志，也不上传。
+- 用户主动打开任务时，ThreadHelm 会在 `~/Library/Application Support/ThreadHelm/open-measurements-v1.json` 记录仅由 Agent 类型、打开结果类型和数字组成的本地汇总计数，用于区分精确返回、应用聚焦、目录 fallback、未知和不可用。该文件权限为当前用户只读写（`0600`），不含标题、提示词、命令、路径、session/thread ID、时间线或时间戳，也不上传。
 - 为关闭原生气泡，ThreadHelm 只把不含内容的本地任务 ID 写入 Codex 已有的 `avatar-overlay-muted-notification-ids-v1` 状态，并把 ThreadHelm 新增值记录到 `~/.codex/threadhelm-native-notification-backup.json`。检测到 Codex 正在运行时不会改写该状态；完全退出且文件稳定后才会同步，写入失败会回滚本次备份变更，卸载时只移除已经记录的新增值。
 - 卸载器检测到 Codex 仍在运行时会停止，不会移除 ThreadHelm 或恢复文件；完全退出 Codex 后才会恢复原生气泡设置。
 - 若用户已经授予辅助功能权限，运行中的 ThreadHelm 会查找 Codex 暴露的固定辅助功能标签“显示活动，N 项 / Show activity, N item(s)”“打开通知 / Open notification”和“静音任务 / Mute task”。它只把同时具有固定窗口标题和计数按钮的透明角标窗口移到所有活动显示器之外，并调用 Codex 自带的菜单动作关闭新任务气泡；同名的任务列表窗口不会移动。读取到的其他辅助功能字符串不保留、不记录、不上传；ThreadHelm 不生成鼠标或键盘事件，也不会主动弹出授权请求。未授权时只检查授权状态，不访问 Codex 的辅助功能树、不移动窗口、不执行菜单动作，仍在 Codex 完全退出后同步任务 ID。

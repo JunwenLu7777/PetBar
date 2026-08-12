@@ -263,7 +263,7 @@ struct AgentSessionIdentity: Codable, Hashable {
     }
 }
 
-enum OpenResult: String, Codable, Equatable {
+enum OpenResult: String, CaseIterable, Codable, Equatable {
     case exactSession
     case appFocused
     case workingDirectoryFallback
@@ -271,6 +271,41 @@ enum OpenResult: String, Codable, Equatable {
     case failed
     case notAttempted
     case unknown
+}
+
+struct AgentOpenReport: Equatable {
+    let agentID: AgentID
+    let advertisedActionability: Actionability
+    let result: OpenResult
+    let exactAttempted: Bool
+    let independentlyConfirmedIdentity: Bool
+
+    init(
+        agentID: AgentID,
+        advertisedActionability: Actionability,
+        result requestedResult: OpenResult,
+        invokedExactTarget: Bool,
+        independentlyConfirmedIdentity requestedConfirmation: Bool
+    ) {
+        self.agentID = agentID
+        self.advertisedActionability = advertisedActionability
+
+        // An exact-return attempt enters the denominator only when the UI
+        // advertised an exact native target and the adapter actually invoked
+        // that target. App focus and directory fallback never count.
+        exactAttempted = advertisedActionability == .openExactNativeSession
+            && invokedExactTarget
+
+        // Dispatching a deep link or resume command is not independent proof.
+        // Downgrade an unconfirmed exact claim before it reaches UI or metrics.
+        let confirmed = exactAttempted
+            && requestedResult == .exactSession
+            && requestedConfirmation
+        independentlyConfirmedIdentity = confirmed
+        result = requestedResult == .exactSession && !confirmed
+            ? .unknown
+            : requestedResult
+    }
 }
 
 extension OpenResult {
@@ -282,7 +317,7 @@ extension OpenResult {
         case .unavailable: return "不可打开"
         case .failed: return "打开失败"
         case .notAttempted: return "未尝试打开"
-        case .unknown: return "已尝试恢复"
+        case .unknown: return "已发起打开"
         }
     }
 

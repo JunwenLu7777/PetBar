@@ -70,6 +70,8 @@ Actionability is one of in-app action, exact native return, native app focus, pr
 
 Only Claude Code has a verified in-app permission/question/plan response path in this baseline. Codex opens its native thread for input. Cursor and ZCode remain native-surface-only in the first adapter. Pi is strictly state-only and cannot call approval, message injection, cancellation, navigation, or session-mutation APIs.
 
+For return classification in this baseline, Codex deep-link dispatch and Claude `--resume` dispatch both remain `unknown`; neither is exact success without a separate destination identity check. Claude may return `exactSession` only after a matching live process plus process-start identity is located at the exact terminal tab. Cursor and ZCode never return exact in this baseline, and Pi always returns `unavailable`.
+
 ## Version and configuration boundary
 
 These truth labels apply only to Codex 0.145.0, Claude Code 2.1.226, Cursor 3.15.6, ZCode 3.7.6 (build 3.7.6.4691), and Pi 0.84.1 on the captured Mac. Discovery is read-only. In particular, it must not create the absent ZCode user CLI configuration or edit existing Claude, Cursor, or Pi integration files.

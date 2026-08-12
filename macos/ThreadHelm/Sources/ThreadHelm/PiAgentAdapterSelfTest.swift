@@ -195,7 +195,9 @@ private func runPiStateOnlyContractSelfTest() throws {
           snapshot.attentionReason == .none,
           snapshot.actionability == .viewOnly,
           snapshot.workingDirectory == nil,
-          adapter.open(session: snapshot) == .unavailable,
+          adapter.open(session: snapshot).result == .unavailable,
+          !adapter.open(session: snapshot).exactAttempted,
+          !adapter.open(session: snapshot).independentlyConfirmedIdentity,
           adapter.diagnostics().health == .unavailable
     else {
         throw PiAgentAdapterSelfTestError.failed("state-only open/diagnostics")

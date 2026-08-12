@@ -58,8 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let dashboardStore = ActivityDashboardStore()
     private let agentRegistry = AgentRegistry.builtIn
     private let agentLiveEventStore = AgentLiveEventStore()
+    private let agentOpenMeasurementStore = AgentOpenMeasurementStore()
     private var agentLiveReductionGate = AgentLiveReductionGate()
     private var agentEventChannelAvailable = false
+    private var lastClaudePermissionOpenResult: OpenResult?
     private var lastPolledTaskCollection = TaskProgressCollectionSnapshot
         .displaying([])
     private var claudePermissionCoordinator: ClaudePermissionCoordinator!
@@ -424,7 +426,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startClaudePermissionHook() {
         claudePermissionCoordinator = ClaudePermissionCoordinator(
             openTerminal: { [weak self] prompt in
-                self?.openTerminalForClaudePermission(prompt)
+                guard let self else { return }
+                self.lastClaudePermissionOpenResult =
+                    self.openTerminalForClaudePermission(prompt)
             },
             onQueueChange: { [weak self] queue in
                 guard let self else { return }
@@ -504,21 +508,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func openTerminalForClaudePermission(_ prompt: ClaudePermissionPrompt) {
+    @discardableResult
+    private func openTerminalForClaudePermission(
+        _ prompt: ClaudePermissionPrompt
+    ) -> OpenResult {
         let request = claudeTerminalOpenRequest(
             for: prompt,
             taskItems: dashboardStore.snapshot.taskCollection.items
         )
         let result = openClaudeTerminal(request: request)
-        if result == .exactSession
-            || result == .workingDirectoryFallback
-            || result == .appFocused
-        {
-            return
+        switch result {
+        case .exactSession, .appFocused, .workingDirectoryFallback, .unknown:
+            return result
+        case .unavailable, .failed, .notAttempted:
+            break
         }
         // A generic activation can expose an unrelated tab. It is only safe
         // when the prompt contains no process, session, or directory target.
-        guard allowsGenericTerminalFallback(for: request) else { return }
+        guard allowsGenericTerminalFallback(for: request) else { return result }
         let supportedBundleIdentifiers = [
             "io.appmakes.otty",
             "com.googlecode.iterm2",
@@ -546,7 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             runningBundleIdentifiers: runningBundleIdentifiers,
             ottyHasActiveTab: hasActiveOttyTab
         ), activateRunningApplication(bundleIdentifier: bundleIdentifier) {
-            return
+            return .appFocused
         }
         let terminalURL = URL(
             fileURLWithPath: "/System/Applications/Utilities/Terminal.app",
@@ -556,6 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             at: terminalURL,
             configuration: NSWorkspace.OpenConfiguration()
         )
+        return .unknown
     }
 
     private func updateStatusMenu() {
@@ -731,13 +739,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func openTask(_ item: TaskProgressItem) -> OpenResult {
-        if item.source == .claudeCode {
-            if claudePermissionCoordinator?
-                .handoffToTerminalIfPresenting(item) == true
-            {
-                return .unknown
-            }
-        }
         guard let adapter = agentRegistry.adapter(for: item.source),
               let snapshot = agentSessionSnapshot(
                   from: item,
@@ -745,7 +746,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                   permissionQueue: dashboardStore.snapshot.permissionQueue
               )
         else { return .unavailable }
-        return adapter.open(session: snapshot)
+        if item.source == .claudeCode {
+            lastClaudePermissionOpenResult = nil
+            if claudePermissionCoordinator?
+                .handoffToTerminalIfPresenting(item) == true
+            {
+                let result = lastClaudePermissionOpenResult ?? .unknown
+                let request = claudeTerminalOpenRequest(for: item)
+                let hasVerifiedProcessTarget = request.processID != nil
+                    && request.processStartIdentity != nil
+                let hasResumeTarget = request.sessionID != nil
+                    && request.workingDirectory != nil
+                return recordOpenReport(AgentOpenReport(
+                    agentID: .claudeCode,
+                    advertisedActionability: snapshot.actionability,
+                    result: result,
+                    invokedExactTarget: hasVerifiedProcessTarget
+                        || hasResumeTarget,
+                    independentlyConfirmedIdentity: result == .exactSession
+                        && hasVerifiedProcessTarget
+                ))
+            }
+        }
+        return recordOpenReport(adapter.open(session: snapshot))
+    }
+
+    private func recordOpenReport(_ report: AgentOpenReport) -> OpenResult {
+        if !agentOpenMeasurementStore.record(report) {
+            fputs("ThreadHelm 无法写入本地打开结果计数。\n", stderr)
+        }
+        return report.result
     }
 
     private func copyWorkingDirectoryToPasteboard(_ path: String) -> Bool {

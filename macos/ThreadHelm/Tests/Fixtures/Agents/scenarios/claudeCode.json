@@ -191,17 +191,30 @@
       "explicitUnknowns": []
     },
     {
-      "id": "claude-exact-live-or-resume-return",
+      "id": "claude-exact-live-process-return",
       "agentId": "claudeCode",
       "capabilityStatus": "supported",
-      "scenario": "A matching live process is focused, otherwise the verified session identity is resumed.",
+      "scenario": "A matching live process plus process-start identity is focused at its exact terminal tab.",
       "captureSource": "current task navigation implementation",
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "2.1.226",
-      "input": {"redacted": true, "signal": "valid synthetic session identity with matching process or resume target"},
+      "input": {"redacted": true, "signal": "valid synthetic session identity with matching live process and process-start identity"},
       "expected": {"executionState": "completed", "attentionReason": "reviewReady", "actionability": "openExactNativeSession", "evidenceQuality": "processObservation", "freshness": "fresh", "openResult": "exactSession", "interruptDecision": "nonInterrupt"},
       "evidence": [{"kind": "localCode", "reference": "macos/ThreadHelm/Sources/ThreadHelm/ClaudeTaskProgress.swift"}],
       "explicitUnknowns": []
+    },
+    {
+      "id": "claude-resume-request-unconfirmed",
+      "agentId": "claudeCode",
+      "capabilityStatus": "unknown",
+      "scenario": "Launching claude --resume targets a native session identity but does not independently confirm where the new terminal lands.",
+      "captureSource": "current task navigation implementation",
+      "capturedAt": "2026-08-12T09:31:19Z",
+      "observedAgentVersion": "2.1.226",
+      "input": {"redacted": true, "signal": "valid synthetic session identity and project location; no matching live process"},
+      "expected": {"executionState": "completed", "attentionReason": "reviewReady", "actionability": "openExactNativeSession", "evidenceQuality": "nativeState", "freshness": "fresh", "openResult": "unknown", "interruptDecision": "nonInterrupt"},
+      "evidence": [{"kind": "localCode", "reference": "macos/ThreadHelm/Sources/ThreadHelm/TaskProgressModels.swift"}],
+      "explicitUnknowns": ["Resume command dispatch is not independent destination identity confirmation."]
     },
     {
       "id": "claude-project-location-fallback",

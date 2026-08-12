@@ -101,8 +101,14 @@ struct PiAgentAdapter: AgentAdapter {
         )
     }
 
-    func open(session: AgentSessionSnapshot) -> OpenResult {
-        .unavailable
+    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
+        AgentOpenReport(
+            agentID: metadata.id,
+            advertisedActionability: session.actionability,
+            result: .unavailable,
+            invokedExactTarget: false,
+            independentlyConfirmedIdentity: false
+        )
     }
 
     func diagnostics() -> AgentDiagnostics {

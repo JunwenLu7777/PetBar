@@ -42,7 +42,7 @@ struct CursorAgentAdapter: AgentAdapter {
     private let discoveryProvider: () -> AgentDiscovery
     private let signalReader: () throws -> [CursorHookSignal]
     private let snapshotReader: () throws -> [AgentSessionSnapshot]
-    private let openCursorApp: () -> Bool
+    private let openCursorApp: () -> OpenResult
     private let openWorkingDirectory: (String) -> Bool
     private let hookCommand: String
 
@@ -54,14 +54,7 @@ struct CursorAgentAdapter: AgentAdapter {
         signals: @escaping () throws -> [CursorHookSignal] = { [] },
         snapshots: @escaping () throws -> [AgentSessionSnapshot] = { [] },
         hookCommand: String = CursorAgentAdapter.defaultHookCommand(),
-        openCursorApp: @escaping () -> Bool = {
-            if let running = NSWorkspace.shared.runningApplications.first(
-                where: { $0.bundleIdentifier == "com.todesktop.230313mzl4w4u92" }
-            ) {
-                return running.activate(options: [.activateIgnoringOtherApps])
-            }
-            return NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Cursor.app"))
-        },
+        openCursorApp: @escaping () -> OpenResult = openCursorApplication,
         openWorkingDirectory: @escaping (String) -> Bool = {
             NSWorkspace.shared.open(URL(fileURLWithPath: $0, isDirectory: true))
         }
@@ -167,14 +160,39 @@ struct CursorAgentAdapter: AgentAdapter {
         )
     }
 
-    func open(session: AgentSessionSnapshot) -> OpenResult {
-        guard session.identity.agentID == .cursor else { return .unavailable }
-        if let path = session.workingDirectory,
-           openWorkingDirectory(path)
-        {
-            return .workingDirectoryFallback
+    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
+        guard session.identity.agentID == .cursor else {
+            return AgentOpenReport(
+                agentID: metadata.id,
+                advertisedActionability: session.actionability,
+                result: .unavailable,
+                invokedExactTarget: false,
+                independentlyConfirmedIdentity: false
+            )
         }
-        return openCursorApp() ? .appFocused : .unknown
+        let appResult = openCursorApp()
+        let result: OpenResult
+        switch appResult {
+        case .appFocused, .unknown:
+            result = appResult
+        case .exactSession, .workingDirectoryFallback:
+            result = appResult
+        case .unavailable, .failed, .notAttempted:
+            if let path = session.workingDirectory,
+               openWorkingDirectory(path)
+            {
+                result = .workingDirectoryFallback
+            } else {
+                result = appResult == .unavailable ? .unavailable : .failed
+            }
+        }
+        return AgentOpenReport(
+            agentID: metadata.id,
+            advertisedActionability: session.actionability,
+            result: result,
+            invokedExactTarget: false,
+            independentlyConfirmedIdentity: false
+        )
     }
 
     func diagnostics() -> AgentDiagnostics {
@@ -190,6 +208,24 @@ struct CursorAgentAdapter: AgentAdapter {
         let executablePath = Bundle.main.executableURL?.path ?? "ThreadHelm"
         return "\"\(executablePath)\" --agent-hook cursor"
     }
+}
+
+private func openCursorApplication() -> OpenResult {
+    let bundleIdentifier = "com.todesktop.230313mzl4w4u92"
+    if let running = NSWorkspace.shared.runningApplications.first(
+        where: { $0.bundleIdentifier == bundleIdentifier }
+    ) {
+        return running.activate(options: [
+            .activateAllWindows,
+            .activateIgnoringOtherApps,
+        ]) ? .appFocused : .failed
+    }
+    guard let applicationURL = NSWorkspace.shared.urlForApplication(
+        withBundleIdentifier: bundleIdentifier
+    ) else { return .unavailable }
+    // NSWorkspace confirms only that launch was requested. It does not prove
+    // which Cursor window became active.
+    return NSWorkspace.shared.open(applicationURL) ? .unknown : .failed
 }
 
 private enum CursorHookConfigurationStatus {

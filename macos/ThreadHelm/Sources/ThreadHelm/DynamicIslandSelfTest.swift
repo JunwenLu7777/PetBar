@@ -899,6 +899,19 @@ private func assertDynamicIslandTaskWorkspace() {
         exit(1)
     }
 
+    controller.onOpenTask = { _ in .exactSession }
+    controller.performOpenSelectedTaskForSelfTest()
+    guard controller.openButtonTitleForSelfTest() == "已打开会话" else {
+        fputs("dynamic island exact open feedback self-test failed\n", stderr)
+        exit(1)
+    }
+    controller.onOpenTask = { _ in .failed }
+    controller.performOpenSelectedTaskForSelfTest()
+    guard controller.openButtonTitleForSelfTest() == "打开失败" else {
+        fputs("dynamic island failed fallback feedback self-test failed\n", stderr)
+        exit(1)
+    }
+
     controller.setStateFilterForSelfTest(.completed)
     guard controller.visibleTaskKeysForSelfTest() == [
         codexCompleted.identityKey,

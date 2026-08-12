@@ -166,6 +166,7 @@ func runAgentIntegrationSelfTest() {
     runZCodeAgentAdapterSelfTest()
     runPiAgentAdapterSelfTest()
     runCodexClaudeAdapterSelfTest()
+    runAgentOpenMeasurementSelfTest()
     runClaudeAdapterLifecycleSelfTest()
 }
 
@@ -197,14 +198,28 @@ private func runCodexClaudeAdapterSelfTest() {
         }
     )
     guard let codexObservation = try? codex.observe(),
-          let codexSnapshot = codexObservation.snapshots.first,
-          codexSnapshot.identity.agentID == .codex,
+          let codexSnapshot = codexObservation.snapshots.first
+    else {
+        failAgentIntegrationSelfTest("Codex adapter observation")
+    }
+    let codexReport = codex.open(session: codexSnapshot)
+    let failedCodexReport = CodexAgentAdapter(
+        readCollection: { .displaying([]) },
+        openURL: { _ in false }
+    ).open(session: codexSnapshot)
+    guard codexSnapshot.identity.agentID == .codex,
           codexSnapshot.identity.nativeID == codexThreadID,
           codexSnapshot.executionState == .running,
           codexSnapshot.attentionReason == .question,
           codexSnapshot.actionability == .openExactNativeSession,
           codexSnapshot.workingDirectory == "/tmp/threadhelm-codex",
-          codex.open(session: codexSnapshot) == .unknown,
+          codexReport.advertisedActionability == .openExactNativeSession,
+          codexReport.result == .unknown,
+          codexReport.exactAttempted,
+          !codexReport.independentlyConfirmedIdentity,
+          failedCodexReport.result == .failed,
+          failedCodexReport.exactAttempted,
+          !failedCodexReport.independentlyConfirmedIdentity,
           openedCodexURL?.absoluteString == "codex://threads/\(codexThreadID)"
     else {
         failAgentIntegrationSelfTest("Codex adapter projection/open")
@@ -244,12 +259,27 @@ private func runCodexClaudeAdapterSelfTest() {
         }
     )
     guard let claudeObservation = try? claude.observe(),
-          let claudeSnapshot = claudeObservation.snapshots.first,
-          claudeSnapshot.identity.agentID == .claudeCode,
+          let claudeSnapshot = claudeObservation.snapshots.first
+    else {
+        failAgentIntegrationSelfTest("Claude adapter observation")
+    }
+    let claudeReport = claude.open(session: claudeSnapshot)
+    let nativeOnlyClaudeSnapshot = try? ClaudeCodeAgentAdapter(
+        readCollection: { .displaying([claudeTask]) },
+        permissionQueue: { .empty },
+        openTerminal: { _ in .unknown }
+    ).observe().snapshots.first
+    guard claudeSnapshot.identity.agentID == .claudeCode,
           claudeSnapshot.executionState == .running,
           claudeSnapshot.attentionReason == .question,
           claudeSnapshot.actionability == .inApp,
-          claude.open(session: claudeSnapshot) == .workingDirectoryFallback,
+          claudeReport.result == .workingDirectoryFallback,
+          claudeReport.advertisedActionability == .inApp,
+          !claudeReport.exactAttempted,
+          !claudeReport.independentlyConfirmedIdentity,
+          nativeOnlyClaudeSnapshot?.attentionReason == .question,
+          nativeOnlyClaudeSnapshot?.actionability
+            == .openExactNativeSession,
           openedClaudeRequest?.sessionID == claudeSessionID,
           openedClaudeRequest?.workingDirectory == "/tmp/threadhelm-claude",
           claudeAttentionReason(for: .toolApproval) == .permission,
@@ -315,6 +345,42 @@ private func runCodexClaudeAdapterSelfTest() {
         resumeSession: { _, _ in false },
         focusWorkingDirectory: { _ in true }
     )
+    let resumeFailureDirectoryFallback = claudeTerminalOpenResult(
+        for: ClaudeTerminalOpenRequest(
+            sessionID: claudeSessionID,
+            workingDirectory: "/tmp/threadhelm-claude",
+            processID: nil
+        ),
+        focusProcess: { _, _ in .failed },
+        resumeSession: { _, _ in false },
+        focusWorkingDirectory: { _ in true }
+    )
+    let reusedPIDDirectoryFallback = claudeTerminalOpenResult(
+        for: ClaudeTerminalOpenRequest(
+            sessionID: claudeSessionID,
+            workingDirectory: "/tmp/threadhelm-claude",
+            processID: 42,
+            processStartIdentity: "old-process-start"
+        ),
+        focusProcess: { processID, processStartIdentity in
+            processID == 42 && processStartIdentity == "old-process-start"
+                ? .failed
+                : .exactSession
+        },
+        resumeSession: { _, _ in false },
+        focusWorkingDirectory: { _ in true }
+    )
+    let deadProcessResumeRequested = claudeTerminalOpenResult(
+        for: ClaudeTerminalOpenRequest(
+            sessionID: claudeSessionID,
+            workingDirectory: "/tmp/threadhelm-claude",
+            processID: 42,
+            processStartIdentity: "dead-process-start"
+        ),
+        focusProcess: { _, _ in .failed },
+        resumeSession: { _, _ in true },
+        focusWorkingDirectory: { _ in false }
+    )
     let failed = claudeTerminalOpenResult(
         for: ClaudeTerminalOpenRequest(
             sessionID: claudeSessionID,
@@ -338,10 +404,67 @@ private func runCodexClaudeAdapterSelfTest() {
     guard exactProcess == .exactSession,
           resumeRequested == .unknown,
           directoryFallback == .workingDirectoryFallback,
+          resumeFailureDirectoryFallback == .workingDirectoryFallback,
+          reusedPIDDirectoryFallback == .workingDirectoryFallback,
+          deadProcessResumeRequested == .unknown,
           failed == .failed,
           unavailable == .unavailable
     else {
         failAgentIntegrationSelfTest("typed Claude navigation results")
+    }
+
+    let exactClaudeSnapshot = AgentSessionSnapshot(
+        identity: AgentSessionIdentity(
+            agentID: .claudeCode,
+            nativeID: claudeSessionID,
+            processID: 42,
+            processStartIdentity: "self-test-start"
+        ),
+        adapterVersion: "self-test",
+        executionState: .running,
+        attentionReason: .none,
+        actionability: .openExactNativeSession,
+        evidenceQuality: .processObservation,
+        freshness: Freshness(observedAt: now, expiresAt: nil),
+        title: "Claude exact",
+        activitySummary: nil,
+        workingDirectory: "/tmp/threadhelm-claude",
+        latestEventID: "claude-exact",
+        updatedAt: now
+    )
+    let exactClaudeReport = ClaudeCodeAgentAdapter(
+        readCollection: { .displaying([]) },
+        openTerminal: { _ in .exactSession }
+    ).open(session: exactClaudeSnapshot)
+    let resumeClaudeSnapshot = AgentSessionSnapshot(
+        identity: AgentSessionIdentity(
+            agentID: .claudeCode,
+            nativeID: claudeSessionID
+        ),
+        adapterVersion: "self-test",
+        executionState: .running,
+        attentionReason: .none,
+        actionability: .openExactNativeSession,
+        evidenceQuality: .nativeState,
+        freshness: Freshness(observedAt: now, expiresAt: nil),
+        title: "Claude resume",
+        activitySummary: nil,
+        workingDirectory: "/tmp/threadhelm-claude",
+        latestEventID: "claude-resume",
+        updatedAt: now
+    )
+    let resumeClaudeReport = ClaudeCodeAgentAdapter(
+        readCollection: { .displaying([]) },
+        openTerminal: { _ in .unknown }
+    ).open(session: resumeClaudeSnapshot)
+    guard exactClaudeReport.result == .exactSession,
+          exactClaudeReport.exactAttempted,
+          exactClaudeReport.independentlyConfirmedIdentity,
+          resumeClaudeReport.result == .unknown,
+          resumeClaudeReport.exactAttempted,
+          !resumeClaudeReport.independentlyConfirmedIdentity
+    else {
+        failAgentIntegrationSelfTest("Claude exact identity confirmation")
     }
 }
 

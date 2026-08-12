@@ -596,20 +596,41 @@ private func runZCodeOpenSelfTest() throws {
         latestEventID: "open",
         updatedAt: now
     )
-    guard zcodeSelfTestAdapter(
-        activateApplication: { true },
+    let appReport = zcodeSelfTestAdapter(
+        activateApplication: { .appFocused },
         openWorkingDirectory: { _ in false }
-    ).open(session: snapshot) == .appFocused,
-    zcodeSelfTestAdapter(
-        activateApplication: { false },
+    ).open(session: snapshot)
+    let directoryReport = zcodeSelfTestAdapter(
+        activateApplication: { .failed },
         openWorkingDirectory: { _ in true }
-    ).open(session: snapshot) == .workingDirectoryFallback,
-    zcodeSelfTestAdapter(
-        activateApplication: { false },
+    ).open(session: snapshot)
+    let unknownReport = zcodeSelfTestAdapter(
+        activateApplication: { .unknown },
         openWorkingDirectory: { _ in false }
-    ).open(session: snapshot) == .unknown
+    ).open(session: snapshot)
+    guard appReport.result == .appFocused,
+          directoryReport.result == .workingDirectoryFallback,
+          unknownReport.result == .unknown,
+          [appReport, directoryReport, unknownReport].allSatisfy({
+              !$0.exactAttempted && !$0.independentlyConfirmedIdentity
+          })
     else {
         throw ZCodeSelfTestError.failure("open result boundary")
+    }
+
+    let failedReport = zcodeSelfTestAdapter(
+        activateApplication: { .failed },
+        openWorkingDirectory: { _ in false }
+    ).open(session: snapshot)
+    let unavailableReport = zcodeSelfTestAdapter(
+        installed: false,
+        activateApplication: { .unavailable },
+        openWorkingDirectory: { _ in false }
+    ).open(session: snapshot)
+    guard failedReport.result == .failed,
+          unavailableReport.result == .unavailable
+    else {
+        throw ZCodeSelfTestError.failure("failed/unavailable open boundary")
     }
 }
 
@@ -617,7 +638,7 @@ private func zcodeSelfTestAdapter(
     installed: Bool = true,
     now: @escaping () -> Date = Date.init,
     readEnvelopeData: @escaping () throws -> [Data] = { [] },
-    activateApplication: @escaping () -> Bool = { false },
+    activateApplication: @escaping () -> OpenResult = { .failed },
     openWorkingDirectory: @escaping (String) -> Bool = { _ in false }
 ) -> ZCodeAgentAdapter {
     ZCodeAgentAdapter(

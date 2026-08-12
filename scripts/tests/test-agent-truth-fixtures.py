@@ -199,6 +199,14 @@ for agent_id in AGENTS:
             assert scenario["expected"]["openResult"] not in {
                 "exactSession", "appFocused", "workingDirectoryFallback",
             }, f"{scenario['id']} violates the Pi no-navigation boundary"
+        if agent_id in {"codex", "cursor", "zcode", "pi"}:
+            assert scenario["expected"]["openResult"] != "exactSession", (
+                f"{scenario['id']} lacks independent exact-return confirmation"
+            )
+        if scenario["expected"]["openResult"] == "exactSession":
+            assert scenario["expected"]["actionability"] == (
+                "openExactNativeSession"
+            ), f"{scenario['id']} reports exact without an exact target"
         assert isinstance(scenario["explicitUnknowns"], list)
 
         per_agent_counts[agent_id] += 1

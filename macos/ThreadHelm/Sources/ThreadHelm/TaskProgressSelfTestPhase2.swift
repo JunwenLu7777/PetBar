@@ -300,11 +300,13 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
             sessionID: claudeSessionID,
             workingDirectory: "/tmp/shared-project"
         ),
+        .focusWorkingDirectory("/tmp/shared-project"),
     ], claudeTerminalNavigationPlan(for: unverifiedPIDRequest) == [
         .resumeSession(
             sessionID: claudeSessionID,
             workingDirectory: "/tmp/shared-project"
         ),
+        .focusWorkingDirectory("/tmp/shared-project"),
     ], claudeTerminalNavigationPlan(for: ClaudeTerminalOpenRequest(
         sessionID: claudeSessionID,
         workingDirectory: "/tmp/shared-project",
@@ -314,6 +316,7 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
             sessionID: claudeSessionID,
             workingDirectory: "/tmp/shared-project"
         ),
+        .focusWorkingDirectory("/tmp/shared-project"),
     ], claudeTerminalNavigationPlan(for: ClaudeTerminalOpenRequest(
         sessionID: nil,
         workingDirectory: "/tmp/shared-project",
@@ -385,9 +388,8 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
     guard taskOpenRequest == permissionOpenRequest,
           taskOpenRequest == preciseClaudeRequest,
           taskNavigationPlan == permissionNavigationPlan,
-          taskNavigationPlan.contains(
-              .focusWorkingDirectory("/tmp/shared-project")
-          ) == false
+          taskNavigationPlan.last
+            == .focusWorkingDirectory("/tmp/shared-project")
     else {
         fputs("Claude navigation entry points diverged\n", stderr)
         exit(1)

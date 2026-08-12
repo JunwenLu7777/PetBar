@@ -30,7 +30,7 @@ func runCursorAgentAdapterSelfTest() {
         signals: { [] },
         snapshots: { [] },
         hookCommand: hookCommand,
-        openCursorApp: { true },
+        openCursorApp: { .appFocused },
         openWorkingDirectory: { _ in true }
     )
 
@@ -289,7 +289,7 @@ private func runCursorSignalMappingSelfTest() {
             ]
         },
         snapshots: { [] },
-        openCursorApp: { true },
+        openCursorApp: { .appFocused },
         openWorkingDirectory: { _ in true }
     )
     guard let observation = try? adapter.observe(),
@@ -406,10 +406,14 @@ private func runCursorOpenSelfTest() {
         },
         signals: { [] },
         snapshots: { [] },
-        openCursorApp: { true },
+        openCursorApp: { .failed },
         openWorkingDirectory: { _ in true }
     )
-    guard directoryAdapter.open(session: withDirectory) == .workingDirectoryFallback
+    let directoryReport = directoryAdapter.open(session: withDirectory)
+    guard directoryReport.result == .workingDirectoryFallback,
+          directoryReport.advertisedActionability == .openNativeApp,
+          !directoryReport.exactAttempted,
+          !directoryReport.independentlyConfirmedIdentity
     else { failCursorAdapterSelfTest("working-directory fallback") }
 
     let appAdapter = CursorAgentAdapter(
@@ -418,7 +422,7 @@ private func runCursorOpenSelfTest() {
         },
         signals: { [] },
         snapshots: { [] },
-        openCursorApp: { true },
+        openCursorApp: { .appFocused },
         openWorkingDirectory: { _ in false }
     )
     var appOnly = withDirectory
@@ -436,7 +440,10 @@ private func runCursorOpenSelfTest() {
         latestEventID: appOnly.latestEventID,
         updatedAt: appOnly.updatedAt
     )
-    guard appAdapter.open(session: appOnly) == .appFocused
+    let appReport = appAdapter.open(session: appOnly)
+    guard appReport.result == .appFocused,
+          !appReport.exactAttempted,
+          !appReport.independentlyConfirmedIdentity
     else { failCursorAdapterSelfTest("app focused fallback") }
 
     let unknownAdapter = CursorAgentAdapter(
@@ -445,13 +452,35 @@ private func runCursorOpenSelfTest() {
         },
         signals: { [] },
         snapshots: { [] },
-        openCursorApp: { false },
+        openCursorApp: { .unknown },
         openWorkingDirectory: { _ in false }
     )
-    guard unknownAdapter.open(session: appOnly) == .unknown,
-          unknownAdapter.open(session: withDirectory) != .exactSession,
-          appAdapter.open(session: appOnly) != .exactSession
+    guard unknownAdapter.open(session: appOnly).result == .unknown,
+          unknownAdapter.open(session: withDirectory).result != .exactSession,
+          appAdapter.open(session: appOnly).result != .exactSession
     else { failCursorAdapterSelfTest("exact return remains unknown") }
+
+    let failedAdapter = CursorAgentAdapter(
+        discovery: {
+            AgentDiscovery(isInstalled: true, version: nil, compatibility: .supported)
+        },
+        signals: { [] },
+        snapshots: { [] },
+        openCursorApp: { .failed },
+        openWorkingDirectory: { _ in false }
+    )
+    let unavailableAdapter = CursorAgentAdapter(
+        discovery: {
+            AgentDiscovery(isInstalled: false, version: nil, compatibility: .unknown)
+        },
+        signals: { [] },
+        snapshots: { [] },
+        openCursorApp: { .unavailable },
+        openWorkingDirectory: { _ in false }
+    )
+    guard failedAdapter.open(session: appOnly).result == .failed,
+          unavailableAdapter.open(session: appOnly).result == .unavailable
+    else { failCursorAdapterSelfTest("failed/unavailable open boundary") }
 }
 
 private func cursorSelfTestObject(at url: URL) throws -> [String: Any] {

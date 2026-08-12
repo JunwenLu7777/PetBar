@@ -165,17 +165,17 @@
       "explicitUnknowns": []
     },
     {
-      "id": "codex-exact-thread-return",
+      "id": "codex-thread-deep-link-unconfirmed",
       "agentId": "codex",
-      "capabilityStatus": "supported",
-      "scenario": "A valid native thread identity opens the matching Codex thread.",
+      "capabilityStatus": "unknown",
+      "scenario": "A valid native thread identity dispatches a targeted Codex deep link, but dispatch alone does not confirm the destination identity.",
       "captureSource": "task navigation implementation",
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "0.145.0",
       "input": {"redacted": true, "signal": "valid synthetic thread identity"},
-      "expected": {"executionState": "completed", "attentionReason": "reviewReady", "actionability": "openExactNativeSession", "evidenceQuality": "nativeState", "freshness": "fresh", "openResult": "exactSession", "interruptDecision": "nonInterrupt"},
+      "expected": {"executionState": "completed", "attentionReason": "reviewReady", "actionability": "openExactNativeSession", "evidenceQuality": "nativeState", "freshness": "fresh", "openResult": "unknown", "interruptDecision": "nonInterrupt"},
       "evidence": [{"kind": "localCode", "reference": "macos/ThreadHelm/Sources/ThreadHelm/TaskProgressModels.swift"}],
-      "explicitUnknowns": []
+      "explicitUnknowns": ["No independent native-thread identity confirmation exists after deep-link dispatch."]
     },
     {
       "id": "codex-native-app-fallback",

@@ -18,10 +18,10 @@
     "pi": "scenarios/pi.json"
   },
   "counts": {
-    "total": 80,
+    "total": 81,
     "byAgent": {
       "codex": 16,
-      "claudeCode": 16,
+      "claudeCode": 17,
       "cursor": 16,
       "zcode": 16,
       "pi": 16
@@ -30,6 +30,8 @@
   "replayContract": "docs/superpowers/specs/2026-08-12-threadhelm-truth-spec.md",
   "redactionStatus": "redacted",
   "explicitUnknowns": [
+    "Codex thread deep-link dispatch is not independently confirmed as exact return.",
+    "Claude --resume dispatch is not independently confirmed as exact return.",
     "Cursor arbitrary IDE session return is not proven end to end.",
     "ZCode exact session return and already-running-session hook pickup are not proven.",
     "Pi exact session return is not advertised until an end-to-end check exists."

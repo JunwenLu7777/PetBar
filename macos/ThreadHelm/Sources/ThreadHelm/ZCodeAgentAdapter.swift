@@ -442,7 +442,7 @@ struct ZCodeAgentAdapter: AgentAdapter {
     private let readEnvelopeData: () throws -> [Data]
     private let now: () -> Date
     private let executablePath: () -> String
-    private let activateApplication: () -> Bool
+    private let activateApplication: () -> OpenResult
     private let openWorkingDirectory: (String) -> Bool
 
     init(
@@ -457,7 +457,7 @@ struct ZCodeAgentAdapter: AgentAdapter {
         executablePath: @escaping () -> String = {
             Bundle.main.executableURL?.path ?? "/usr/bin/true"
         },
-        activateApplication: @escaping () -> Bool = activateZCodeApplication,
+        activateApplication: @escaping () -> OpenResult = openZCodeApplication,
         openWorkingDirectory: @escaping (String) -> Bool = openDirectoryInFinder
     ) {
         self.metadata = metadata!
@@ -545,19 +545,39 @@ struct ZCodeAgentAdapter: AgentAdapter {
         return snapshot.freshness
     }
 
-    func open(session: AgentSessionSnapshot) -> OpenResult {
+    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
         guard session.identity.agentID == .zcode else {
-            return .unavailable
+            return AgentOpenReport(
+                agentID: metadata.id,
+                advertisedActionability: session.actionability,
+                result: .unavailable,
+                invokedExactTarget: false,
+                independentlyConfirmedIdentity: false
+            )
         }
-        if activateApplication() {
-            return .appFocused
+        let appResult = activateApplication()
+        let result: OpenResult
+        switch appResult {
+        case .appFocused, .unknown:
+            result = appResult
+        case .exactSession, .workingDirectoryFallback:
+            result = appResult
+        case .unavailable, .failed, .notAttempted:
+            if let workingDirectory = session.workingDirectory,
+               openWorkingDirectory(workingDirectory)
+            {
+                result = .workingDirectoryFallback
+            } else {
+                result = appResult == .unavailable ? .unavailable : .failed
+            }
         }
-        if let workingDirectory = session.workingDirectory,
-           openWorkingDirectory(workingDirectory)
-        {
-            return .workingDirectoryFallback
-        }
-        return .unknown
+        return AgentOpenReport(
+            agentID: metadata.id,
+            advertisedActionability: session.actionability,
+            result: result,
+            invokedExactTarget: false,
+            independentlyConfirmedIdentity: false
+        )
     }
 
     func diagnostics() -> AgentDiagnostics {
@@ -745,21 +765,23 @@ private func executablePathsForZCode(
         }
 }
 
-private func activateZCodeApplication() -> Bool {
+private func openZCodeApplication() -> OpenResult {
+    let bundleIdentifier = "dev.zcode.app"
     if let running = NSRunningApplication.runningApplications(
-        withBundleIdentifier: "com.zcode.ZCode"
+        withBundleIdentifier: bundleIdentifier
     ).first {
         return running.activate(options: [
             .activateAllWindows,
             .activateIgnoringOtherApps,
-        ])
+        ]) ? .appFocused : .failed
     }
     if let appURL = NSWorkspace.shared.urlForApplication(
-        withBundleIdentifier: "com.zcode.ZCode"
+        withBundleIdentifier: bundleIdentifier
     ) {
-        return NSWorkspace.shared.open(appURL)
+        // Launch dispatch cannot prove that a specific ZCode window focused.
+        return NSWorkspace.shared.open(appURL) ? .unknown : .failed
     }
-    return false
+    return .unavailable
 }
 
 private func openDirectoryInFinder(_ path: String) -> Bool {

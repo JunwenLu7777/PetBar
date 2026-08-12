@@ -14,8 +14,8 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 
 | Agent | Result on this Mac |
 | --- | --- |
-| Codex | Supported when the native thread UUID is present, using `codex://threads/<UUID>`. |
-| Claude Code | Supported when a matching live process or verified session resume target exists. |
+| Codex | A native thread UUID supplies a targeted `codex://threads/<UUID>` deep link, but ThreadHelm currently confirms only dispatch. The result remains Unknown until the destination thread identity is checked independently. |
+| Claude Code | Exact only when a matching live process plus process-start identity is located at its exact terminal tab. Launching `claude --resume` remains Unknown until the destination identity is checked independently. |
 | Cursor | Unknown. `cursor agent --resume [chatId]` exists, but arbitrary desktop-session mapping is not proven. |
 | ZCode | Unknown. The `zcode` URL scheme and bundled CLI do not prove arbitrary-session return. |
 | Pi | Unknown. `--resume` and `--session` exist, but ThreadHelm must not call them as exact return until identity is independently confirmed. |
