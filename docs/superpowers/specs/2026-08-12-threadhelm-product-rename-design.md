@@ -1,7 +1,7 @@
 # Rename ChatBird to ThreadHelm
 
 **Date:** 2026-08-12
-**Status:** Design for review
+**Status:** Approved design
 **Scope:** Current macOS product identity, source naming, migration, packaging, tests, documentation, and local installation
 
 ## Goal
