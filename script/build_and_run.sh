@@ -2,15 +2,15 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="ChatBird"
-BUNDLE_ID="dev.chatbird.app"
+APP_NAME="ThreadHelm"
+BUNDLE_ID="dev.threadhelm.app"
 ROOT="${0:A:h:h}"
-PROJECT="$ROOT/macos/ChatBirdQuotaPanel"
-APP_BUNDLE="$PROJECT/build/ChatBird.app"
+PROJECT="$ROOT/macos/ThreadHelm"
+APP_BUNDLE="$PROJECT/build/ThreadHelm.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
-INSTALLED_BINARY="$HOME/Applications/ChatBird.app/Contents/MacOS/$APP_NAME"
+INSTALLED_BINARY="$HOME/Applications/ThreadHelm.app/Contents/MacOS/$APP_NAME"
 INSTALL_SCRIPT="$PROJECT/scripts/install.sh"
-LABEL="dev.chatbird.app"
+LABEL="dev.threadhelm.app"
 DOMAIN="gui/$(id -u)"
 
 install_and_launch() {
@@ -41,12 +41,12 @@ case "$MODE" in
       if [[ -n "$RUNNING_PID" ]] \
         && [[ "$(/bin/ps -p "$RUNNING_PID" -o command=)" == "$INSTALLED_BINARY" ]]
       then
-        echo "ChatBird 已启动"
+        echo "ThreadHelm 已启动"
         exit 0
       fi
       /bin/sleep 0.1
     done
-    echo "ChatBird 未能启动" >&2
+    echo "ThreadHelm 未能启动" >&2
     exit 1
     ;;
   *)

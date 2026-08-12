@@ -1,12 +1,12 @@
-Package: ChatBird macOS
+Package: ThreadHelm macOS
 Version: 1.1.0
 System: macOS 12.3+
 Architecture: arm64 (Apple silicon only)
-Variant: Independent app with owned pet, dynamic island, quota, and task status
-App: ChatBird.app
-Executable: ChatBird
-Bundle ID: dev.chatbird.app
-LaunchAgent: dev.chatbird.app
-Pet: owned ChatBird desktop pet; no Codex Pet installation or selection
-Panel: pet panel and dynamic island; clickable Codex task deep links
+Variant: Independent app with dynamic island, quota, and task status
+App: ThreadHelm.app
+Executable: ThreadHelm
+Bundle ID: dev.threadhelm.app
+LaunchAgent: dev.threadhelm.app
+Desktop pet: none; no Codex Pet installation or selection
+Panel: dynamic island; clickable Codex task deep links
 Native activity pills: existing tasks muted only via recorded local state; new tasks are user-controlled unless optional accessibility permission is granted

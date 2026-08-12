@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "已经发布的 ChatBird 语义化版本（例如 1.0.0）"
+        description: "已经发布的 ThreadHelm 语义化版本（例如 1.0.0）"
         required: true
 
 permissions:
@@ -33,7 +33,7 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Detect and verify ChatBird package
+      - name: Detect and verify ThreadHelm package
         id: packages
         env:
           GH_TOKEN: ${{ github.token }}
@@ -42,35 +42,39 @@ jobs:
         shell: bash
         run: |
           ASSETS="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
-          ARCHIVE="ChatBird-NT-macOS-arm64-$VERSION.zip"
+          ARCHIVE="ThreadHelm-macOS-arm64-$VERSION.zip"
           CHECKSUM="$ARCHIVE.sha256"
           if ! grep -Fxq "$ARCHIVE" <<< "$ASSETS"; then
-            echo "Release $TAG 不是 ChatBird 发布，跳过 README 更新。"
-            echo "chatbird=false" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG 不是 ThreadHelm 发布，跳过 README 更新。"
+            echo "threadhelm=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           grep -Fxq "$CHECKSUM" <<< "$ASSETS" || {
             echo "Release $TAG 缺少校验文件：$CHECKSUM" >&2
             exit 1
           }
-          echo "chatbird=true" >> "$GITHUB_OUTPUT"
+          echo "threadhelm=true" >> "$GITHUB_OUTPUT"
 
       - name: Update README download table
-        if: steps.packages.outputs.chatbird == 'true'
+        if: steps.packages.outputs.threadhelm == 'true'
         run: ./scripts/update-readme-downloads.sh "${{ steps.release.outputs.version }}"
 
       - name: Commit updated links
-        if: steps.packages.outputs.chatbird == 'true'
+        if: steps.packages.outputs.threadhelm == 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         shell: bash
         run: |
           if git diff --quiet -- README.md; then
-            echo "README 已经指向 ChatBird Release $VERSION"
+            echo "README 已经指向 ThreadHelm Release $VERSION"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md
-          git commit -m "更新 ChatBird Release $VERSION 下载信息"
+          git commit -m "Keep ThreadHelm downloads aligned with the published release" \
+            -m "Constraint: Release $VERSION must include the matching archive and checksum" \
+            -m "Confidence: high" \
+            -m "Scope-risk: narrow" \
+            -m "Tested: verified GitHub release asset names before updating README"
           git push origin HEAD:main

@@ -31,8 +31,8 @@ def base_paths() -> set[str]:
         "scripts/privacy-audit.sh",
         "scripts/update-readme-downloads.sh",
         "scripts/validate-repository-layout.py",
-        "dist/ChatBird-macOS-arm64-1.1.0.zip",
-        "dist/ChatBird-macOS-arm64-1.1.0.zip.sha256",
+        "dist/ThreadHelm-macOS-arm64-1.1.0.zip",
+        "dist/ThreadHelm-macOS-arm64-1.1.0.zip.sha256",
     }
 
 
@@ -55,8 +55,13 @@ def assert_legacy_path(path: str) -> None:
 
 
 assert_no_legacy_path(
-    base_paths() | {"macos/ChatBirdQuotaPanel/Sources/ChatBirdQuotaPanel/WindowStackGeometry.swift"}
+    base_paths()
+    | {
+        "macos/ThreadHelm/Sources/ThreadHelm/WindowStackGeometry.swift",
+        "docs/superpowers/specs/2026-07-25-chatbird-live-task-panel-design.md",
+    }
 )
+assert_legacy_path("macos/ChatBirdQuotaPanel/Sources/ChatBirdQuotaPanel/main.swift")
 assert_legacy_path("macos/package/Windows/legacy.txt")
 assert_legacy_path("shared/pet/chatbird-nt/Bubu/legacy.txt")
 shared_violations = validator.validate(
@@ -67,5 +72,18 @@ assert any(
     and "unexpected top-level repository content" in violation
     for violation in shared_violations
 ), shared_violations
+
+assert validator.legacy_brand_violation(
+    "macos/ThreadHelm/Sources/ThreadHelm/main.swift",
+    'print("ChatBird 活动")',
+) is not None
+assert validator.legacy_brand_violation(
+    "macos/ThreadHelm/Sources/ThreadHelm/ThreadHelmApplicationIdentity.swift",
+    'let legacyBundleID = "dev.chatbird.app"',
+) is None
+assert validator.legacy_brand_violation(
+    "docs/superpowers/specs/2026-07-25-chatbird-live-task-panel-design.md",
+    "# ChatBird live task panel",
+) is None
 
 print("layout validator path marker tests passed")

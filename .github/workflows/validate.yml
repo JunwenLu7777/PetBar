@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  chatbird-macos:
+  threadhelm-macos:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -15,62 +15,64 @@ jobs:
         run: brew list ripgrep >/dev/null 2>&1 || brew install ripgrep
       - name: Reject unresolved merge markers
         run: "! git grep -n -E '^(<<<<<<<|=======|>>>>>>>)( |$)'"
-      - name: Validate ChatBird repository layout
+      - name: Validate ThreadHelm repository layout
         run: python3 scripts/validate-repository-layout.py
-      - run: ./macos/ChatBirdQuotaPanel/scripts/build.sh
-      - name: Verify ChatBird macOS arm64 app and behavior
+      - run: ./macos/ThreadHelm/scripts/build.sh
+      - name: Verify ThreadHelm macOS arm64 app and behavior
         run: |
           set -euo pipefail
-          APP='macos/ChatBirdQuotaPanel/build/ChatBird.app'
-          BIN="$APP/Contents/MacOS/ChatBird"
+          APP='macos/ThreadHelm/build/ThreadHelm.app'
+          BIN="$APP/Contents/MacOS/ThreadHelm"
           lipo "$BIN" -verify_arch arm64
           test "$(lipo -archs "$BIN")" = "arm64"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = "dev.chatbird.app"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")" = "ChatBird"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP/Contents/Info.plist")" = "ChatBird.icns"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = "dev.threadhelm.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")" = "ThreadHelm"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP/Contents/Info.plist")" = "ThreadHelm.icns"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")" = "12.3"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")" = "2"
           ! /usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$APP/Contents/Info.plist" >/dev/null 2>&1
-          test -f "$APP/Contents/Resources/ChatBird.icns"
-          test -f "$APP/Contents/Resources/ChatBirdPetSpritesheet.webp"
+          test -f "$APP/Contents/Resources/ThreadHelm.icns"
+          test ! -e "$APP/Contents/Resources/ThreadHelmPetSpritesheet.webp"
           test "$(vtool -show-build "$BIN" | grep -c 'minos 12.3')" -eq 1
           codesign --verify --deep --strict "$APP"
-          "$BIN" --print-panel-config | grep 'version=1.1.0 edition=chatbird-nt petID=chatbird-nt codexWeeklyQuotaOnly=true claudeQuotaPeriods=5h,weekly,fable width=388 height=226'
+          "$BIN" --print-panel-config | grep 'version=1.1.0 edition=threadhelm productID=threadhelm codexWeeklyQuotaOnly=true claudeQuotaPeriods=5h,weekly,fable width=388 height=226'
           "$BIN" --self-test-placement | grep 'activity-pill-segmentation=2/2.*gap=14.0; centerError=0.0'
           "$BIN" --self-test-lifecycle | grep 'pet-click-restore=5/5.*no-input-injection=2/2'
           "$BIN" --self-test-native-notification-state | grep 'prepare=pass reinstall=pass restore=pass file-lifecycle=pass user-values=preserved'
           "$BIN" --self-test-task-progress | grep 'lifecycle=7/7.*refresh-gate=single-flight+generation.*refresh-reader=reuse.*claude-agents-timeout=bounded.*claude-terminal-focus=pid-chain+3-hosts.*claude-iterm-resume=2/2.*claude-otty=3/3.*claude-resume=2/2'
-          "$BIN" --self-test-chatbird-edition | grep 'edition=chatbird-nt app-id=dev.chatbird.app pet=standalone'
+          "$BIN" --self-test-threadhelm-edition | grep 'edition=threadhelm app-id=dev.threadhelm.app product=standalone'
           "$BIN" --self-test-weekly-quota | grep 'legacy-secondary=pass.*thresholds=7/7.*legacy-expires-at=iso+date-fallback+invalid-fails.*refresh=60s'
           "$BIN" --self-test-claude-quota | grep 'left-percent=3/3 used-percent=3/3.*non-interactive=3/3.*windows=5h+weekly+fable.*click-hit=pass.*provider-visibility=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass'
-          "$BIN" --self-test-claude-hook | grep 'protocol=4/4.*privacy=pass.*auth=header.*queue=bounded.*config=optional+install+conflict-preserved+idempotent+uninstall+crlf+strict-json'
+          "$BIN" --self-test-claude-hook | grep 'protocol=4/4.*privacy=pass.*auth=header.*queue=bounded.*config=optional+install+legacy-upgrade+conflict-preserved+idempotent+uninstall+crlf+strict-json'
           "$BIN" --self-test-client-contract | grep 'app-server-reset-credits=pass path-discovery=codex+claude count-only-credits=pass process-timeout=term+kill inherited-pipe=nonblocking codex-timeout=completion'
           "$BIN" --self-test-dynamic-island | grep 'terminal-time=stable.*mode-switch=capsule-to-pet+pet-to-dynamic.*mode-roundtrip=queued+empty'
       - name: Run script regression tests
         run: |
           set -euo pipefail
-          python3 scripts/tests/test-layout-validator.py
+          for test_script in scripts/tests/*.py; do
+            python3 "$test_script"
+          done
           for test_script in scripts/tests/*.sh; do
             zsh "$test_script"
           done
-      - name: Build and inspect ChatBird macOS release
+      - name: Build and inspect ThreadHelm macOS release
         run: |
           set -euo pipefail
           ./scripts/build-macos-release.sh
-          RELEASE='ChatBird-macOS-arm64-1.1.0'
+          RELEASE='ThreadHelm-macOS-arm64-1.1.0'
           test -f "dist/$RELEASE.zip"
           test -f "dist/$RELEASE.zip.sha256"
-          test -e "build/release/$RELEASE/ChatBird.app"
-          test -e "build/release/$RELEASE/dev.chatbird.app.plist.in"
+          test -e "build/release/$RELEASE/ThreadHelm.app"
+          test -e "build/release/$RELEASE/dev.threadhelm.app.plist.in"
           test ! -e "build/release/$RELEASE/pet"
           test ! -e "build/release/$RELEASE/quota-panel"
           unzip -tq "dist/$RELEASE.zip"
           ./scripts/privacy-audit.sh
-      - run: zsh -n macos/package/*.command macos/ChatBirdQuotaPanel/scripts/*.sh script/*.sh scripts/*.sh
+      - run: zsh -n macos/package/*.command macos/ThreadHelm/scripts/*.sh script/*.sh scripts/*.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: chatbird-macos-1.1.0
+          name: threadhelm-macos-1.1.0
           if-no-files-found: error
           path: |
-            dist/ChatBird-macOS-arm64-1.1.0.zip
-            dist/ChatBird-macOS-arm64-1.1.0.zip.sha256
+            dist/ThreadHelm-macOS-arm64-1.1.0.zip
+            dist/ThreadHelm-macOS-arm64-1.1.0.zip.sha256
