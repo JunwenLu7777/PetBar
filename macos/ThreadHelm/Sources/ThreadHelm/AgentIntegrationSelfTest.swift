@@ -110,6 +110,320 @@ func runAgentIntegrationSelfTest() {
 
     runAgentTaskProgressRegistrySelfTest(mockAgentID: mock.metadata.id)
     runAgentReducerSelfTest()
+    runCodexClaudeAdapterSelfTest()
+    runClaudeAdapterLifecycleSelfTest()
+}
+
+private func runCodexClaudeAdapterSelfTest() {
+    let now = Date(timeIntervalSince1970: 1_786_500_500)
+    let codexThreadID = "e1653f97-f01e-4215-a4fd-c8f70e7e3235"
+    let codexTask = TaskProgressItem(
+        title: "Codex needs input",
+        kind: .waitingForInput,
+        startedAt: now.addingTimeInterval(-30),
+        updatedAt: now,
+        source: .codex,
+        threadID: codexThreadID,
+        workingDirectory: "/tmp/threadhelm-codex"
+    )
+    var openedCodexURL: URL?
+    let codex = CodexAgentAdapter(
+        readCollection: { .displaying([codexTask]) },
+        discovery: {
+            AgentDiscovery(
+                isInstalled: true,
+                version: "self-test",
+                compatibility: .supported
+            )
+        },
+        openURL: {
+            openedCodexURL = $0
+            return true
+        }
+    )
+    guard let codexObservation = try? codex.observe(),
+          let codexSnapshot = codexObservation.snapshots.first,
+          codexSnapshot.identity.agentID == .codex,
+          codexSnapshot.identity.nativeID == codexThreadID,
+          codexSnapshot.executionState == .running,
+          codexSnapshot.attentionReason == .question,
+          codexSnapshot.actionability == .openExactNativeSession,
+          codexSnapshot.workingDirectory == "/tmp/threadhelm-codex",
+          codex.open(session: codexSnapshot) == .unknown,
+          openedCodexURL?.absoluteString == "codex://threads/\(codexThreadID)"
+    else {
+        failAgentIntegrationSelfTest("Codex adapter projection/open")
+    }
+
+    let claudeSessionID = "2d61280e-b4f1-4db7-a326-19f9f0dd804c"
+    let claudeTask = TaskProgressItem(
+        title: "Claude needs a choice",
+        kind: .waitingForInput,
+        startedAt: now.addingTimeInterval(-20),
+        updatedAt: now,
+        source: .claudeCode,
+        sessionID: claudeSessionID,
+        workingDirectory: "/tmp/threadhelm-claude"
+    )
+    let queue = ClaudePermissionQueueSnapshot(current: ClaudePermissionQueueItem(
+        requestID: UUID(uuidString: "f7e5c36f-f367-4457-b6af-2f46c6fc05df")!,
+        interactionKind: .askUserQuestion,
+        title: "Choose",
+        sessionID: claudeSessionID,
+        arrivedAt: now
+    ))
+    var openedClaudeRequest: ClaudeTerminalOpenRequest?
+    let claude = ClaudeCodeAgentAdapter(
+        readCollection: { .displaying([claudeTask]) },
+        permissionQueue: { queue },
+        discovery: {
+            AgentDiscovery(
+                isInstalled: true,
+                version: "self-test",
+                compatibility: .supported
+            )
+        },
+        openTerminal: {
+            openedClaudeRequest = $0
+            return .workingDirectoryFallback
+        }
+    )
+    guard let claudeObservation = try? claude.observe(),
+          let claudeSnapshot = claudeObservation.snapshots.first,
+          claudeSnapshot.identity.agentID == .claudeCode,
+          claudeSnapshot.executionState == .running,
+          claudeSnapshot.attentionReason == .question,
+          claudeSnapshot.actionability == .inApp,
+          claude.open(session: claudeSnapshot) == .workingDirectoryFallback,
+          openedClaudeRequest?.sessionID == claudeSessionID,
+          openedClaudeRequest?.workingDirectory == "/tmp/threadhelm-claude",
+          claudeAttentionReason(for: .toolApproval) == .permission,
+          claudeAttentionReason(for: .askUserQuestion) == .question,
+          claudeAttentionReason(for: .exitPlanMode) == .planApproval
+    else {
+        failAgentIntegrationSelfTest("Claude adapter projection/open/actions")
+    }
+
+    let queueOnlyRequestID = UUID(
+        uuidString: "bf54f333-c99c-483f-a308-8e049bbb3188"
+    )!
+    let queueOnly = ClaudePermissionQueueSnapshot(current: ClaudePermissionQueueItem(
+        requestID: queueOnlyRequestID,
+        interactionKind: .exitPlanMode,
+        title: "Review the plan",
+        sessionID: nil,
+        arrivedAt: now.addingTimeInterval(1)
+    ))
+    let normalizedQueueOnly = normalizedBuiltInAgentState(
+        collection: .displaying([]),
+        permissionQueue: queueOnly
+    )
+    guard normalizedQueueOnly.snapshots.count == 1,
+          normalizedQueueOnly.snapshots.first?.identity.agentID == .claudeCode,
+          normalizedQueueOnly.snapshots.first?.attentionReason == .planApproval,
+          normalizedQueueOnly.snapshots.first?.actionability == .inApp,
+          normalizedQueueOnly.snapshots.first?.evidenceQuality == .officialHook,
+          normalizedQueueOnly.attentionItems.count == 1,
+          normalizedQueueOnly.attentionItems.first?.isInterrupting == true
+    else {
+        failAgentIntegrationSelfTest("queue-only normalized attention")
+    }
+
+    let exactProcess = claudeTerminalOpenResult(
+        for: ClaudeTerminalOpenRequest(
+            sessionID: claudeSessionID,
+            workingDirectory: "/tmp/threadhelm-claude",
+            processID: 42,
+            processStartIdentity: "self-test-start"
+        ),
+        focusProcess: { _, _ in .exactSession },
+        resumeSession: { _, _ in false },
+        focusWorkingDirectory: { _ in false }
+    )
+    let resumeRequested = claudeTerminalOpenResult(
+        for: ClaudeTerminalOpenRequest(
+            sessionID: claudeSessionID,
+            workingDirectory: "/tmp/threadhelm-claude",
+            processID: nil
+        ),
+        focusProcess: { _, _ in .failed },
+        resumeSession: { _, _ in true },
+        focusWorkingDirectory: { _ in false }
+    )
+    let directoryFallback = claudeTerminalOpenResult(
+        for: ClaudeTerminalOpenRequest(
+            sessionID: nil,
+            workingDirectory: "/tmp/threadhelm-claude",
+            processID: nil
+        ),
+        focusProcess: { _, _ in .failed },
+        resumeSession: { _, _ in false },
+        focusWorkingDirectory: { _ in true }
+    )
+    let failed = claudeTerminalOpenResult(
+        for: ClaudeTerminalOpenRequest(
+            sessionID: claudeSessionID,
+            workingDirectory: "/tmp/threadhelm-claude",
+            processID: nil
+        ),
+        focusProcess: { _, _ in .failed },
+        resumeSession: { _, _ in false },
+        focusWorkingDirectory: { _ in false }
+    )
+    let unavailable = claudeTerminalOpenResult(
+        for: ClaudeTerminalOpenRequest(
+            sessionID: nil,
+            workingDirectory: nil,
+            processID: nil
+        ),
+        focusProcess: { _, _ in .failed },
+        resumeSession: { _, _ in false },
+        focusWorkingDirectory: { _ in false }
+    )
+    guard exactProcess == .exactSession,
+          resumeRequested == .unknown,
+          directoryFallback == .workingDirectoryFallback,
+          failed == .failed,
+          unavailable == .unavailable
+    else {
+        failAgentIntegrationSelfTest("typed Claude navigation results")
+    }
+}
+
+private func runClaudeAdapterLifecycleSelfTest() {
+    let manager = FileManager.default
+    let temporaryRoot = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-claude-adapter-self-test-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let settingsURL = temporaryRoot
+        .appendingPathComponent(".claude", isDirectory: true)
+        .appendingPathComponent("settings.json")
+    let isolatedScope = AgentIntegrationScope.isolated(at: temporaryRoot)
+    let adapter = ClaudeCodeAgentAdapter(
+        readCollection: { .displaying([]) },
+        discovery: {
+            AgentDiscovery(
+                isInstalled: true,
+                version: "self-test",
+                compatibility: .supported
+            )
+        }
+    )
+
+    do {
+        try manager.createDirectory(
+            at: settingsURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let unrelatedSettings = """
+        {
+          "env": {"THREADHELM_SELF_TEST": "keep"},
+          "hooks": {
+            "Stop": [{"hooks": [{"type": "command", "command": "keep-me"}]}]
+          },
+          "model": "self-test-model"
+        }
+        """
+        try Data(unrelatedSettings.utf8).write(to: settingsURL)
+
+        guard adapter.integrationStatus(in: isolatedScope) == .notInstalled,
+              try adapter.installIntegration(in: isolatedScope) == .installed,
+              adapter.integrationStatus(in: isolatedScope) == .installed,
+              try adapter.installIntegration(in: isolatedScope) == .unchanged
+        else {
+            failAgentIntegrationSelfTest("Claude adapter install/status/idempotency")
+        }
+
+        let repairFixture = """
+        {
+          "env": {"THREADHELM_SELF_TEST": "keep"},
+          "hooks": {
+            "PermissionRequest": [{
+              "matcher": "",
+              "hooks": [{
+                "type": "http",
+                "url": "http://127.0.0.1:27841/threadhelm/claude/permission",
+                "timeout": 1,
+                "headers": {}
+              }]
+            }],
+            "Stop": [{"hooks": [{"type": "command", "command": "keep-me"}]}]
+          },
+          "model": "self-test-model"
+        }
+        """
+        try Data(repairFixture.utf8).write(to: settingsURL)
+        guard adapter.integrationStatus(in: isolatedScope) == .notInstalled,
+              try adapter.repairIntegration(in: isolatedScope) == .repaired,
+              adapter.integrationStatus(in: isolatedScope) == .installed,
+              try adapter.uninstallIntegration(in: isolatedScope) == .uninstalled,
+              try adapter.uninstallIntegration(in: isolatedScope) == .unchanged,
+              adapter.integrationStatus(in: isolatedScope) == .notInstalled,
+              let finalData = try? Data(contentsOf: settingsURL),
+              let finalSettings = try JSONSerialization.jsonObject(
+                  with: finalData
+              ) as? [String: Any],
+              finalSettings["model"] as? String == "self-test-model",
+              (finalSettings["env"] as? [String: String])?[
+                  "THREADHELM_SELF_TEST"
+              ] == "keep",
+              let finalHooks = finalSettings["hooks"] as? [String: Any],
+              finalHooks["Stop"] != nil,
+              finalHooks["PermissionRequest"] == nil
+        else {
+            failAgentIntegrationSelfTest(
+                "Claude adapter repair/uninstall/config preservation"
+            )
+        }
+
+        let liveHomeScope = AgentIntegrationScope.isolated(
+            at: manager.homeDirectoryForCurrentUser
+        )
+        do {
+            _ = try adapter.installIntegration(in: liveHomeScope)
+            failAgentIntegrationSelfTest("Claude live-home write guard")
+        } catch AgentIntegrationError.liveConfigurationWriteDenied {
+        } catch {
+            failAgentIntegrationSelfTest("Claude live-home guard error type")
+        }
+
+        let unavailableRoot = temporaryRoot.appendingPathComponent(
+            "claude-unavailable",
+            isDirectory: true
+        )
+        let unavailableSettingsURL = unavailableRoot
+            .appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("settings.json")
+        let unavailableAdapter = ClaudeCodeAgentAdapter(
+            readCollection: { .displaying([]) },
+            discovery: {
+                AgentDiscovery(
+                    isInstalled: false,
+                    version: nil,
+                    compatibility: .unknown
+                )
+            }
+        )
+        guard try unavailableAdapter.installIntegration(
+            in: .isolated(at: unavailableRoot)
+        ) == .unchanged,
+        try unavailableAdapter.repairIntegration(
+            in: .isolated(at: unavailableRoot)
+        ) == .unchanged,
+        !manager.fileExists(atPath: unavailableSettingsURL.path)
+        else {
+            failAgentIntegrationSelfTest(
+                "Claude unavailable install/repair must not write"
+            )
+        }
+    } catch {
+        failAgentIntegrationSelfTest(
+            "Claude adapter lifecycle: \(error.localizedDescription)"
+        )
+    }
+
+    try? manager.removeItem(at: temporaryRoot)
 }
 
 private func runAgentTaskProgressRegistrySelfTest(mockAgentID: AgentID) {
@@ -461,7 +775,8 @@ private func makeAgentSelfTestEvent(
             expiresAt: observedAt.addingTimeInterval(30)
         ),
         title: "Self-test",
-        activitySummary: nil
+        activitySummary: nil,
+        workingDirectory: nil
     )
 }
 

@@ -868,6 +868,13 @@ private func assertDynamicIslandTaskWorkspace() {
         exit(1)
     }
 
+    controller.onOpenTask = { _ in .workingDirectoryFallback }
+    controller.performOpenSelectedTaskForSelfTest()
+    guard controller.openButtonTitleForSelfTest() == "仅打开目录" else {
+        fputs("dynamic island typed open feedback self-test failed\n", stderr)
+        exit(1)
+    }
+
     controller.setStateFilterForSelfTest(.completed)
     guard controller.visibleTaskKeysForSelfTest() == [
         codexCompleted.identityKey,
@@ -1027,7 +1034,10 @@ private func assertDynamicIslandTaskWorkspace() {
         taskCollection: collection
     ))
     let windowController = DynamicIslandWindowController(store: openStore)
-    windowController.onOpenTask = { openedItems.append($0) }
+    windowController.onOpenTask = {
+        openedItems.append($0)
+        return .exactSession
+    }
     windowController.onCopyWorkingDirectory = {
         copiedPaths.append($0)
         return normalizedAbsolutePath($0) != nil

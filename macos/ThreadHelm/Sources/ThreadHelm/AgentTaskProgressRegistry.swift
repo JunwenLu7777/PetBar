@@ -60,14 +60,14 @@ final class AgentTaskProgressRegistry {
 }
 
 func defaultAgentTaskProgressSources() -> [AgentTaskProgressSource] {
-    let codexReader = CodexTaskProgressReader()
-    let claudeReader = ClaudeTaskProgressReader()
+    let codexAdapter = CodexAgentAdapter()
+    let claudeAdapter = ClaudeCodeAgentAdapter()
     return [
         AgentTaskProgressSource(agentID: .codex) {
-            codexReader.readCollection().items
+            codexAdapter.readTaskProgressCollection().items
         },
         AgentTaskProgressSource(agentID: .claudeCode) {
-            claudeReader.readCollection().items
+            claudeAdapter.readTaskProgressCollection().items
         },
         AgentTaskProgressSource(agentID: .cursor) { [] },
         AgentTaskProgressSource(agentID: .zcode) { [] },

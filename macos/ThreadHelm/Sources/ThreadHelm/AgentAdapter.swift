@@ -5,6 +5,7 @@
 //  模块职责：定义 Agent 发现、集成生命周期、观察、打开和诊断契约。
 //
 
+import AppKit
 import Foundation
 
 enum AgentCompatibility: String, Equatable {
@@ -45,6 +46,24 @@ struct AgentIntegrationScope: Equatable {
             rootDirectory: rootDirectory,
             permitsLiveConfigurationChanges: false
         )
+    }
+}
+
+enum AgentIntegrationError: Error, Equatable {
+    case liveConfigurationWriteDenied
+}
+
+extension AgentIntegrationScope {
+    func managedURL(relativePath: String) throws -> URL {
+        let root = rootDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        if !permitsLiveConfigurationChanges,
+           root == FileManager.default.homeDirectoryForCurrentUser
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+        {
+            throw AgentIntegrationError.liveConfigurationWriteDenied
+        }
+        return root.appendingPathComponent(relativePath).standardizedFileURL
     }
 }
 
@@ -148,7 +167,496 @@ struct DescriptorAgentAdapter: AgentAdapter {
 }
 
 func builtInAgentAdapters() -> [any AgentAdapter] {
-    builtInAgentMetadata().map(DescriptorAgentAdapter.init(metadata:))
+    let metadata = builtInAgentMetadata()
+    let indexed = Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
+    return [
+        CodexAgentAdapter(metadata: indexed[.codex]!),
+        ClaudeCodeAgentAdapter(metadata: indexed[.claudeCode]!),
+        DescriptorAgentAdapter(metadata: indexed[.cursor]!),
+        DescriptorAgentAdapter(metadata: indexed[.zcode]!),
+        DescriptorAgentAdapter(metadata: indexed[.pi]!),
+    ]
+}
+
+func claudeAttentionReason(
+    for interactionKind: ClaudePermissionInteractionKind
+) -> AttentionReason {
+    switch interactionKind {
+    case .toolApproval: return .permission
+    case .askUserQuestion: return .question
+    case .exitPlanMode: return .planApproval
+    }
+}
+
+struct CodexAgentAdapter: AgentAdapter {
+    let metadata: AgentMetadata
+    private let readCollection: () -> TaskProgressCollectionSnapshot
+    private let discoveryProvider: () -> AgentDiscovery
+    private let openURL: (URL) -> Bool
+
+    init(
+        metadata: AgentMetadata? = builtInAgentMetadata().first {
+            $0.id == .codex
+        },
+        reader: CodexTaskProgressReader = CodexTaskProgressReader(),
+        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider {
+            locateCodexExecutable()
+        },
+        openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) {
+        self.init(
+            metadata: metadata,
+            readCollection: { reader.readCollection() },
+            discovery: discovery,
+            openURL: openURL
+        )
+    }
+
+    init(
+        metadata: AgentMetadata? = builtInAgentMetadata().first {
+            $0.id == .codex
+        },
+        readCollection: @escaping () -> TaskProgressCollectionSnapshot,
+        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider {
+            locateCodexExecutable()
+        },
+        openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) {
+        self.metadata = metadata!
+        self.readCollection = readCollection
+        discoveryProvider = discovery
+        self.openURL = openURL
+    }
+
+    func discover() -> AgentDiscovery {
+        discoveryProvider()
+    }
+
+    func observe() throws -> AgentObservation {
+        observation(
+            from: readCollection().items,
+            permissionQueue: .empty
+        )
+    }
+
+    func readTaskProgressCollection() -> TaskProgressCollectionSnapshot {
+        readCollection()
+    }
+
+    func open(session: AgentSessionSnapshot) -> OpenResult {
+        guard session.identity.agentID == .codex,
+              let url = codexThreadURL(threadID: session.identity.nativeID)
+        else { return .unavailable }
+        // NSWorkspace only confirms dispatch of the deep link. Phase 6 may
+        // upgrade this to exact after independent native-session confirmation.
+        return openURL(url) ? .unknown : .failed
+    }
+
+    func diagnostics() -> AgentDiagnostics {
+        let discovery = discover()
+        return AgentDiagnostics(
+            health: discovery.isInstalled ? .healthy : .unavailable,
+            summary: discovery.isInstalled ? "已发现 Codex" : "未发现 Codex",
+            counters: [:]
+        )
+    }
+}
+
+struct ClaudeCodeAgentAdapter: AgentAdapter {
+    let metadata: AgentMetadata
+    private let readCollection: () -> TaskProgressCollectionSnapshot
+    private let permissionQueue: () -> ClaudePermissionQueueSnapshot
+    private let discoveryProvider: () -> AgentDiscovery
+    private let openTerminal: (ClaudeTerminalOpenRequest) -> OpenResult
+
+    init(
+        metadata: AgentMetadata? = builtInAgentMetadata().first {
+            $0.id == .claudeCode
+        },
+        reader: ClaudeTaskProgressReader = ClaudeTaskProgressReader(),
+        permissionQueue: @escaping () -> ClaudePermissionQueueSnapshot = {
+            .empty
+        },
+        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider {
+            locateClaudeExecutable()
+        },
+        openTerminal: @escaping (ClaudeTerminalOpenRequest) -> OpenResult = {
+            openClaudeTerminal(request: $0)
+        }
+    ) {
+        self.init(
+            metadata: metadata,
+            readCollection: { reader.readCollection() },
+            permissionQueue: permissionQueue,
+            discovery: discovery,
+            openTerminal: openTerminal
+        )
+    }
+
+    init(
+        metadata: AgentMetadata? = builtInAgentMetadata().first {
+            $0.id == .claudeCode
+        },
+        readCollection: @escaping () -> TaskProgressCollectionSnapshot,
+        permissionQueue: @escaping () -> ClaudePermissionQueueSnapshot = {
+            .empty
+        },
+        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider {
+            locateClaudeExecutable()
+        },
+        openTerminal: @escaping (ClaudeTerminalOpenRequest) -> OpenResult = {
+            openClaudeTerminal(request: $0)
+        }
+    ) {
+        self.metadata = metadata!
+        self.readCollection = readCollection
+        self.permissionQueue = permissionQueue
+        discoveryProvider = discovery
+        self.openTerminal = openTerminal
+    }
+
+    func discover() -> AgentDiscovery {
+        discoveryProvider()
+    }
+
+    func integrationStatus(in scope: AgentIntegrationScope) -> AgentIntegrationStatus {
+        do {
+            switch try ClaudeHookConfiguration.status(
+                at: claudeSettingsURL(in: scope)
+            ) {
+            case .installed: return .installed
+            case .missing: return .notInstalled
+            case .conflict: return .needsRepair
+            }
+        } catch {
+            return .needsRepair
+        }
+    }
+
+    func installIntegration(
+        in scope: AgentIntegrationScope
+    ) throws -> AgentIntegrationOperationResult {
+        let settingsURL = try claudeSettingsURL(in: scope)
+        let changed = try ClaudeHookConfiguration.install(
+            at: settingsURL,
+            isClaudeAvailable: { discover().isInstalled }
+        )
+        return changed ? .installed : .unchanged
+    }
+
+    func repairIntegration(
+        in scope: AgentIntegrationScope
+    ) throws -> AgentIntegrationOperationResult {
+        let settingsURL = try claudeSettingsURL(in: scope)
+        let changed = try ClaudeHookConfiguration.install(
+            at: settingsURL,
+            isClaudeAvailable: { discover().isInstalled }
+        )
+        return changed ? .repaired : .unchanged
+    }
+
+    func uninstallIntegration(
+        in scope: AgentIntegrationScope
+    ) throws -> AgentIntegrationOperationResult {
+        let changed = try ClaudeHookConfiguration.uninstall(
+            at: claudeSettingsURL(in: scope)
+        )
+        return changed ? .uninstalled : .unchanged
+    }
+
+    func observe() throws -> AgentObservation {
+        observation(
+            from: readCollection().items,
+            permissionQueue: permissionQueue()
+        )
+    }
+
+    func readTaskProgressCollection() -> TaskProgressCollectionSnapshot {
+        readCollection()
+    }
+
+    func open(session: AgentSessionSnapshot) -> OpenResult {
+        guard session.identity.agentID == .claudeCode else {
+            return .unavailable
+        }
+        return openTerminal(ClaudeTerminalOpenRequest(
+            sessionID: session.identity.nativeID,
+            workingDirectory: session.workingDirectory,
+            processID: session.identity.processID,
+            processStartIdentity: session.identity.processStartIdentity
+        ))
+    }
+
+    func diagnostics() -> AgentDiagnostics {
+        let discovery = discover()
+        return AgentDiagnostics(
+            health: discovery.isInstalled ? .healthy : .unavailable,
+            summary: discovery.isInstalled ? "已发现 Claude Code" : "未发现 Claude Code",
+            counters: [:]
+        )
+    }
+}
+
+private func claudeSettingsURL(
+    in scope: AgentIntegrationScope
+) throws -> URL {
+    try scope.managedURL(relativePath: ".claude/settings.json")
+}
+
+private extension AgentAdapter {
+    func observation(
+        from items: [TaskProgressItem],
+        permissionQueue: ClaudePermissionQueueSnapshot
+    ) -> AgentObservation {
+        let adapterVersion = discover().version ?? "unknown"
+        let snapshots = items.compactMap {
+            agentSessionSnapshot(
+                from: $0,
+                metadata: metadata,
+                permissionQueue: permissionQueue,
+                adapterVersion: adapterVersion
+            )
+        }.sorted(by: agentSnapshotIsOrderedBefore)
+        return AgentObservation(events: [], snapshots: snapshots)
+    }
+}
+
+func agentSessionSnapshot(
+    from item: TaskProgressItem,
+    metadata: AgentMetadata,
+    permissionQueue: ClaudePermissionQueueSnapshot = .empty,
+    adapterVersion: String = "unknown"
+) -> AgentSessionSnapshot? {
+    guard item.source == metadata.id,
+          let nativeID = item.threadID ?? item.sessionID
+    else { return nil }
+    let queueReasons = claudeQueueReasons(permissionQueue)
+    let reason = queueReasons[item.sessionID?.lowercased() ?? ""]
+        ?? normalizedAttentionReason(for: item)
+    let actionability = normalizedActionability(
+        for: item,
+        agentID: metadata.id,
+        reason: reason
+    )
+    return AgentSessionSnapshot(
+        identity: AgentSessionIdentity(
+            agentID: metadata.id,
+            nativeID: nativeID,
+            processID: item.processID,
+            processStartIdentity: item.processStartIdentity
+        ),
+        adapterVersion: adapterVersion,
+        executionState: normalizedExecutionState(for: item.kind),
+        attentionReason: reason,
+        actionability: actionability,
+        evidenceQuality: .nativeState,
+        freshness: Freshness(
+            observedAt: item.updatedAt,
+            expiresAt: item.kind.isActive
+                ? item.updatedAt.addingTimeInterval(30 * 60)
+                : nil
+        ),
+        title: item.title,
+        activitySummary: item.activityText,
+        workingDirectory: item.workingDirectory,
+        latestEventID: "snapshot:\(item.identityKey):\(Int64(item.updatedAt.timeIntervalSince1970 * 1_000))",
+        updatedAt: item.updatedAt
+    )
+}
+
+private func normalizedAttentionReason(
+    for item: TaskProgressItem
+) -> AttentionReason {
+    switch item.kind {
+    case .waitingForInput:
+        if item.statusOverride == "已阻塞" { return .blocked }
+        return .question
+    case .completed:
+        return .reviewReady
+    case .failed:
+        return .taskFailure
+    case .reading, .running, .idle:
+        return .none
+    }
+}
+
+private func normalizedActionability(
+    for item: TaskProgressItem,
+    agentID: AgentID,
+    reason: AttentionReason
+) -> Actionability {
+    if agentID == .claudeCode,
+       [.permission, .question, .planApproval].contains(reason) {
+        return .inApp
+    }
+    if item.canOpen { return .openExactNativeSession }
+    if item.workingDirectory != nil { return .openWorkingDirectory }
+    return .viewOnly
+}
+
+private func claudeQueueReasons(
+    _ queue: ClaudePermissionQueueSnapshot
+) -> [String: AttentionReason] {
+    let entries = [queue.current].compactMap { $0 } + queue.pending
+    var result: [String: AttentionReason] = [:]
+    for entry in entries {
+        guard let sessionID = entry.sessionID?.lowercased() else { continue }
+        let reason = claudeAttentionReason(for: entry.interactionKind)
+        if result[sessionID] == nil {
+            result[sessionID] = reason
+        }
+    }
+    return result
+}
+
+private func normalizedExecutionState(
+    for kind: TaskProgressKind
+) -> ExecutionState {
+    switch kind {
+    case .reading: return .discovering
+    case .running, .waitingForInput: return .running
+    case .completed: return .completed
+    case .failed: return .failed
+    case .idle: return .idle
+    }
+}
+
+private func localAgentDiscovery(executableURL: URL?) -> AgentDiscovery {
+    guard let executableURL else {
+        return AgentDiscovery(
+            isInstalled: false,
+            version: nil,
+            compatibility: .unknown
+        )
+    }
+    return AgentDiscovery(
+        isInstalled: true,
+        version: localAgentVersion(executableURL: executableURL),
+        compatibility: .supported
+    )
+}
+
+private final class LocalAgentDiscoveryCache {
+    private let lock = NSLock()
+    private let executableLocator: () -> URL?
+    private var cached: AgentDiscovery?
+
+    init(executableLocator: @escaping () -> URL?) {
+        self.executableLocator = executableLocator
+    }
+
+    func read() -> AgentDiscovery {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached { return cached }
+        let discovery = localAgentDiscovery(
+            executableURL: executableLocator()
+        )
+        cached = discovery
+        return discovery
+    }
+}
+
+private func makeLocalAgentDiscoveryProvider(
+    _ executableLocator: @escaping () -> URL?
+) -> () -> AgentDiscovery {
+    let cache = LocalAgentDiscoveryCache(
+        executableLocator: executableLocator
+    )
+    return { cache.read() }
+}
+
+private func localAgentVersion(executableURL: URL) -> String? {
+    let process = Process()
+    let stdout = Pipe()
+    process.executableURL = executableURL
+    process.arguments = ["--version"]
+    process.standardOutput = stdout
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+    let capture = captureProcessOutput(
+        process: process,
+        output: stdout.fileHandleForReading,
+        timeout: 2,
+        maximumOutputBytes: 4_096
+    )
+    guard capture.termination == .exited,
+          let value = String(data: capture.data, encoding: .utf8)?
+            .split(whereSeparator: \Character.isNewline)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+          !value.isEmpty
+    else { return nil }
+    return String(value.prefix(128))
+}
+
+func normalizedBuiltInAgentState(
+    collection: TaskProgressCollectionSnapshot,
+    permissionQueue: ClaudePermissionQueueSnapshot,
+    registry: AgentRegistry = .builtIn
+) -> (snapshots: [AgentSessionSnapshot], attentionItems: [AgentAttentionItem]) {
+    var snapshots: [AgentSessionSnapshot] = collection.items.compactMap {
+        item -> AgentSessionSnapshot? in
+        guard let metadata = registry.metadata(for: item.source) else {
+            return nil
+        }
+        return agentSessionSnapshot(
+            from: item,
+            metadata: metadata,
+            permissionQueue: permissionQueue
+        )
+    }
+    let existingClaudeSessionIDs = Set(snapshots.compactMap {
+        $0.identity.agentID == .claudeCode
+            ? $0.identity.nativeID.lowercased()
+            : nil
+    })
+    let queueEntries = [permissionQueue.current].compactMap { $0 }
+        + permissionQueue.pending
+    var synthesizedSessionIDs = existingClaudeSessionIDs
+    for entry in queueEntries {
+        let nativeID = entry.sessionID?.lowercased()
+            ?? "request-\(entry.requestID.uuidString.lowercased())"
+        guard synthesizedSessionIDs.insert(nativeID).inserted else { continue }
+        let reason = claudeAttentionReason(for: entry.interactionKind)
+        snapshots.append(AgentSessionSnapshot(
+            identity: AgentSessionIdentity(
+                agentID: .claudeCode,
+                nativeID: nativeID
+            ),
+            adapterVersion: "unknown",
+            executionState: .running,
+            attentionReason: reason,
+            actionability: .inApp,
+            evidenceQuality: .officialHook,
+            freshness: Freshness(
+                observedAt: entry.arrivedAt,
+                expiresAt: nil
+            ),
+            title: entry.title,
+            activitySummary: nil,
+            workingDirectory: nil,
+            latestEventID: "permission:\(entry.requestID.uuidString.lowercased())",
+            updatedAt: entry.arrivedAt
+        ))
+    }
+    snapshots.sort(by: agentSnapshotIsOrderedBefore)
+    let attentionItems = snapshots.compactMap { snapshot -> AgentAttentionItem? in
+        guard snapshot.attentionReason != .none else { return nil }
+        return AgentAttentionItem(
+            identity: snapshot.identity,
+            reason: snapshot.attentionReason,
+            actionability: snapshot.actionability,
+            evidenceQuality: snapshot.evidenceQuality,
+            updatedAt: snapshot.updatedAt,
+            isInterrupting: snapshot.attentionReason.isInterrupting
+        )
+    }
+    return (snapshots, attentionItems)
 }
 
 func builtInAgentMetadata() -> [AgentMetadata] {

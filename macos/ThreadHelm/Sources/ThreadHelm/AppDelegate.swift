@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let quotaProviderPreference = QuotaProviderPreference()
     private let healthWriter = RuntimeHealthWriter()
     private let dashboardStore = ActivityDashboardStore()
+    private let agentRegistry = AgentRegistry.builtIn
     private var claudePermissionCoordinator: ClaudePermissionCoordinator!
     private var dynamicIslandController: DynamicIslandWindowController!
     private var dynamicIslandConfirmationPresenter:
@@ -198,7 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.hidePanelByUser()
         }
         controller.onOpenTask = { [weak self] item in
-            self?.openTask(item)
+            self?.openTask(item) ?? .failed
         }
         controller.onCopyWorkingDirectory = { [weak self] path in
             self?.copyWorkingDirectoryToPasteboard(path) ?? false
@@ -398,7 +399,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.openTerminalForClaudePermission(prompt)
             },
             onQueueChange: { [weak self] queue in
-                self?.dashboardStore.update { $0.permissionQueue = queue }
+                guard let self else { return }
+                self.dashboardStore.update { snapshot in
+                    snapshot.permissionQueue = queue
+                    let normalized = normalizedBuiltInAgentState(
+                        collection: snapshot.taskCollection,
+                        permissionQueue: queue,
+                        registry: self.agentRegistry
+                    )
+                    snapshot.agentSnapshots = normalized.snapshots
+                    snapshot.attentionItems = normalized.attentionItems
+                }
             }
         )
         let server = ClaudePermissionHookServer()
@@ -463,7 +474,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             for: prompt,
             taskItems: dashboardStore.snapshot.taskCollection.items
         )
-        if openClaudeTerminal(request: request) {
+        let result = openClaudeTerminal(request: request)
+        if result == .exactSession
+            || result == .workingDirectoryFallback
+            || result == .appFocused
+        {
             return
         }
         // A generic activation can expose an unrelated tab. It is only safe
@@ -679,24 +694,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshQuota(provider: provider)
     }
 
-    private func openTask(_ item: TaskProgressItem) {
-        if item.source == .codex {
-            guard let threadID = item.threadID,
-                  let url = codexThreadURL(threadID: threadID)
-            else { return }
-            NSWorkspace.shared.open(url)
-            return
-        }
+    private func openTask(_ item: TaskProgressItem) -> OpenResult {
         if item.source == .claudeCode {
             if claudePermissionCoordinator?
                 .handoffToTerminalIfPresenting(item) == true
             {
-                return
+                return .unknown
             }
-            openClaudeTerminal(
-                request: claudeTerminalOpenRequest(for: item)
-            )
         }
+        guard let adapter = agentRegistry.adapter(for: item.source),
+              let snapshot = agentSessionSnapshot(
+                  from: item,
+                  metadata: adapter.metadata,
+                  permissionQueue: dashboardStore.snapshot.permissionQueue
+              )
+        else { return .unavailable }
+        return adapter.open(session: snapshot)
     }
 
     private func copyWorkingDirectoryToPasteboard(_ path: String) -> Bool {
@@ -766,6 +779,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard shouldApply else { return }
                 self.dashboardStore.update {
                     $0.taskCollection = collection
+                    let normalized = normalizedBuiltInAgentState(
+                        collection: collection,
+                        permissionQueue: $0.permissionQueue,
+                        registry: self.agentRegistry
+                    )
+                    $0.agentSnapshots = normalized.snapshots
+                    $0.attentionItems = normalized.attentionItems
                     $0.isTaskRefreshing = false
                 }
                 // 终端里直接回答后 Claude 不会关闭 hook 连接，靠这次刷新的会话

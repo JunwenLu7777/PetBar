@@ -86,6 +86,7 @@ enum AgentEventReducer {
             freshness: event.freshness,
             title: event.title,
             activitySummary: event.activitySummary,
+            workingDirectory: event.workingDirectory,
             latestEventID: event.eventID,
             updatedAt: event.observedAt
         )

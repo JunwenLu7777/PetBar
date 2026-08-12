@@ -64,7 +64,7 @@ final class DynamicIslandTaskViewController:
     NSTableViewDataSource,
     NSTableViewDelegate
 {
-    var onOpenTask: ((TaskProgressItem) -> Void)?
+    var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onSelectedTaskKeyChange: ((String?) -> Void)?
 
@@ -154,6 +154,7 @@ final class DynamicIslandTaskViewController:
     private var displayedEvents: [TaskActivityEvent] = []
     private var trackingArea: NSTrackingArea?
     private var copyFeedbackWorkItem: DispatchWorkItem?
+    private var openFeedbackWorkItem: DispatchWorkItem?
 
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 820, height: 560))
@@ -448,7 +449,15 @@ final class DynamicIslandTaskViewController:
 
     @objc private func openSelectedTask() {
         guard let selectedItem, selectedItem.canOpen else { return }
-        onOpenTask?(selectedItem)
+        guard let result = onOpenTask?(selectedItem) else { return }
+        openFeedbackWorkItem?.cancel()
+        openButton.setDisplayTitle(result.feedbackTitle)
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, let item = self.selectedItem else { return }
+            self.openButton.setDisplayTitle(item.openButtonTitle)
+        }
+        openFeedbackWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8, execute: workItem)
     }
 
     @objc private func copySelectedWorkingDirectory() {

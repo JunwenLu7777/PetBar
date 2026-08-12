@@ -255,10 +255,43 @@ func claudeTerminalOpenRequest(
     )
 }
 
+func claudeTerminalOpenResult(
+    for request: ClaudeTerminalOpenRequest,
+    focusProcess: (Int32, String) -> OpenResult,
+    resumeSession: (String, String) -> Bool,
+    focusWorkingDirectory: (String) -> Bool
+) -> OpenResult {
+    let plan = claudeTerminalNavigationPlan(for: request)
+    guard !plan.isEmpty else { return .unavailable }
+    for action in plan {
+        switch action {
+        case .focusProcess(let processID, let processStartIdentity):
+            let result = focusProcess(processID, processStartIdentity)
+            switch result {
+            case .exactSession, .appFocused, .workingDirectoryFallback, .unknown:
+                return result
+            case .unavailable, .failed, .notAttempted:
+                continue
+            }
+        case .resumeSession(let sessionID, let workingDirectory):
+            if resumeSession(sessionID, workingDirectory) {
+                // Launching `claude --resume` proves the request was sent, not
+                // that the terminal landed in the expected native session.
+                return .unknown
+            }
+        case .focusWorkingDirectory(let workingDirectory):
+            if focusWorkingDirectory(workingDirectory) {
+                return .workingDirectoryFallback
+            }
+        }
+    }
+    return .failed
+}
+
 @discardableResult
 func openClaudeTerminal(
     request: ClaudeTerminalOpenRequest
-) -> Bool {
+) -> OpenResult {
     let currentRequest: ClaudeTerminalOpenRequest
     if let sessionID = request.sessionID {
         currentRequest = refreshedClaudeTerminalOpenRequest(
@@ -270,31 +303,24 @@ func openClaudeTerminal(
     } else {
         currentRequest = request
     }
-    for action in claudeTerminalNavigationPlan(for: currentRequest) {
-        switch action {
-        case .focusProcess(let processID, let processStartIdentity):
-            if focusExistingClaudeTerminal(
+    return claudeTerminalOpenResult(
+        for: currentRequest,
+        focusProcess: { processID, processStartIdentity in
+            focusExistingClaudeTerminal(
                 processID: processID,
                 processStartIdentity: processStartIdentity
-            ) {
-                return true
-            }
-        case .resumeSession(let sessionID, let workingDirectory):
-            if openClaudeSession(
+            )
+        },
+        resumeSession: { sessionID, workingDirectory in
+            openClaudeSession(
                 sessionID: sessionID,
                 workingDirectory: workingDirectory
-            ) {
-                return true
-            }
-        case .focusWorkingDirectory(let workingDirectory):
-            if focusExistingClaudeTerminal(
-                workingDirectory: workingDirectory
-            ) {
-                return true
-            }
+            )
+        },
+        focusWorkingDirectory: { workingDirectory in
+            focusExistingClaudeTerminal(workingDirectory: workingDirectory)
         }
-    }
-    return false
+    )
 }
 
 struct TaskProgressSnapshot: Equatable {

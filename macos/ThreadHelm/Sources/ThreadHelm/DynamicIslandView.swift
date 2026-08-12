@@ -738,7 +738,7 @@ final class DynamicIslandRootViewController: NSViewController {
     var onTabChange: ((DynamicIslandTab) -> Void)?
     var onSourceFilterChange: ((TaskSourceFilter) -> Void)?
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
-    var onOpenTask: ((TaskProgressItem) -> Void)?
+    var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onSelectedTaskKeyChange: ((String?) -> Void)?
 
@@ -780,7 +780,7 @@ final class DynamicIslandRootViewController: NSViewController {
             self?.onQuotaProviderChange?(provider)
         }
         workspaceController.onOpenTask = { [weak self] item in
-            self?.onOpenTask?(item)
+            self?.onOpenTask?(item) ?? .failed
         }
         workspaceController.onCopyWorkingDirectory = { [weak self] path in
             self?.onCopyWorkingDirectory?(path) ?? false
@@ -1321,7 +1321,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     var onTabChange: ((DynamicIslandTab) -> Void)?
     var onSourceFilterChange: ((TaskSourceFilter) -> Void)?
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
-    var onOpenTask: ((TaskProgressItem) -> Void)?
+    var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onSelectedTaskKeyChange: ((String?) -> Void)?
     var selectedTaskKey: String?
@@ -1428,7 +1428,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         placeholderField.setAccessibilityLabel("共享展开工作台内容")
         statusField.setAccessibilityLabel("当前活动状态")
         taskController.onOpenTask = { [weak self] item in
-            self?.onOpenTask?(item)
+            self?.onOpenTask?(item) ?? .failed
         }
         taskController.onCopyWorkingDirectory = { [weak self] path in
             self?.onCopyWorkingDirectory?(path) ?? false

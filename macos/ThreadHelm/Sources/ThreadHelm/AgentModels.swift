@@ -273,6 +273,39 @@ enum OpenResult: String, Codable, Equatable {
     case unknown
 }
 
+extension OpenResult {
+    var feedbackTitle: String {
+        switch self {
+        case .exactSession: return "已打开会话"
+        case .appFocused: return "已打开应用"
+        case .workingDirectoryFallback: return "仅打开目录"
+        case .unavailable: return "不可打开"
+        case .failed: return "打开失败"
+        case .notAttempted: return "未尝试打开"
+        case .unknown: return "已尝试恢复"
+        }
+    }
+
+    var feedbackDescription: String {
+        switch self {
+        case .exactSession:
+            return "已返回同一个原生会话"
+        case .appFocused:
+            return "只打开了原生应用，未确认具体会话"
+        case .workingDirectoryFallback:
+            return "只打开了工作目录，不是原来的精确会话"
+        case .unavailable:
+            return "当前没有安全可用的打开方式"
+        case .failed:
+            return "已经尝试打开，但操作失败"
+        case .notAttempted:
+            return "没有执行打开操作"
+        case .unknown:
+            return "已发起打开，但尚未确认是否回到原会话"
+        }
+    }
+}
+
 struct AgentEvent: Codable, Equatable {
     let identity: AgentSessionIdentity
     let adapterVersion: String
@@ -288,6 +321,7 @@ struct AgentEvent: Codable, Equatable {
     let freshness: Freshness
     let title: String
     let activitySummary: String?
+    let workingDirectory: String?
 }
 
 struct AgentSessionSnapshot: Codable, Equatable {
@@ -300,6 +334,7 @@ struct AgentSessionSnapshot: Codable, Equatable {
     let freshness: Freshness
     let title: String
     let activitySummary: String?
+    let workingDirectory: String?
     let latestEventID: String
     let updatedAt: Date
 }

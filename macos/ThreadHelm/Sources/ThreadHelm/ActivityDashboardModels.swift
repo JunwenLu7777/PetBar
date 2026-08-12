@@ -256,6 +256,8 @@ struct ActivityDashboardSnapshot: Equatable {
     var availableAgentIDs: [AgentID] = AgentID.builtInOrder
     var selectedQuotaProvider: QuotaProvider = .codex
     var permissionQueue = ClaudePermissionQueueSnapshot.empty
+    var agentSnapshots: [AgentSessionSnapshot] = []
+    var attentionItems: [AgentAttentionItem] = []
     var acknowledgedTerminalTaskKeys = Set<String>()
     var isTaskRefreshing = false
     var codexDesktopRunning = false

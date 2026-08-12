@@ -628,12 +628,12 @@ func executeAppleScriptReturningBoolean(_ source: String) -> Bool {
 func focusExistingClaudeTerminal(
     processID: Int32,
     processStartIdentity: String
-) -> Bool {
+) -> OpenResult {
     guard isLiveClaudeProcess(processID),
           currentProcessStartIdentity(forProcessID: processID)
             == processStartIdentity,
           let hostApplication = terminalHostApplication(forProcessID: processID)
-    else { return false }
+    else { return .failed }
 
     let source: String?
     switch claudeTerminalFocusStrategy(
@@ -641,27 +641,27 @@ func focusExistingClaudeTerminal(
     ) {
     case .selectOttyTTY:
         guard let tty = controllingTTY(forProcessID: processID) else {
-            return false
+            return .failed
         }
         source = ottyFocusScript(tty: tty)
     case .selectITermTTY:
         guard let tty = controllingTTY(forProcessID: processID) else {
-            return false
+            return .failed
         }
         source = iTerm2FocusScript(tty: tty)
     case .selectTerminalTTY:
         guard let tty = controllingTTY(forProcessID: processID) else {
-            return false
+            return .failed
         }
         source = terminalFocusScript(tty: tty)
     case .activateHostApplication:
         return hostApplication.activate(options: [
             .activateAllWindows,
             .activateIgnoringOtherApps,
-        ])
+        ]) ? .appFocused : .failed
     }
-    guard let source else { return false }
-    return executeAppleScriptReturningBoolean(source)
+    guard let source else { return .failed }
+    return executeAppleScriptReturningBoolean(source) ? .exactSession : .failed
 }
 
 func focusExistingClaudeTerminal(workingDirectory: String) -> Bool {

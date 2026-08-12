@@ -14,7 +14,7 @@ final class DynamicIslandWindowController {
     private(set) var targetDisplayID: CGDirectDisplayID?
     private(set) var isAnimating = false
 
-    var onOpenTask: ((TaskProgressItem) -> Void)?
+    var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onRequestHide: (() -> Void)?
     var onRefresh: (() -> Void)?
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
@@ -91,7 +91,7 @@ final class DynamicIslandWindowController {
             self?.onQuotaProviderChange?(provider)
         }
         rootController.onOpenTask = { [weak self] item in
-            self?.onOpenTask?(item)
+            self?.onOpenTask?(item) ?? .failed
         }
         rootController.onCopyWorkingDirectory = { [weak self] path in
             return self?.copyWorkingDirectory(path) ?? false
