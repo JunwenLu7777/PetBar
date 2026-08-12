@@ -64,7 +64,7 @@ func printClaudeQuotaOnce() -> Never {
 func printPanelConfiguration() -> Never {
     print(
         "panel-config: version=\(panelVersion) "
-            + "edition=\(panelEdition) petID=\(chatBirdPetID) "
+            + "edition=\(panelEdition) productID=\(threadHelmProductID) "
             + "codexWeeklyQuotaOnly=true "
             + "claudeQuotaPeriods=5h,weekly,fable "
             + "width=\(Int(expandedPanelSize.width)) "

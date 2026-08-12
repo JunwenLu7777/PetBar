@@ -71,7 +71,7 @@ func runNativeNotificationStateSelfTest() -> Never {
     let concurrentStopStarted = DispatchSemaphore(value: 0)
     let concurrentStopFinished = DispatchSemaphore(value: 0)
     let concurrentQueue = DispatchQueue(
-        label: "\(chatBirdBundleIdentifier).native-activity-self-test"
+        label: "\(threadHelmBundleIdentifier).native-activity-self-test"
     )
     let concurrentMonitor = NativeActivityPillSuppressionMonitor(
         interval: 60,

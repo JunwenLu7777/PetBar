@@ -45,14 +45,21 @@ func runLifecycleSelfTest() -> Never {
             expected: true
         ),
         DesktopCase(
-            bundleIdentifier: chatBirdBundleIdentifier,
+            bundleIdentifier: threadHelmBundleIdentifier,
+            localizedName: "ThreadHelm",
+            bundlePath: "/Applications/ThreadHelm.app",
+            activationPolicy: .regular,
+            expected: false
+        ),
+        DesktopCase(
+            bundleIdentifier: legacyThreadHelmBundleIdentifiers[0],
             localizedName: "ChatBird",
             bundlePath: "/Applications/ChatBird.app",
             activationPolicy: .regular,
             expected: false
         ),
         DesktopCase(
-            bundleIdentifier: legacyChatBirdBundleIdentifier,
+            bundleIdentifier: legacyThreadHelmBundleIdentifiers[1],
             localizedName: "ChatBird 额度面板",
             bundlePath: "/Applications/ChatBird 额度面板.app",
             activationPolicy: .accessory,
@@ -230,38 +237,45 @@ func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
-    let preferenceSuite = "chatbird-app-migration-\(UUID().uuidString)"
+    let preferenceSuite = "threadhelm-app-migration-\(UUID().uuidString)"
     guard let migratedDefaults = UserDefaults(suiteName: preferenceSuite) else {
         exit(1)
     }
     defer { migratedDefaults.removePersistentDomain(forName: preferenceSuite) }
-    migratedDefaults.set(true, forKey: "pet-enabled")
-    let migratedKeys = migrateLegacyChatBirdPreferences(
+    migratedDefaults.set(
+        QuotaProvider.codex.rawValue,
+        forKey: "selected-quota-provider"
+    )
+    let migratedKeys = migrateLegacyThreadHelmPreferences(
         from: [
-            "presentation-mode": PresentationMode.dynamicIsland.rawValue,
-            "pet-enabled": false,
-            "selected-quota-provider": QuotaProvider.claudeCode.rawValue,
-            "chatbird-pet-origin": [120.0, 240.0],
-            "unrelated-value": "must-not-migrate",
+            [
+                "presentation-mode": PresentationMode.dynamicIsland.rawValue,
+                "pet-enabled": false,
+                "selected-quota-provider": QuotaProvider.claudeCode.rawValue,
+                "chatbird-pet-origin": [120.0, 240.0],
+                "unrelated-value": "must-not-migrate",
+            ],
+            [
+                "selected-quota-provider": QuotaProvider.claudeCode.rawValue,
+            ],
         ],
         to: migratedDefaults
     )
-    guard chatBirdBundleIdentifier == "dev.chatbird.app",
-          chatBirdLaunchAgentLabel == chatBirdBundleIdentifier,
-          legacyChatBirdBundleIdentifier == "dev.chatbird.codex-quota-panel",
-          Set(migratedKeys) == [
-              "presentation-mode",
-              "selected-quota-provider",
-              "chatbird-pet-origin",
+    guard threadHelmBundleIdentifier == "dev.threadhelm.app",
+          threadHelmLaunchAgentLabel == threadHelmBundleIdentifier,
+          legacyThreadHelmBundleIdentifiers == [
+              "dev.chatbird.app",
+              "dev.chatbird.codex-quota-panel",
           ],
-          migratedDefaults.bool(forKey: "pet-enabled"),
-          PresentationModePreference(defaults: migratedDefaults).mode
-            == .dynamicIsland,
+          migratedKeys.isEmpty,
+          migratedDefaults.object(forKey: "presentation-mode") == nil,
+          migratedDefaults.object(forKey: "pet-enabled") == nil,
+          migratedDefaults.object(forKey: "chatbird-pet-origin") == nil,
           QuotaProviderPreference(defaults: migratedDefaults).selectedProvider
-            == .claudeCode,
+            == .codex,
           migratedDefaults.object(forKey: "unrelated-value") == nil
     else {
-        fputs("standalone app identity or preference migration failed\n", stderr)
+        fputs("ThreadHelm identity or preference migration failed\n", stderr)
         exit(1)
     }
 

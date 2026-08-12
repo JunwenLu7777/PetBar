@@ -228,7 +228,7 @@ final class RuntimeHealthWriter {
         var payload: [String: Any] = [
             "version": panelVersion,
             "edition": panelEdition,
-            "petID": chatBirdPetID,
+            "productID": threadHelmProductID,
             "pid": ProcessInfo.processInfo.processIdentifier,
             "status": status,
             "panelVisible": panelVisible,
@@ -269,7 +269,7 @@ final class RuntimeHealthWriter {
         }
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(
-                "Library/Caches/\(chatBirdBundleIdentifier)/panel-health.json"
+                "Library/Caches/\(threadHelmBundleIdentifier)/panel-health.json"
             )
     }
 }

@@ -61,8 +61,8 @@ if CommandLine.arguments.contains("--self-test-task-progress") {
     runTaskProgressSelfTest()
 }
 
-if CommandLine.arguments.contains("--self-test-chatbird-edition") {
-    runChatBirdEditionSelfTest()
+if CommandLine.arguments.contains("--self-test-threadhelm-edition") {
+    runThreadHelmEditionSelfTest()
 }
 
 if CommandLine.arguments.contains("--self-test-weekly-quota") {

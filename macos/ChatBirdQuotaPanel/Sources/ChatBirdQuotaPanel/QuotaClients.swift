@@ -764,7 +764,7 @@ final class ClaudeQuotaClient {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Caches", isDirectory: true)
             .appendingPathComponent(
-                chatBirdBundleIdentifier,
+                threadHelmBundleIdentifier,
                 isDirectory: true
             )
             .appendingPathComponent("ClaudeProbe", isDirectory: true)

@@ -100,7 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var nativeActivityPillSuppressionMonitor: NativeActivityPillSuppressionMonitor = {
         let suppressor = NativeActivityPillSuppressor()
         let queue = DispatchQueue(
-            label: "\(chatBirdBundleIdentifier).native-activity",
+            label: "\(threadHelmBundleIdentifier).native-activity",
             qos: .utility
         )
         return NativeActivityPillSuppressionMonitor(
@@ -123,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        migrateLegacyChatBirdPreferencesIfNeeded()
+        migrateLegacyThreadHelmPreferencesIfNeeded()
         NSApp.applicationIconImage = makeChatBirdDockIcon()
         NSApp.setActivationPolicy(.regular)
         let availableProviders = synchronizeQuotaProviderAvailability()

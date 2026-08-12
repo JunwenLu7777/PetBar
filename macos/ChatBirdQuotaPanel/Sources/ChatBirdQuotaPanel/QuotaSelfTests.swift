@@ -2,7 +2,7 @@
 //  QuotaSelfTests.swift
 //  ChatBirdQuotaPanel
 //
-//  模块职责：额度相关自测——--self-test-chatbird-edition（独立 App 身份）、
+//  模块职责：额度相关自测——--self-test-threadhelm-edition（独立 App 身份）、
 //  --self-test-weekly-quota（周额度窗口选择/阈值/重置额度/失败文案）、
 //  --self-test-claude-quota（Claude 解析器/提供者切换/可执行文件定位/
 //  任务来源过滤）。
@@ -14,18 +14,21 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-func runChatBirdEditionSelfTest() -> Never {
-    guard chatBirdBundleIdentifier == "dev.chatbird.app",
-          chatBirdLaunchAgentLabel == chatBirdBundleIdentifier,
-          legacyChatBirdBundleIdentifier == "dev.chatbird.codex-quota-panel",
-          panelEdition == "chatbird-nt",
-          chatBirdPetID == "chatbird-nt"
+func runThreadHelmEditionSelfTest() -> Never {
+    guard threadHelmBundleIdentifier == "dev.threadhelm.app",
+          threadHelmLaunchAgentLabel == threadHelmBundleIdentifier,
+          legacyThreadHelmBundleIdentifiers == [
+              "dev.chatbird.app",
+              "dev.chatbird.codex-quota-panel",
+          ],
+          panelEdition == "threadhelm",
+          threadHelmProductID == "threadhelm"
     else {
-        fputs("ChatBird edition identity self-test failed\n", stderr)
+        fputs("ThreadHelm edition identity self-test failed\n", stderr)
         exit(1)
     }
 
-    print("chatbird-edition-self-test: edition=chatbird-nt app-id=dev.chatbird.app pet=standalone")
+    print("threadhelm-edition-self-test: edition=threadhelm app-id=dev.threadhelm.app product=standalone")
     exit(0)
 }
 
