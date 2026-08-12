@@ -596,6 +596,22 @@ func dynamicIslandCapsulePresentation(
     }) {
         return taskModel(item, style: .indeterminate)
     }
+    if let item = snapshot.taskCollection.items.first(where: {
+        guard $0.kind == .failed,
+              let key = terminalTaskAcknowledgementKey(for: $0)
+        else { return false }
+        return !snapshot.acknowledgedTerminalTaskKeys.contains(key)
+    }) {
+        return taskModel(item, style: .failed)
+    }
+    if let item = snapshot.taskCollection.items.first(where: {
+        guard $0.kind == .completed,
+              let key = terminalTaskAcknowledgementKey(for: $0)
+        else { return false }
+        return !snapshot.acknowledgedTerminalTaskKeys.contains(key)
+    }) {
+        return taskModel(item, style: .completed)
+    }
     if snapshot.codexDesktopRunning
         || snapshot.availableProviders.contains(.claudeCode)
     {
@@ -634,23 +650,6 @@ func dynamicIslandCapsulePresentation(
                 badge: nil
             )
         )
-    }
-
-    if let item = snapshot.taskCollection.items.first(where: {
-        guard $0.kind == .failed,
-              let key = terminalTaskAcknowledgementKey(for: $0)
-        else { return false }
-        return !snapshot.acknowledgedTerminalTaskKeys.contains(key)
-    }) {
-        return taskModel(item, style: .failed)
-    }
-    if let item = snapshot.taskCollection.items.first(where: {
-        guard $0.kind == .completed,
-              let key = terminalTaskAcknowledgementKey(for: $0)
-        else { return false }
-        return !snapshot.acknowledgedTerminalTaskKeys.contains(key)
-    }) {
-        return taskModel(item, style: .completed)
     }
 
     return DynamicIslandCapsulePresentation(

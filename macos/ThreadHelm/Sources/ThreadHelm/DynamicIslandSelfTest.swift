@@ -281,19 +281,11 @@ private func assertDynamicIslandCapsulePresentation() {
     }
 
     let failed = dynamicIslandCapsulePresentation(
-        snapshot: snapshot(
-            items: [failedTask, completedTask],
-            codexRunning: false,
-            availableProviders: [.codex]
-        ),
+        snapshot: snapshot(items: [failedTask, completedTask]),
         now: now
     )
     let failedLater = dynamicIslandCapsulePresentation(
-        snapshot: snapshot(
-            items: [failedTask, completedTask],
-            codexRunning: false,
-            availableProviders: [.codex]
-        ),
+        snapshot: snapshot(items: [failedTask, completedTask]),
         now: now.addingTimeInterval(3_600)
     )
     guard failed.title == failedTask.title,
@@ -306,15 +298,15 @@ private func assertDynamicIslandCapsulePresentation() {
         exit(1)
     }
 
-    guard let failedKey = terminalTaskAcknowledgementKey(for: failedTask) else {
+    guard let failedKey = terminalTaskAcknowledgementKey(for: failedTask),
+          let completedKey = terminalTaskAcknowledgementKey(for: completedTask)
+    else {
         exit(1)
     }
     let completed = dynamicIslandCapsulePresentation(
         snapshot: snapshot(
             items: [failedTask, completedTask],
-            acknowledged: [failedKey],
-            codexRunning: false,
-            availableProviders: [.codex]
+            acknowledged: [failedKey]
         ),
         now: now
     )
@@ -327,7 +319,10 @@ private func assertDynamicIslandCapsulePresentation() {
     }
 
     let idle = dynamicIslandCapsulePresentation(
-        snapshot: snapshot(items: [failedTask, completedTask]),
+        snapshot: snapshot(
+            items: [failedTask, completedTask],
+            acknowledged: [failedKey, completedKey]
+        ),
         now: now
     )
     guard idle.title == "ThreadHelm 空闲",
@@ -1415,6 +1410,27 @@ private func assertDynamicIslandPreviewRendering() {
             exit(1)
         }
         try? FileManager.default.removeItem(at: temporaryURL)
+
+        let terminalStates: [DynamicIslandPreviewState] = [
+            .capsuleFailed,
+            .capsuleCompleted,
+            .capsuleIdle,
+        ]
+        var terminalPreviewData: [Data] = []
+        for state in terminalStates {
+            let stateURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "threadhelm-dynamic-island-\(state.rawValue)-self-test.png"
+                )
+            try? FileManager.default.removeItem(at: stateURL)
+            try renderDynamicIslandPreview(state: state, to: stateURL)
+            terminalPreviewData.append(try Data(contentsOf: stateURL))
+            try? FileManager.default.removeItem(at: stateURL)
+        }
+        guard Set(terminalPreviewData).count == terminalStates.count else {
+            fputs("dynamic island terminal capsule previews are identical\n", stderr)
+            exit(1)
+        }
     } catch {
         fputs("dynamic island preview render seam failed: \(error)\n", stderr)
         exit(1)
