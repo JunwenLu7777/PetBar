@@ -1435,6 +1435,19 @@ private func assertDynamicIslandPlacement() {
         exit(1)
     }
 
+    let oddWidthVisible = NSRect(x: -1_135, y: 37, width: 1_135, height: 758)
+    let pixelAlignedCapsule = dynamicIslandFrame(
+        size: dynamicIslandCapsuleSize,
+        visibleFrame: oddWidthVisible,
+        topGap: 6
+    )
+    guard pixelAlignedCapsule.origin.x == -770,
+          abs(pixelAlignedCapsule.midX - oddWidthVisible.midX) == 0.5
+    else {
+        fputs("dynamic island pixel-aligned placement self-test failed\n", stderr)
+        exit(1)
+    }
+
     let expanded = dynamicIslandFrame(
         size: NSSize(width: 820, height: 560),
         visibleFrame: visible,

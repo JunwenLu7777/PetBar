@@ -72,8 +72,10 @@ func dynamicIslandFrame(
         visibleFrame: visibleFrame
     )
     let top = visibleFrame.maxY - topGap
+    // NSWindow normalizes global origins to whole AppKit points. Match that
+    // behavior here so odd-width displays keep a stable, testable snap frame.
     return NSRect(
-        x: visibleFrame.midX - size.width / 2,
+        x: (visibleFrame.midX - size.width / 2).rounded(.down),
         y: top - size.height,
         width: size.width,
         height: size.height
