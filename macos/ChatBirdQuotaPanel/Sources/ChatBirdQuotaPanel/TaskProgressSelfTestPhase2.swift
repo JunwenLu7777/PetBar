@@ -466,6 +466,28 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
         appleScriptEscapedString
     )
     let ottyQuotedResume = ottyResumeScript(command: #"printf "Claude""#)
+    let installedOttyResumePreference = claudeResumeTerminalPreference(
+        runningBundleIdentifiers: [],
+        installedBundleIdentifiers: [
+            "io.appmakes.otty",
+            "com.apple.Terminal",
+        ]
+    )
+    let runningTerminalResumePreference = claudeResumeTerminalPreference(
+        runningBundleIdentifiers: ["com.apple.Terminal"],
+        installedBundleIdentifiers: [
+            "io.appmakes.otty",
+            "com.googlecode.iterm2",
+            "com.apple.Terminal",
+        ]
+    )
+    let installedITermResumePreference = claudeResumeTerminalPreference(
+        runningBundleIdentifiers: [],
+        installedBundleIdentifiers: [
+            "com.googlecode.iterm2",
+            "com.apple.Terminal",
+        ]
+    )
     let terminalTTYFocus = terminalFocusScript(tty: "/dev/ttys003")
     let completedClaudeItem = TaskProgressItem(
         title: "已完成的 Claude 会话",
@@ -563,6 +585,19 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
           ottyQuotedResume.contains("set index of targetWindow to 1"),
           ottyQuotedResume.contains("activate"),
           ottyResumeScript(command: " \n") == nil,
+          installedOttyResumePreference == [
+              "io.appmakes.otty",
+              "com.apple.Terminal",
+          ],
+          runningTerminalResumePreference == [
+              "com.apple.Terminal",
+              "io.appmakes.otty",
+              "com.googlecode.iterm2",
+          ],
+          installedITermResumePreference == [
+              "com.googlecode.iterm2",
+              "com.apple.Terminal",
+          ],
           ottyCompoundResume.contains(
               "set targetTab to do script \"\(escapedCompoundClaudeResumeCommand)\""
           ),

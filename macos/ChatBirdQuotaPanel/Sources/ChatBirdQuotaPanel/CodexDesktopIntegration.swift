@@ -494,6 +494,23 @@ func iTerm2ResumeScript(command: String) -> String? {
     """
 }
 
+func claudeResumeTerminalPreference(
+    runningBundleIdentifiers: Set<String>,
+    installedBundleIdentifiers: Set<String>
+) -> [String] {
+    let priority = [
+        "io.appmakes.otty",
+        "com.googlecode.iterm2",
+        "com.apple.Terminal",
+    ]
+    let running = priority.filter(runningBundleIdentifiers.contains)
+    let installed = priority.filter {
+        !runningBundleIdentifiers.contains($0)
+            && installedBundleIdentifiers.contains($0)
+    }
+    return running + installed
+}
+
 func executeAppleScriptReturningBoolean(_ source: String) -> Bool {
     guard let script = NSAppleScript(source: source) else { return false }
     var error: NSDictionary?
@@ -555,33 +572,61 @@ func openClaudeSession(
         executablePath: executablePath
     ) else { return false }
 
-    if NSRunningApplication.runningApplications(
-        withBundleIdentifier: "io.appmakes.otty"
-    ).isEmpty == false,
-       let source = ottyResumeScript(command: command),
-       executeAppleScriptReturningBoolean(source)
-    {
-        return true
-    }
+    let supportedBundleIdentifiers = [
+        "io.appmakes.otty",
+        "com.googlecode.iterm2",
+        "com.apple.Terminal",
+    ]
+    let runningBundleIdentifiers = Set(
+        supportedBundleIdentifiers.filter {
+            NSRunningApplication.runningApplications(
+                withBundleIdentifier: $0
+            ).isEmpty == false
+        }
+    )
+    let installedBundleIdentifiers = Set(
+        supportedBundleIdentifiers.filter {
+            $0 == "com.apple.Terminal"
+                || NSWorkspace.shared.urlForApplication(
+                    withBundleIdentifier: $0
+                ) != nil
+        }
+    )
 
-    if NSRunningApplication.runningApplications(
-        withBundleIdentifier: "com.googlecode.iterm2"
-    ).isEmpty == false,
-       let source = iTerm2ResumeScript(command: command),
-       executeAppleScriptReturningBoolean(source)
-    {
-        return true
+    for bundleIdentifier in claudeResumeTerminalPreference(
+        runningBundleIdentifiers: runningBundleIdentifiers,
+        installedBundleIdentifiers: installedBundleIdentifiers
+    ) {
+        switch bundleIdentifier {
+        case "io.appmakes.otty":
+            if let source = ottyResumeScript(command: command),
+               executeAppleScriptReturningBoolean(source)
+            {
+                return true
+            }
+        case "com.googlecode.iterm2":
+            if let source = iTerm2ResumeScript(command: command),
+               executeAppleScriptReturningBoolean(source)
+            {
+                return true
+            }
+        case "com.apple.Terminal":
+            let escapedCommand = appleScriptEscapedString(command)
+            let source = """
+            tell application "Terminal"
+                activate
+                do script "\(escapedCommand)"
+            end tell
+            """
+            var error: NSDictionary?
+            guard let script = NSAppleScript(source: source) else { continue }
+            _ = script.executeAndReturnError(&error)
+            if error == nil {
+                return true
+            }
+        default:
+            continue
+        }
     }
-
-    let escapedCommand = appleScriptEscapedString(command)
-    let source = """
-    tell application "Terminal"
-        activate
-        do script "\(escapedCommand)"
-    end tell
-    """
-    var error: NSDictionary?
-    guard let script = NSAppleScript(source: source) else { return false }
-    _ = script.executeAndReturnError(&error)
-    return error == nil
+    return false
 }
