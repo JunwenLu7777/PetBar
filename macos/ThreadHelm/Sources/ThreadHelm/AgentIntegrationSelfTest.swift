@@ -138,7 +138,15 @@ func runAgentIntegrationSelfTest() {
           ) == .unknown,
           registry.metadata(for: .zcode)?.capabilities.status(
               for: .exactReturn
-          ) == .unknown
+          ) == .unknown,
+          registry.metadata(for: .codex)?.capabilities.status(
+              for: .managedIntegration
+          ) == .unsupported,
+          [.claudeCode, .cursor, .zcode, .pi].allSatisfy({ agentID in
+              registry.metadata(for: agentID)?.capabilities.status(
+                  for: .managedIntegration
+              ) == .supported
+          })
     else {
         failAgentIntegrationSelfTest("state-only/unknown capability boundary")
     }
@@ -168,6 +176,7 @@ func runAgentIntegrationSelfTest() {
     runCodexClaudeAdapterSelfTest()
     runAgentOpenMeasurementSelfTest()
     runClaudeAdapterLifecycleSelfTest()
+    runAgentIntegrationManagerSelfTest()
 }
 
 private func runCodexClaudeAdapterSelfTest() {

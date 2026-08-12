@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="${0:A:h:h}"
+TRANSACTION_HELPER="$ROOT/scripts/local-install-transaction.zsh"
 BUILD_APP="$ROOT/build/ThreadHelm.app"
 INSTALLED_APP="$HOME/Applications/ThreadHelm.app"
 APP_BINARY="$INSTALLED_APP/Contents/MacOS/ThreadHelm"
@@ -26,6 +27,21 @@ SESSION_INDEX="${CODEX_HOME:-$HOME/.codex}/session_index.jsonl"
 NATIVE_NOTIFICATION_BACKUP="${CODEX_HOME:-$HOME/.codex}/threadhelm-native-notification-backup.json"
 LEGACY_NATIVE_NOTIFICATION_BACKUP="${CODEX_HOME:-$HOME/.codex}/chatbird-native-notification-backup.json"
 DOMAIN="gui/$(id -u)"
+
+[[ -f "$TRANSACTION_HELPER" ]] || {
+  echo "缺少 ThreadHelm 本机安装事务脚本" >&2
+  exit 1
+}
+source "$TRANSACTION_HELPER"
+THREADHELM_APP_DEST="$INSTALLED_APP"
+THREADHELM_PLIST_DEST="$PLIST"
+THREADHELM_HEALTH_DIR="${HEALTH:h}"
+THREADHELM_STATE_PATH="$STATE"
+THREADHELM_NATIVE_BACKUP_PATH="$NATIVE_NOTIFICATION_BACKUP"
+THREADHELM_LEGACY_NATIVE_BACKUP_PATH="$LEGACY_NATIVE_NOTIFICATION_BACKUP"
+THREADHELM_DOMAIN="$DOMAIN"
+THREADHELM_LABEL="$LABEL"
+THREADHELM_RECOVERY_BINARY="$APP_BINARY"
 
 stop_service_and_processes() {
   local label
@@ -117,6 +133,9 @@ mkdir -p \
   "$HOME/Library/Logs" \
   "${HEALTH:h}"
 
+threadhelm_begin_install_transaction
+trap 'threadhelm_rollback_install_transaction' EXIT
+trap 'exit 130' INT TERM
 stop_service_and_processes
 migrate_notification_backup
 
@@ -126,26 +145,17 @@ mkdir -p "${HEALTH:h}"
 /usr/bin/ditto "$BUILD_APP" "$INSTALLED_APP"
 /usr/bin/codesign --verify --deep --strict "$INSTALLED_APP"
 
-if ! "$APP_BINARY" --install-claude-hook; then
-  echo "警告：Claude Code 权限确认 Hook 安装命令失败；ThreadHelm 核心安装将继续。" >&2
+INTEGRATION_REPORT=""
+if ! INTEGRATION_REPORT="$(
+  "$APP_BINARY" --agent-integrations install --live
+)"; then
+  echo "五 Agent 本机集成安装失败" >&2
+  exit 1
 fi
-CLAUDE_HOOK_STATUS_OUTPUT=""
-if CLAUDE_HOOK_STATUS_OUTPUT="$("$APP_BINARY" --print-claude-hook-status)"; then
-  case "$CLAUDE_HOOK_STATUS_OUTPUT" in
-    installed*) ;;
-    unavailable)
-      echo "提示：未找到 Claude CLI，未启用 Claude Code 权限确认 Hook。" >&2
-      ;;
-    conflict*)
-      echo "警告：已保留现有 PermissionRequest Hook，未启用 ThreadHelm Claude Hook。" >&2
-      ;;
-    *)
-      echo "警告：Claude Code 权限确认 Hook 未启用；ThreadHelm 核心安装将继续。" >&2
-      ;;
-  esac
-else
-  echo "警告：无法读取 Claude Code 权限确认 Hook 状态；ThreadHelm 核心安装将继续。" >&2
-fi
+threadhelm_set_integration_backup_id "$INTEGRATION_REPORT" || {
+  echo "无法读取五 Agent 本机集成恢复点" >&2
+  exit 1
+}
 "$APP_BINARY" \
   --prepare-codex-overlay-notifications \
   "$STATE" \
@@ -178,5 +188,7 @@ if ! wait_for_panel_health; then
   exit 1
 fi
 
+threadhelm_commit_install_transaction
+trap - EXIT INT TERM
 cleanup_legacy_products
 echo "$INSTALLED_APP"

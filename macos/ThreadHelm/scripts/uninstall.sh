@@ -67,8 +67,8 @@ done
 
 CLEANUP_BIN=""
 for candidate in \
-  "$INSTALLED_BIN" \
   "$BUILD_BIN" \
+  "$INSTALLED_BIN" \
   "$LEGACY_BIN" \
   "$OLDER_LEGACY_BIN"; do
   if [[ -x "$candidate" ]]; then
@@ -76,8 +76,23 @@ for candidate in \
     break
   fi
 done
-if [[ -n "$CLEANUP_BIN" ]]; then
-  "$CLEANUP_BIN" --uninstall-claude-hook
+if [[ -z "$CLEANUP_BIN" ]]; then
+  echo "找不到可用于安全移除五 Agent 受管集成的 ThreadHelm 程序。" >&2
+  exit 1
+else
+  INTEGRATION_REPORT="$(
+    "$CLEANUP_BIN" --agent-integrations uninstall --live
+  )" || {
+    echo "无法安全卸载 Claude、Cursor、ZCode 和 Pi 的受管集成。" >&2
+    exit 1
+  }
+  INTEGRATION_BACKUP_ID="$(
+    print -r -- "$INTEGRATION_REPORT" \
+      | /usr/bin/plutil -extract backupID raw -o - - 2>/dev/null
+  )" || {
+    echo "无法读取五 Agent 本机集成恢复点。" >&2
+    exit 1
+  }
 fi
 
 RESTORE_BACKUP=""
@@ -91,10 +106,18 @@ if [[ -n "$RESTORE_BACKUP" ]]; then
     echo "找不到可用于恢复 Codex 原生气泡设置的 ThreadHelm 或旧 ChatBird 程序。" >&2
     exit 1
   fi
-  "$CLEANUP_BIN" \
+  if ! "$CLEANUP_BIN" \
     --restore-codex-overlay-notifications \
     "$STATE" \
     "$RESTORE_BACKUP"
+  then
+    if [[ -n "${INTEGRATION_BACKUP_ID:-}" ]]; then
+      "$CLEANUP_BIN" --agent-integrations restore \
+        "$INTEGRATION_BACKUP_ID" --live || true
+    fi
+    echo "无法恢复 Codex 原生气泡设置；受管 Agent 集成已尽量还原。" >&2
+    exit 1
+  fi
 fi
 
 detach_legacy_codex_pet_selection

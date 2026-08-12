@@ -722,19 +722,7 @@ enum ClaudeHookConfiguration {
             )
             data.append(0x0A)
             data = lineEnding.apply(to: data)
-            let temporaryURL = url.deletingLastPathComponent().appendingPathComponent(
-                ".\(url.lastPathComponent).threadhelm-\(UUID().uuidString).tmp"
-            )
-            try data.write(to: temporaryURL, options: .atomic)
-            try manager.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: temporaryURL.path
-            )
-            guard rename(temporaryURL.path, url.path) == 0 else {
-                let reason = String(cString: strerror(errno))
-                try? manager.removeItem(at: temporaryURL)
-                throw ClaudeHookConfigurationError.writeFailed(reason)
-            }
+            try AgentIntegrationAtomicFileWriter.write(data, to: url)
         } catch let error as ClaudeHookConfigurationError {
             throw error
         } catch {

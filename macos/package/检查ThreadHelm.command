@@ -184,6 +184,10 @@ fi
 
 if [[ -x "$BIN" ]]; then
   echo ""
+  echo "五 Agent 本机集成状态（Codex 应为 notManaged）："
+  "$BIN" --agent-integrations status --live || FAILED=1
+
+  echo ""
   echo "Codex 额度读取："
   "$BIN" --print-quota || FAILED=1
 

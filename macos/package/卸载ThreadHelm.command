@@ -77,8 +77,8 @@ done
 
 CLEANUP_BINARY=""
 for candidate in \
-  "$APP_BINARY" \
   "$PACKAGE_BINARY" \
+  "$APP_BINARY" \
   "$LEGACY_APP_BINARY" \
   "$OLDER_LEGACY_APP_BINARY"; do
   if [[ -x "$candidate" ]]; then
@@ -86,12 +86,24 @@ for candidate in \
     break
   fi
 done
-if [[ -n "$CLEANUP_BINARY" ]]; then
-  "$CLEANUP_BINARY" --uninstall-claude-hook \
+if [[ -z "$CLEANUP_BINARY" ]]; then
+  echo "找不到可用于安全移除五 Agent 受管集成的 ThreadHelm 程序；已停止卸载。"
+  exit 1
+else
+  INTEGRATION_REPORT="$(
+    "$CLEANUP_BINARY" --agent-integrations uninstall --live
+  )" \
     || {
-      echo "无法移除 Claude Code 权限确认 Hook，已停止卸载。"
+      echo "无法安全卸载 Claude、Cursor、ZCode 和 Pi 的受管集成，已停止卸载。"
       exit 1
     }
+  INTEGRATION_BACKUP_ID="$(
+    print -r -- "$INTEGRATION_REPORT" \
+      | /usr/bin/plutil -extract backupID raw -o - - 2>/dev/null
+  )" || {
+    echo "无法读取五 Agent 本机集成恢复点，已停止卸载。"
+    exit 1
+  }
 fi
 
 RESTORE_BACKUP=""
@@ -110,7 +122,11 @@ if [[ -n "$RESTORE_BACKUP" ]]; then
     "$STATE_PATH" \
     "$RESTORE_BACKUP" \
     || {
-      echo "无法恢复 Codex 原生气泡设置，已停止卸载以保留恢复文件。"
+      if [[ -n "${INTEGRATION_BACKUP_ID:-}" ]]; then
+        "$CLEANUP_BINARY" --agent-integrations restore \
+          "$INTEGRATION_BACKUP_ID" --live || true
+      fi
+      echo "无法恢复 Codex 原生气泡设置，受管 Agent 集成已尽量还原；已停止卸载以保留恢复文件。"
       exit 1
     }
 fi

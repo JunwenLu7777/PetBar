@@ -6,7 +6,7 @@ ThreadHelm 是一个独立运行的 macOS App。当前发行版本为 **1.1.0**�
 ThreadHelm-macOS-arm64-1.1.0.zip
 ```
 
-该发行只面向 macOS 12.3+ 的 Apple 芯片（arm64），暂不支持 Intel Mac。包内包含 `ThreadHelm.app`、LaunchAgent 模板、三个安装检查命令、License、隐私说明和资产说明。
+该发行只面向 macOS 12.3+ 的 Apple 芯片（arm64），暂不支持 Intel Mac。包内包含 `ThreadHelm.app`、LaunchAgent 模板、三个安装检查命令、本机事务脚本、License、隐私说明和资产说明。
 
 ## 官方仓库
 
@@ -19,7 +19,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 - 独立 App Icon：使用 `ThreadHelm.icns`，在 Dock 与应用切换器中显示 ThreadHelm 自己的图标。
 - 灵动岛是唯一展示方式：胶囊可点击展开，展开态包含任务、确认与额度工作区。
 - 检测到 Claude Code CLI 时，可显示 Claude Code 的 5h、周额度与 Fable 周额度；未安装时只显示 Codex 来源。已安装但未登录或读取失败时保留 Claude Code 状态提示；不显示 Token、Credits 或行情模块。
-- 任务状态约每 2 秒从本机 Codex 与可用的 Claude Code 状态读取；未安装 Claude Code 时不显示其残留会话。点击任务行可返回对应 Codex 任务或在 Terminal 恢复 Claude 会话。
+- 任务控制台统一显示本机 Codex、Claude Code、Cursor、ZCode 和 Pi；每个来源只展示已有证据支持的状态和打开能力，不把应用聚焦或目录 fallback 冒充为精确会话返回。
 - 运行中任务会显示开始时间与持续时间；已完成/失败任务的持续时间会固定，不继续增长。
 - 运行中任务预览只显示公开助手输出，新内容会及时替换，同时保留可滚动的完整输出；不展示 thinking、工具参数或原始工具输出。
 - 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json` 和会话公开输出；不会发起远程第三方行情请求。
@@ -36,6 +36,8 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 6. 安装完成后会复制到 `~/Applications/ThreadHelm.app`，并启动 `dev.threadhelm.app`。
 7. 若希望当前 Codex 运行中新建任务的原生气泡也自动静音，可在“系统设置 → 隐私与安全 → 辅助功能”中为“ThreadHelm”开启权限；未开启不影响核心功能。
 
+安装会处理 Claude Code、Cursor、ZCode 和 Pi 的受管本机集成；Codex 集成保持 `notManaged`。新版本启动失败时会恢复旧 App、LaunchAgent 和受管配置。恢复点及手工处理方式见[本机运维说明](docs/threadhelm-local-operations.md)。
+
 检查安装状态：
 
 ```bash
@@ -48,7 +50,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 ./卸载ThreadHelm.command
 ```
 
-卸载器会移除 `~/Applications/ThreadHelm.app`、`dev.threadhelm.app` LaunchAgent、ThreadHelm 日志和健康缓存，并只移除 ThreadHelm 记录过的 Codex 原生气泡静音值。卸载前请先完全退出 Codex；若 Codex 仍在运行，卸载器会停止且保留当前安装与恢复文件。
+卸载器会先移除 Claude Code、Cursor、ZCode 和 Pi 的 ThreadHelm 受管条目，再移除 `~/Applications/ThreadHelm.app`、LaunchAgent、日志和健康缓存，并只移除 ThreadHelm 记录过的 Codex 原生气泡静音值。卸载前请先完全退出 Codex；若 Codex 仍在运行，卸载器会停止且保留当前安装与恢复文件。
 
 ## 发布构建
 

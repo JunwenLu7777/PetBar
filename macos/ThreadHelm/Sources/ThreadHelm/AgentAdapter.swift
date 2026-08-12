@@ -20,7 +20,7 @@ struct AgentDiscovery: Equatable {
     let compatibility: AgentCompatibility
 }
 
-enum AgentIntegrationStatus: String, Equatable {
+enum AgentIntegrationStatus: String, Codable, Equatable {
     case notManaged
     case notInstalled
     case installed
@@ -29,7 +29,7 @@ enum AgentIntegrationStatus: String, Equatable {
     case unsupportedVersion
 }
 
-enum AgentIntegrationOperationResult: String, Equatable {
+enum AgentIntegrationOperationResult: String, Codable, Equatable {
     case notManaged
     case unchanged
     case installed
@@ -51,11 +51,32 @@ struct AgentIntegrationScope: Equatable {
 
 enum AgentIntegrationError: Error, Equatable {
     case liveConfigurationWriteDenied
+    case invalidManagedPath
+}
+
+extension AgentIntegrationError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .liveConfigurationWriteDenied:
+            return "隔离操作不能写入真实主目录"
+        case .invalidManagedPath:
+            return "受管配置路径不安全"
+        }
+    }
 }
 
 extension AgentIntegrationScope {
     func managedURL(relativePath: String) throws -> URL {
+        guard !relativePath.isEmpty,
+              !relativePath.hasPrefix("/"),
+              !relativePath.split(separator: "/").contains("..")
+        else {
+            throw AgentIntegrationError.invalidManagedPath
+        }
         let root = rootDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        guard root.path != "/" else {
+            throw AgentIntegrationError.invalidManagedPath
+        }
         if !permitsLiveConfigurationChanges,
            root == FileManager.default.homeDirectoryForCurrentUser
                 .standardizedFileURL
@@ -63,7 +84,12 @@ extension AgentIntegrationScope {
         {
             throw AgentIntegrationError.liveConfigurationWriteDenied
         }
-        return root.appendingPathComponent(relativePath).standardizedFileURL
+        let candidate = root.appendingPathComponent(relativePath)
+            .standardizedFileURL
+        guard candidate.path.hasPrefix(root.path + "/") else {
+            throw AgentIntegrationError.invalidManagedPath
+        }
+        return candidate
     }
 }
 
@@ -182,6 +208,7 @@ func agentRuntimeStatusesWithActivity(
 
 protocol AgentAdapter {
     var metadata: AgentMetadata { get }
+    var managedIntegrationRelativePaths: [String] { get }
     func discover() -> AgentDiscovery
     func integrationStatus(in scope: AgentIntegrationScope) -> AgentIntegrationStatus
     func installIntegration(
@@ -203,6 +230,8 @@ protocol AgentAdapter {
 }
 
 extension AgentAdapter {
+    var managedIntegrationRelativePaths: [String] { [] }
+
     func discover() -> AgentDiscovery {
         AgentDiscovery(
             isInstalled: false,
@@ -383,6 +412,10 @@ struct ClaudeCodeAgentAdapter: AgentAdapter {
     private let permissionQueue: () -> ClaudePermissionQueueSnapshot
     private let discoveryProvider: () -> AgentDiscovery
     private let openTerminal: (ClaudeTerminalOpenRequest) -> OpenResult
+
+    var managedIntegrationRelativePaths: [String] {
+        [".claude/settings.json"]
+    }
 
     init(
         metadata: AgentMetadata? = builtInAgentMetadata().first {
@@ -860,8 +893,9 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                     .lifecycleObservation,
                     .nativeNavigation,
                     .subagentEvents,
+                    .managedIntegration,
                 ],
-                unknown: [.stableIdentity, .exactReturn, .managedIntegration]
+                unknown: [.stableIdentity, .exactReturn]
             )
         ),
         AgentMetadata(
@@ -874,11 +908,14 @@ func builtInAgentMetadata() -> [AgentMetadata] {
             versionSource: "ZCode.app version metadata",
             identityPolicy: "exact session and hot reload unverified",
             capabilities: AgentCapabilitySet(
-                supported: [.lifecycleObservation, .nativeNavigation],
+                supported: [
+                    .lifecycleObservation,
+                    .nativeNavigation,
+                    .managedIntegration,
+                ],
                 unknown: [
                     .stableIdentity,
                     .exactReturn,
-                    .managedIntegration,
                 ]
             )
         ),
@@ -892,8 +929,8 @@ func builtInAgentMetadata() -> [AgentMetadata] {
             versionSource: "pi --version",
             identityPolicy: "state-only; native session return unverified",
             capabilities: AgentCapabilitySet(
-                supported: [.lifecycleObservation],
-                unknown: [.stableIdentity, .exactReturn, .managedIntegration]
+                supported: [.lifecycleObservation, .managedIntegration],
+                unknown: [.stableIdentity, .exactReturn]
             )
         ),
     ]

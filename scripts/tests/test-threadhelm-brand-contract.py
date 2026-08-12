@@ -18,6 +18,9 @@ package_checker = read("macos/package/检查ThreadHelm.command")
 package_uninstaller = read("macos/package/卸载ThreadHelm.command")
 source_installer = read("macos/ThreadHelm/scripts/install.sh")
 source_uninstaller = read("macos/ThreadHelm/scripts/uninstall.sh")
+transaction_helper = read(
+    "macos/ThreadHelm/scripts/local-install-transaction.zsh"
+)
 
 for installer in (package_installer, source_installer):
     for required in (
@@ -41,6 +44,19 @@ for installer in (package_installer, source_installer):
     assert installer.rindex(health_marker) < installer.rindex(
         "cleanup_legacy_products"
     ), "legacy cleanup must happen only after ThreadHelm health verification"
+    for required in (
+        "local-install-transaction.zsh",
+        "threadhelm_begin_install_transaction",
+        "--agent-integrations install --live",
+        "threadhelm_set_integration_backup_id",
+        "threadhelm_commit_install_transaction",
+        "threadhelm_rollback_install_transaction",
+        "codesign --verify --deep --strict",
+    ):
+        assert required in installer, required
+
+for unmanaged_artifact in (".claude", ".cursor", ".zcode", ".pi"):
+    assert unmanaged_artifact in package_installer
 
 for required in (
     'LEGACY_LABEL="dev.chatbird.app"',
@@ -65,5 +81,16 @@ for uninstaller in (package_uninstaller, source_uninstaller):
         "chatbird-native-notification-backup.json",
     ):
         assert required in uninstaller, required
+    assert "--agent-integrations uninstall --live" in uninstaller
+
+assert "--agent-integrations status --live" in package_checker
+for required in (
+    "THREADHELM_APP_DEST",
+    "THREADHELM_PLIST_DEST",
+    "THREADHELM_HEALTH_DIR",
+    "threadhelm_snapshot_transaction_path",
+    "threadhelm_restore_transaction_path",
+):
+    assert required in transaction_helper, required
 
 print("ThreadHelm install transition contract tests passed")

@@ -19,6 +19,7 @@ PLIST_TEMPLATE="$APP_PROJECT/Resources/$LABEL.plist.in"
 INSTALL_COMMAND="$ROOT/macos/package/安装ThreadHelm.command"
 CHECK_COMMAND="$ROOT/macos/package/检查ThreadHelm.command"
 UNINSTALL_COMMAND="$ROOT/macos/package/卸载ThreadHelm.command"
+TRANSACTION_HELPER="$APP_PROJECT/scripts/local-install-transaction.zsh"
 VERIFY_ONLY=false
 SKIP_APP_BINARY_CHECKS="${THREADHELM_SKIP_APP_BINARY_CHECKS:-false}"
 
@@ -53,13 +54,16 @@ verify_inputs() {
   require_file "$INSTALL_COMMAND"
   require_file "$CHECK_COMMAND"
   require_file "$UNINSTALL_COMMAND"
+  require_file "$TRANSACTION_HELPER"
   require_file "$ROOT/macos/README.md"
   require_file "$ROOT/macos/VERSION.txt"
   require_file "$ROOT/LICENSE"
   require_file "$ROOT/PRIVACY.md"
   require_file "$ROOT/ASSET-NOTICE.md"
   /usr/bin/plutil -lint "$PLIST_TEMPLATE" >/dev/null
-  /bin/zsh -n "$INSTALL_COMMAND" "$CHECK_COMMAND" "$UNINSTALL_COMMAND"
+  /bin/zsh -n \
+    "$INSTALL_COMMAND" "$CHECK_COMMAND" "$UNINSTALL_COMMAND" \
+    "$TRANSACTION_HELPER"
 }
 
 path_has_forbidden_marker() {
@@ -112,11 +116,17 @@ verify_stage() {
   [[ ! -e "$target/pet" ]] || fail "release must not publish a standalone pet directory"
   [[ ! -e "$target/preview-qa" ]] || fail "release must not publish pet preview assets"
   [[ ! -e "$target/quota-panel" ]] || fail "release must not publish a standalone quota-panel directory"
+  local unmanaged_artifact
+  for unmanaged_artifact in .claude .cursor .zcode .pi; do
+    [[ ! -e "$target/$unmanaged_artifact" ]] \
+      || fail "release must not contain vendor config or unmanaged hooks: $unmanaged_artifact"
+  done
   require_dir "$target/ThreadHelm.app"
   require_file "$target/$LABEL.plist.in"
   require_file "$target/安装ThreadHelm.command"
   require_file "$target/检查ThreadHelm.command"
   require_file "$target/卸载ThreadHelm.command"
+  require_file "$target/local-install-transaction.zsh"
   require_file "$target/README.md"
   require_file "$target/VERSION.txt"
   require_file "$target/LICENSE"
@@ -165,6 +175,7 @@ stage_release() {
   /bin/cp "$INSTALL_COMMAND" "$STAGE/安装ThreadHelm.command"
   /bin/cp "$CHECK_COMMAND" "$STAGE/检查ThreadHelm.command"
   /bin/cp "$UNINSTALL_COMMAND" "$STAGE/卸载ThreadHelm.command"
+  /bin/cp "$TRANSACTION_HELPER" "$STAGE/local-install-transaction.zsh"
   /bin/chmod +x "$STAGE"/*.command
   /bin/cp "$ROOT/macos/README.md" "$STAGE/README.md"
   /bin/cp "$ROOT/macos/VERSION.txt" "$STAGE/VERSION.txt"
@@ -195,6 +206,7 @@ release_input_paths() {
   print -r -- "$INSTALL_COMMAND"
   print -r -- "$CHECK_COMMAND"
   print -r -- "$UNINSTALL_COMMAND"
+  print -r -- "$TRANSACTION_HELPER"
   if (( ${#input_roots[@]} > 0 )); then
     find "${input_roots[@]}" -type f -print
   fi
@@ -247,6 +259,9 @@ verify_stage_matches_current_sources() {
   verify_release_file_matches "$INSTALL_COMMAND" "$target/安装ThreadHelm.command"
   verify_release_file_matches "$CHECK_COMMAND" "$target/检查ThreadHelm.command"
   verify_release_file_matches "$UNINSTALL_COMMAND" "$target/卸载ThreadHelm.command"
+  verify_release_file_matches \
+    "$TRANSACTION_HELPER" \
+    "$target/local-install-transaction.zsh"
   verify_release_file_matches "$ROOT/macos/README.md" "$target/README.md"
   verify_release_file_matches "$ROOT/macos/VERSION.txt" "$target/VERSION.txt"
   verify_release_file_matches "$ROOT/LICENSE" "$target/LICENSE"

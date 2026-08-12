@@ -13,6 +13,10 @@ struct PiAgentAdapter: AgentAdapter {
     private let readEvents: () throws -> [AgentEvent]
     private let executablePath: () -> String
 
+    var managedIntegrationRelativePaths: [String] {
+        [".pi/agent/extensions/threadhelm-state-observer"]
+    }
+
     init(
         metadata: AgentMetadata? = builtInAgentMetadata().first {
             $0.id == .pi
@@ -306,22 +310,10 @@ enum PiExtensionConfiguration {
         to url: URL,
         fileManager: FileManager
     ) throws {
-        let temporaryURL = url.deletingLastPathComponent()
-            .appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
-        try data.write(to: temporaryURL, options: [.atomic])
-        if fileManager.fileExists(atPath: url.path) {
-            _ = try fileManager.replaceItemAt(
-                url,
-                withItemAt: temporaryURL,
-                backupItemName: nil,
-                options: [.usingNewMetadataOnly]
-            )
-        } else {
-            try fileManager.moveItem(at: temporaryURL, to: url)
-        }
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: url.path
+        try AgentIntegrationAtomicFileWriter.write(
+            data,
+            to: url,
+            fileManager: fileManager
         )
     }
 }

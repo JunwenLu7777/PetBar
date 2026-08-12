@@ -46,6 +46,10 @@ struct CursorAgentAdapter: AgentAdapter {
     private let openWorkingDirectory: (String) -> Bool
     private let hookCommand: String
 
+    var managedIntegrationRelativePaths: [String] {
+        [".cursor/hooks.json"]
+    }
+
     init(
         metadata: AgentMetadata? = builtInAgentMetadata().first {
             $0.id == .cursor
@@ -410,10 +414,14 @@ private enum CursorHookConfiguration {
 
     @discardableResult
     static func uninstall(at url: URL) throws -> Bool {
-        guard FileManager.default.fileExists(atPath: url.path),
-              var config = try? readObject(at: url)
-        else { return false }
-        var hooks = config["hooks"] as? [String: Any] ?? [:]
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return false
+        }
+        var config = try readObject(at: url)
+        guard let rawHooks = config["hooks"] else { return false }
+        guard var hooks = rawHooks as? [String: Any] else {
+            throw CursorHookConfigurationError.invalidJSON
+        }
         var changed = false
         for event in Array(hooks.keys) {
             guard var entries = hooks[event] as? [[String: Any]] else {
@@ -508,19 +516,11 @@ private enum CursorHookConfiguration {
     }
 
     private static func writeObject(_ object: [String: Any], to url: URL) throws {
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
         let data = try JSONSerialization.data(
             withJSONObject: object,
             options: [.prettyPrinted, .sortedKeys]
         )
-        try data.write(to: url, options: [.atomic])
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: url.path
-        )
+        try AgentIntegrationAtomicFileWriter.write(data, to: url)
     }
 }
 

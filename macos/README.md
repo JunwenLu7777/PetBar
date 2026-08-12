@@ -20,6 +20,7 @@
 - Apple 芯片（arm64）；暂不支持 Intel Mac
 - 已安装并登录 Codex，用于读取本机额度与任务状态
 - Claude Code 额度与任务兼容为可选功能；未安装时 ThreadHelm 自动隐藏相关入口和任务，使用时需安装并登录 Claude Code
+- Cursor、ZCode 和 Pi 都是可选本机任务来源；未安装的 Agent 不会被安装器写入配置
 
 ## 包内容
 
@@ -28,6 +29,7 @@
 - `安装ThreadHelm.command`：安装 App 和 LaunchAgent。
 - `检查ThreadHelm.command`：检查 App、arm64 架构、签名、LaunchAgent、运行状态、Codex 周额度、可选 Claude 三项额度和任务状态。
 - `卸载ThreadHelm.command`：卸载 App 和 LaunchAgent，并恢复本项目记录过的 Codex 原生气泡静音值。
+- `local-install-transaction.zsh`：安装失败时恢复旧 App、LaunchAgent 和四个受管 Agent 集成。
 - `LICENSE`、`PRIVACY.md`、`ASSET-NOTICE.md`、`CHECKSUMS-SHA256.txt`。
 
 ## 功能
@@ -35,7 +37,7 @@
 - ThreadHelm 是独立 App，不包含桌面宠物，也不再向 `$CODEX_HOME/pets` 安装宠物或写入 Codex `selected-avatar-id`。
 - 灵动岛默认是胶囊，点击后展开为功能面板；胶囊可拖到其他屏幕并吸附到该屏幕顶部中央。
 - 检测到 Claude Code CLI 时可切换额度来源：Codex 显示周额度，Claude Code 同时显示 5h、周额度与 Fable 周额度；不显示 Token、Credits 或任何行情模块。
-- 任务状态约每 2 秒读取本机 Codex 与可用的 Claude Code 会话状态，并显示执行中、等待确认、已完成和执行失败；未安装 Claude Code 时不显示其残留会话。
+- 任务状态统一呈现 Codex、Claude Code、Cursor、ZCode 和 Pi，并区分需要你、执行中与最近完成；不支持精确返回的来源只会打开原生应用、目录或保持只读。
 - 运行中任务显示开始时间与持续时间；运行中最新一条会交替替换展示，详情区可滚动查看完整公开输出。
 - 点击 Codex 任务会通过官方深链打开，点击 Claude 任务会在原工作目录通过 Terminal 恢复会话。
 - 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json` 和会话公开输出；不会发起远程第三方行情请求。
@@ -44,5 +46,5 @@
 
 ## 检查与卸载
 
-- `检查ThreadHelm.command`：检查 `~/Applications/ThreadHelm.app`、`dev.threadhelm.app`、签名、进程、运行状态、Codex 周额度、可选 Claude 三项额度和任务状态。
-- `卸载ThreadHelm.command`：完全退出 Codex 后，移除 `~/Applications/ThreadHelm.app` 与 `dev.threadhelm.app` LaunchAgent，并只恢复本项目添加的 Codex 原生气泡设置；Codex 仍运行时会停止卸载并保留恢复文件。
+- `检查ThreadHelm.command`：检查 `~/Applications/ThreadHelm.app`、`dev.threadhelm.app`、签名、进程、运行状态、五 Agent 集成状态、Codex 周额度、可选 Claude 三项额度和任务状态。
+- `卸载ThreadHelm.command`：完全退出 Codex 后，先移除四个 ThreadHelm 受管 Agent 集成，再移除 App 与 LaunchAgent，并只恢复本项目添加的 Codex 原生气泡设置；Codex 仍运行时会停止卸载并保留恢复文件。

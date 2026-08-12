@@ -3,6 +3,10 @@ emulate -L zsh
 setopt ERR_EXIT PIPE_FAIL NO_UNSET
 
 ROOT="${0:A:h}"
+TRANSACTION_HELPER="$ROOT/local-install-transaction.zsh"
+if [[ ! -f "$TRANSACTION_HELPER" ]]; then
+  TRANSACTION_HELPER="${ROOT:h}/ThreadHelm/scripts/local-install-transaction.zsh"
+fi
 APP_SOURCE="$ROOT/ThreadHelm.app"
 APP_DEST="$HOME/Applications/ThreadHelm.app"
 APP_BINARY="$APP_DEST/Contents/MacOS/ThreadHelm"
@@ -31,6 +35,21 @@ NATIVE_NOTIFICATION_BACKUP="${CODEX_HOME:-$HOME/.codex}/threadhelm-native-notifi
 LEGACY_NATIVE_NOTIFICATION_BACKUP="${CODEX_HOME:-$HOME/.codex}/chatbird-native-notification-backup.json"
 DOMAIN="gui/$(id -u)"
 VERIFY_ONLY=false
+
+[[ -f "$TRANSACTION_HELPER" ]] || {
+  echo "安装包缺少本机安装事务脚本。"
+  exit 1
+}
+source "$TRANSACTION_HELPER"
+THREADHELM_APP_DEST="$APP_DEST"
+THREADHELM_PLIST_DEST="$PLIST_DEST"
+THREADHELM_HEALTH_DIR="$HEALTH_DIR"
+THREADHELM_STATE_PATH="$STATE_PATH"
+THREADHELM_NATIVE_BACKUP_PATH="$NATIVE_NOTIFICATION_BACKUP"
+THREADHELM_LEGACY_NATIVE_BACKUP_PATH="$LEGACY_NATIVE_NOTIFICATION_BACKUP"
+THREADHELM_DOMAIN="$DOMAIN"
+THREADHELM_LABEL="$LABEL"
+THREADHELM_RECOVERY_BINARY="$APP_BINARY"
 
 for ARG in "$@"; do
   case "$ARG" in
@@ -92,8 +111,9 @@ wait_for_panel_health() {
 }
 
 assert_package_is_complete() {
-  [[ -d "$APP_SOURCE" && -x "$SOURCE_BINARY" && -f "$PLIST_SOURCE" ]] \
-    || fail "ThreadHelm.app 或登录启动项模板不完整，请重新解压整个分享包。"
+  [[ -d "$APP_SOURCE" && -x "$SOURCE_BINARY" && -f "$PLIST_SOURCE" \
+      && -f "$TRANSACTION_HELPER" ]] \
+    || fail "ThreadHelm.app、登录启动项模板或事务脚本不完整，请重新解压整个分享包。"
   /usr/bin/lipo "$SOURCE_BINARY" -verify_arch arm64 \
     || fail "ThreadHelm.app 不包含 arm64 架构。"
   /usr/bin/codesign --verify --deep --strict "$APP_SOURCE" >/dev/null 2>&1 \
@@ -113,6 +133,11 @@ assert_package_is_complete() {
     || fail "登录启动项模板必须且只能包含一个可执行程序参数。"
   /usr/bin/plutil -lint "$PLIST_SOURCE" >/dev/null \
     || fail "登录启动项模板无效。"
+  local unmanaged_artifact
+  for unmanaged_artifact in .claude .cursor .zcode .pi; do
+    [[ ! -e "$ROOT/$unmanaged_artifact" ]] \
+      || fail "安装包不得携带厂商配置或未受管 Hook：$unmanaged_artifact"
+  done
 }
 
 stop_service_and_processes() {
@@ -220,6 +245,9 @@ mkdir -p \
   "$HEALTH_DIR" \
   "${CONFIG:h}"
 
+threadhelm_begin_install_transaction
+trap 'threadhelm_rollback_install_transaction' EXIT
+trap 'exit 130' INT TERM
 stop_service_and_processes
 migrate_notification_backup
 
@@ -232,21 +260,12 @@ mkdir -p "$HEALTH_DIR"
 /usr/bin/codesign --verify --deep --strict "$APP_DEST" \
   || fail "ThreadHelm.app 自动签名失败，请重新下载分享包。"
 
-CLAUDE_HOOK_STATUS="warning"
-if ! "$APP_BINARY" --install-claude-hook; then
-  echo "警告：Claude Code 权限确认 Hook 安装命令失败；ThreadHelm 核心安装将继续。" >&2
-fi
-CLAUDE_HOOK_STATUS_OUTPUT=""
-if CLAUDE_HOOK_STATUS_OUTPUT="$("$APP_BINARY" --print-claude-hook-status)"; then
-  case "$CLAUDE_HOOK_STATUS_OUTPUT" in
-    installed*) CLAUDE_HOOK_STATUS="enabled" ;;
-    unavailable) CLAUDE_HOOK_STATUS="skipped" ;;
-    conflict*) CLAUDE_HOOK_STATUS="conflict" ;;
-    *) CLAUDE_HOOK_STATUS="warning" ;;
-  esac
-else
-  echo "警告：无法读取 Claude Code 权限确认 Hook 状态；ThreadHelm 核心安装将继续。" >&2
-fi
+INTEGRATION_REPORT=""
+INTEGRATION_REPORT="$(
+  "$APP_BINARY" --agent-integrations install --live
+)" || fail "无法安全安装 Claude、Cursor、ZCode 和 Pi 的受管集成。"
+threadhelm_set_integration_backup_id "$INTEGRATION_REPORT" \
+  || fail "无法读取五 Agent 本机集成恢复点。"
 "$APP_BINARY" \
   --prepare-codex-overlay-notifications \
   "$STATE_PATH" \
@@ -289,20 +308,17 @@ if ! wait_for_panel_health; then
     || fail "ThreadHelm 进程没有保持运行。请把上面的日志发给维护者。"
 fi
 
+threadhelm_commit_install_transaction
+trap - EXIT INT TERM
 cleanup_legacy_products
 
 echo ""
 echo "安装完成："
 echo "  ✓ ThreadHelm 独立 App"
-echo "  ✓ Codex 与 Claude 任务控制台"
+echo "  ✓ Codex、Claude、Cursor、ZCode 与 Pi 本机控制台"
 echo "  ✓ 已清理旧 ChatBird App 与启动项"
 echo "  ✓ 已启用 Codex 原生任务气泡静音同步"
-case "$CLAUDE_HOOK_STATUS" in
-  enabled) echo "  ✓ 已启用 Claude Code 权限确认 Hook" ;;
-  conflict) echo "  … 已保留现有 PermissionRequest Hook，未启用 ThreadHelm Hook" ;;
-  warning) echo "  … Claude Code 权限确认 Hook 未启用，请检查上方警告" ;;
-  *) echo "  … 未检测到 Claude CLI，已跳过 Claude Code 权限确认 Hook" ;;
-esac
+echo "  ✓ 已处理四个受管集成；Codex 集成保持只读、不写配置"
 if "$APP_BINARY" --check-accessibility >/dev/null 2>&1; then
   echo "  ✓ 当前运行中新任务气泡自动静音已启用"
 else

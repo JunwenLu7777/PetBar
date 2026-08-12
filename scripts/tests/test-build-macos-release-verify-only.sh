@@ -69,6 +69,9 @@ make_stage() {
   /bin/cp "$FIXTURE/macos/package/安装ThreadHelm.command" "$stage/安装ThreadHelm.command"
   /bin/cp "$FIXTURE/macos/package/检查ThreadHelm.command" "$stage/检查ThreadHelm.command"
   /bin/cp "$FIXTURE/macos/package/卸载ThreadHelm.command" "$stage/卸载ThreadHelm.command"
+  /bin/cp \
+    "$FIXTURE/macos/ThreadHelm/scripts/local-install-transaction.zsh" \
+    "$stage/local-install-transaction.zsh"
   /bin/cp "$FIXTURE/macos/README.md" "$stage/README.md"
   /bin/cp "$FIXTURE/macos/VERSION.txt" "$stage/VERSION.txt"
   /bin/cp "$FIXTURE/LICENSE" "$FIXTURE/PRIVACY.md" "$FIXTURE/ASSET-NOTICE.md" "$stage/"
@@ -115,6 +118,9 @@ write_file "$FIXTURE/macos/ThreadHelm/Resources/Info.plist" '<?xml version="1.0"
 write_file "$FIXTURE/macos/ThreadHelm/Resources/ThreadHelm.entitlements" '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict/></plist>'
 write_file "$FIXTURE/macos/ThreadHelm/Sources/ThreadHelm/main.swift" "print(\"ThreadHelm\")"
 write_command "$FIXTURE/macos/ThreadHelm/scripts/build.sh"
+/bin/cp \
+  "$ROOT/macos/ThreadHelm/scripts/local-install-transaction.zsh" \
+  "$FIXTURE/macos/ThreadHelm/scripts/local-install-transaction.zsh"
 write_command "$FIXTURE/macos/package/安装ThreadHelm.command"
 write_command "$FIXTURE/macos/package/检查ThreadHelm.command"
 write_command "$FIXTURE/macos/package/卸载ThreadHelm.command"
@@ -183,5 +189,13 @@ write_file "$FIXTURE/build/release/ThreadHelm-macOS-arm64-1.1.0/Chat""Bird.app/l
 make_dist_from_stage
 git -C "$FIXTURE" add dist
 expect_fail "legacy-branded payload path"
+
+make_stage
+write_file \
+  "$FIXTURE/build/release/ThreadHelm-macOS-arm64-1.1.0/.cursor/hooks.json" \
+  '{"unmanaged":true}'
+make_dist_from_stage
+git -C "$FIXTURE" add dist
+expect_fail "packaged vendor configuration"
 
 /bin/echo "build macOS release verify-only tests passed"

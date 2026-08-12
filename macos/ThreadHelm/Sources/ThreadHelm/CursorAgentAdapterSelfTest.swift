@@ -208,6 +208,16 @@ func runCursorAgentAdapterSelfTest() {
                 failCursorAdapterSelfTest("malformed json was not preserved")
             }
         }
+        do {
+            _ = try adapter.uninstallIntegration(in: scope)
+            failCursorAdapterSelfTest("malformed json uninstall was accepted")
+        } catch {
+            guard try Data(contentsOf: hooksURL) == malformed else {
+                failCursorAdapterSelfTest(
+                    "malformed json uninstall did not preserve input"
+                )
+            }
+        }
 
         runCursorSignalMappingSelfTest()
         runCursorTransportSelfTest()

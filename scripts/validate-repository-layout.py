@@ -77,12 +77,14 @@ LEGACY_BRAND_COMPATIBILITY_FILES = {
     "macos/ThreadHelm/Sources/ThreadHelm/ThreadHelmApplicationIdentity.swift",
     "macos/ThreadHelm/scripts/build.sh",
     "macos/ThreadHelm/scripts/install.sh",
+    "macos/ThreadHelm/scripts/local-install-transaction.zsh",
     "macos/ThreadHelm/scripts/uninstall.sh",
     "macos/package/卸载ThreadHelm.command",
     "macos/package/安装ThreadHelm.command",
     "macos/package/检查ThreadHelm.command",
     "scripts/tests/test-layout-validator.py",
     "scripts/tests/test-threadhelm-brand-contract.py",
+    "scripts/tests/test-threadhelm-local-transaction.sh",
     "scripts/validate-repository-layout.py",
 }
 LEGACY_BRAND_LINE_ALLOWLIST = {
@@ -107,6 +109,7 @@ REQUIRED_FILES = {
     "macos/ThreadHelm/Resources/dev.threadhelm.app.plist.in",
     "macos/ThreadHelm/Sources/ThreadHelm/main.swift",
     "macos/ThreadHelm/scripts/build.sh",
+    "macos/ThreadHelm/scripts/local-install-transaction.zsh",
     "macos/package/卸载ThreadHelm.command",
     "macos/package/安装ThreadHelm.command",
     "macos/package/检查ThreadHelm.command",

@@ -236,23 +236,7 @@ enum ZCodeHookConfiguration {
             withJSONObject: config,
             preservingOrderFrom: originalData
         )
-        let temporaryURL = url.deletingLastPathComponent().appendingPathComponent(
-            ".\(url.lastPathComponent).threadhelm-\(UUID().uuidString).tmp"
-        )
-        try data.write(to: temporaryURL, options: .atomic)
-        try manager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: temporaryURL.path
-        )
-        guard rename(temporaryURL.path, url.path) == 0 else {
-            let reason = String(cString: strerror(errno))
-            try? manager.removeItem(at: temporaryURL)
-            throw NSError(
-                domain: "ThreadHelm.ZCodeHookConfiguration",
-                code: Int(errno),
-                userInfo: [NSLocalizedDescriptionKey: reason]
-            )
-        }
+        try AgentIntegrationAtomicFileWriter.write(data, to: url)
     }
 
     private static func managedHook(
@@ -444,6 +428,10 @@ struct ZCodeAgentAdapter: AgentAdapter {
     private let executablePath: () -> String
     private let activateApplication: () -> OpenResult
     private let openWorkingDirectory: (String) -> Bool
+
+    var managedIntegrationRelativePaths: [String] {
+        [".zcode/cli/config.json"]
+    }
 
     init(
         metadata: AgentMetadata? = builtInAgentMetadata().first {

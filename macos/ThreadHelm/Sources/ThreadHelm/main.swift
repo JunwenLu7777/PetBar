@@ -20,6 +20,10 @@ if runAgentHookCommandIfRequested() {
     exit(0)
 }
 
+if let integrationExitCode = AgentIntegrationCLI.runIfRequested() {
+    exit(integrationExitCode)
+}
+
 if CommandLine.arguments.contains("--print-quota") {
     printQuotaOnce()
 }

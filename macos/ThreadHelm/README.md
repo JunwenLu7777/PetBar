@@ -27,6 +27,8 @@
 
 安装后会把 App 安装到 `~/Applications/ThreadHelm.app`，注册当前用户的 `dev.threadhelm.app` LaunchAgent，并从安装路径启动。用户主动退出后会保持关闭，不会被自动重新拉起。
 
+安装器会统一处理 Claude Code、Cursor、ZCode 和 Pi 的受管本机集成；Codex 集成明确为 `notManaged`，不会由该入口改写配置。更新前会备份旧 App、LaunchAgent 和受管配置，启动或健康检查失败会自动回滚。具体文件和恢复方法见[本机运维说明](../../docs/threadhelm-local-operations.md)。
+
 ThreadHelm 不包含桌面宠物素材，也不再复制或选择 Codex Pet，不写入 `selected-avatar-id`；如果旧配置仍选择已停用的 Codex Pet，安装器会先备份再移除该选择。
 
 额度与任务功能本身不需要 macOS 辅助功能授权。若用户已经授权，ThreadHelm 只会把精确匹配计数按钮的透明窗口移到活动显示器之外，并调用 Codex 自带的“静音任务”菜单动作来关闭新任务气泡；未授权时不会主动弹出授权请求。
@@ -44,6 +46,7 @@ Codex 完全退出后，ThreadHelm 会短暂等待全局状态与任务索引稳
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --print-task-progress
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --print-panel-location
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --print-saved-panel-location
+./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --agent-integrations status --root /tmp/threadhelm-isolated-root
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-placement
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-lifecycle
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-native-notification-state
@@ -118,4 +121,4 @@ done
 ./scripts/uninstall.sh
 ```
 
-卸载前必须完全退出 Codex；若仍在运行，脚本会停止且不会移除 App 或原生气泡恢复文件。卸载器会移除 `~/Applications/ThreadHelm.app`、`dev.threadhelm.app` LaunchAgent、ThreadHelm 日志和健康缓存，并只恢复本项目记录过的 Codex 原生气泡设置。
+卸载前必须完全退出 Codex；若仍在运行，脚本会停止且不会移除 App 或原生气泡恢复文件。卸载器会先移除 Claude Code、Cursor、ZCode 和 Pi 的 ThreadHelm 受管条目，再移除 `~/Applications/ThreadHelm.app`、`dev.threadhelm.app` LaunchAgent、ThreadHelm 日志和健康缓存，并只恢复本项目记录过的 Codex 原生气泡设置。其他厂商配置不会被删除。
