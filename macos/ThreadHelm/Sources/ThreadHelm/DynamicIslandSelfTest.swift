@@ -1044,6 +1044,8 @@ private func assertDynamicIslandTaskWorkspace() {
         taskCollection: collection
     )
     agentHealthSnapshot.agentEventChannelAvailable = false
+    agentHealthSnapshot.personalSessionEvidence =
+        AgentPersonalSessionEvidenceSnapshot(counts: ["cursor": 3])
     agentHealthSnapshot.agentStatuses = builtInAgentMetadata().map { metadata in
         AgentRuntimeStatus(
             metadata: metadata,
@@ -1066,9 +1068,27 @@ private func assertDynamicIslandTaskWorkspace() {
         snapshot: agentHealthSnapshot,
         state: .expanded(.agents)
     )
+    let agentHealthRows = workspace.agentHealthRowSummariesForSelfTest()
+    let validationProfiles = builtInAgentValidationProfiles()
     guard workspace.sourceFilterIsHiddenForSelfTest(),
           workspace.selectedTopLevelTabForSelfTest() == 1,
-          workspace.agentHealthRowSummariesForSelfTest().count == 5,
+          agentHealthRows.count == 5,
+          zip(AgentID.builtInOrder, agentHealthRows).allSatisfy({
+              agentID, summary in
+              guard let profile = validationProfiles[agentID] else {
+                  return false
+              }
+              return summary.contains("测试 \(profile.testedVersion)")
+                  && summary.contains(profile.supportedCapabilitiesSummary)
+                  && summary.contains(profile.knownLimitation)
+                  && summary.contains(
+                      "experimental · 真实会话 "
+                          + "\(agentID == .cursor ? 3 : 0)/10"
+                  )
+          }),
+          agentHealthRows.first?.contains(
+              "本机 0.145.0 · 测试 0.145.0"
+          ) == true,
           workspace.agentHealthAccessibilitySnapshotForSelfTest()
               .contains("本地事件通道已降级"),
           workspace.agentHealthAccessibilitySnapshotForSelfTest()

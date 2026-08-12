@@ -28,6 +28,18 @@ if let attentionFeedbackExitCode = runAgentAttentionFeedbackCLIIfRequested() {
     exit(Int32(attentionFeedbackExitCode))
 }
 
+if let personalSessionWriterSelfTestExitCode =
+    runAgentPersonalSessionEvidenceWriterSelfTestIfRequested()
+{
+    exit(Int32(personalSessionWriterSelfTestExitCode))
+}
+
+if let personalSessionExitCode =
+    runAgentPersonalSessionEvidenceCLIIfRequested()
+{
+    exit(Int32(personalSessionExitCode))
+}
+
 if CommandLine.arguments.contains("--print-quota") {
     printQuotaOnce()
 }

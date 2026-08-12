@@ -38,6 +38,9 @@ final class DynamicIslandAgentHealthViewController:
     private let tableView = NSTableView()
 
     private var statuses: [AgentRuntimeStatus] = []
+    private var personalSessionEvidence =
+        AgentPersonalSessionEvidenceSnapshot.zero
+    private let validationProfiles = builtInAgentValidationProfiles()
     private var eventChannelAvailable: Bool?
 
     override func loadView() {
@@ -62,7 +65,7 @@ final class DynamicIslandAgentHealthViewController:
         channelDetailField.textColor = DynamicIslandPalette.secondaryText
 
         tableView.headerView = nil
-        tableView.rowHeight = 76
+        tableView.rowHeight = 104
         tableView.intercellSpacing = NSSize(width: 0, height: 6)
         tableView.selectionHighlightStyle = .none
         tableView.addTableColumn(NSTableColumn(identifier: .init("agent-health")))
@@ -119,6 +122,7 @@ final class DynamicIslandAgentHealthViewController:
             : snapshot.agentStatuses).sorted {
                 $0.metadata.id < $1.metadata.id
             }
+        personalSessionEvidence = snapshot.personalSessionEvidence
         renderChannelStatus()
         tableView.reloadData()
         view.needsLayout = true
@@ -135,7 +139,14 @@ final class DynamicIslandAgentHealthViewController:
         row: Int
     ) -> NSView? {
         guard statuses.indices.contains(row) else { return nil }
-        return DynamicIslandAgentHealthRowView(status: statuses[row])
+        let status = statuses[row]
+        return DynamicIslandAgentHealthRowView(
+            status: status,
+            profile: validationProfile(for: status.metadata.id),
+            personalSessionCount: personalSessionEvidence.count(
+                for: status.metadata.id
+            )
+        )
     }
 
     func tableView(
@@ -146,7 +157,15 @@ final class DynamicIslandAgentHealthViewController:
     }
 
     func rowSummariesForSelfTest() -> [String] {
-        statuses.map(agentRuntimeAccessibilitySummary)
+        statuses.map { status in
+            agentRuntimeAccessibilitySummary(
+                status,
+                profile: validationProfile(for: status.metadata.id),
+                personalSessionCount: personalSessionEvidence.count(
+                    for: status.metadata.id
+                )
+            )
+        }
     }
 
     func accessibilitySnapshotForSelfTest() -> String {
@@ -188,6 +207,17 @@ final class DynamicIslandAgentHealthViewController:
         view.setAccessibilityLabel("Agents 和 Integrations 健康状态")
         view.setAccessibilityValue(accessibilitySnapshotForSelfTest())
     }
+
+    private func validationProfile(
+        for agentID: AgentID
+    ) -> AgentValidationProfile {
+        validationProfiles[agentID] ?? AgentValidationProfile(
+            agentID: agentID,
+            testedVersion: "尚无本机真值版本",
+            supportedCapabilitiesSummary: "支持：以适配器声明为准",
+            knownLimitation: "限制：尚未建立个人验证基线"
+        )
+    }
 }
 
 private final class DynamicIslandAgentHealthRowView: NSTableCellView {
@@ -203,8 +233,15 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
     private let healthField = DynamicIslandAgentHealthLabel(size: 12, weight: .medium)
     private let integrationField = DynamicIslandAgentHealthLabel(size: 12, weight: .medium)
     private let activityField = DynamicIslandAgentHealthLabel(size: 11, weight: .regular)
+    private let readinessField = DynamicIslandAgentHealthLabel(size: 11, weight: .regular)
+    private let capabilityField = DynamicIslandAgentHealthLabel(size: 11, weight: .regular)
+    private let limitationField = DynamicIslandAgentHealthLabel(size: 11, weight: .regular)
 
-    init(status: AgentRuntimeStatus) {
+    init(
+        status: AgentRuntimeStatus,
+        profile: AgentValidationProfile,
+        personalSessionCount: Int
+    ) {
         super.init(frame: .zero)
         addSubview(card)
         for subview in [
@@ -216,6 +253,9 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
             healthField,
             integrationField,
             activityField,
+            readinessField,
+            capabilityField,
+            limitationField,
         ] {
             card.addSubview(subview)
         }
@@ -232,8 +272,15 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
         iconView.setAccessibilityElement(false)
 
         nameField.stringValue = status.metadata.displayName
-        versionField.stringValue = agentRuntimeVersionText(status)
+        versionField.stringValue = agentRuntimeVersionText(
+            status,
+            testedVersion: profile.testedVersion
+        )
         versionField.textColor = DynamicIslandPalette.secondaryText
+        capabilityField.stringValue = profile.supportedCapabilitiesSummary
+        capabilityField.textColor = DynamicIslandPalette.secondaryText
+        limitationField.stringValue = profile.knownLimitation
+        limitationField.textColor = DynamicIslandPalette.tertiaryText
 
         let healthColor = agentRuntimeHealthColor(status.diagnostics.health)
         healthDot.wantsLayer = true
@@ -245,8 +292,16 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
         integrationField.textColor = DynamicIslandPalette.secondaryText
         activityField.stringValue = "运行 \(status.activeSessionCount) · 需你 \(status.attentionCount)"
         activityField.textColor = DynamicIslandPalette.tertiaryText
+        readinessField.stringValue = agentPersonalReadinessText(
+            personalSessionCount: personalSessionCount
+        )
+        readinessField.textColor = DynamicIslandPalette.amber
 
-        let summary = agentRuntimeAccessibilitySummary(status)
+        let summary = agentRuntimeAccessibilitySummary(
+            status,
+            profile: profile,
+            personalSessionCount: personalSessionCount
+        )
         setAccessibilityLabel(status.metadata.displayName)
         setAccessibilityValue(summary)
     }
@@ -259,40 +314,62 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
     override func layout() {
         super.layout()
         card.frame = bounds.insetBy(dx: 4, dy: 2)
-        iconBadge.frame = NSRect(x: 12, y: 18, width: 36, height: 36)
-        iconView.frame = NSRect(x: 20, y: 26, width: 20, height: 20)
-        nameField.frame = NSRect(x: 60, y: 40, width: 138, height: 18)
-        versionField.frame = NSRect(x: 60, y: 18, width: 190, height: 17)
-        healthDot.frame = NSRect(x: 270, y: 43, width: 8, height: 8)
-        healthField.frame = NSRect(x: 288, y: 37, width: 190, height: 19)
+        iconBadge.frame = NSRect(x: 12, y: 32, width: 36, height: 36)
+        iconView.frame = NSRect(x: 20, y: 40, width: 20, height: 20)
+        let rightX = max(500, card.bounds.width - 290)
+        let leftWidth = max(180, rightX - 76)
+        nameField.frame = NSRect(x: 60, y: 74, width: leftWidth, height: 18)
+        versionField.frame = NSRect(x: 60, y: 55, width: leftWidth, height: 17)
+        capabilityField.frame = NSRect(x: 60, y: 35, width: leftWidth, height: 17)
+        limitationField.frame = NSRect(x: 60, y: 15, width: leftWidth, height: 17)
+        healthDot.frame = NSRect(x: rightX, y: 79, width: 8, height: 8)
+        healthField.frame = NSRect(
+            x: rightX + 18,
+            y: 73,
+            width: 252,
+            height: 19
+        )
         integrationField.frame = NSRect(
-            x: max(486, card.bounds.width - 210),
-            y: 37,
-            width: 190,
+            x: rightX,
+            y: 52,
+            width: 270,
             height: 19
         )
         activityField.frame = NSRect(
-            x: max(486, card.bounds.width - 210),
-            y: 16,
-            width: 190,
+            x: rightX,
+            y: 32,
+            width: 270,
             height: 17
         )
+        readinessField.frame = NSRect(
+            x: rightX,
+            y: 12,
+            width: 270,
+            height: 17
+        )
+        healthField.alignment = .right
         integrationField.alignment = .right
         activityField.alignment = .right
+        readinessField.alignment = .right
     }
 }
 
-private func agentRuntimeVersionText(_ status: AgentRuntimeStatus) -> String {
+private func agentRuntimeVersionText(
+    _ status: AgentRuntimeStatus,
+    testedVersion: String
+) -> String {
     if status.diagnostics.health == .unknown,
        status.diagnostics.summary == "尚未检查"
     {
-        return "安装状态检查中"
+        return "本机检查中 · 测试 \(testedVersion)"
     }
-    guard status.discovery.isInstalled else { return "未检测到本机安装" }
+    guard status.discovery.isInstalled else {
+        return "本机未检测到 · 测试 \(testedVersion)"
+    }
     guard let version = status.discovery.version, !version.isEmpty else {
-        return "已检测到 · 版本未知"
+        return "本机版本未知 · 测试 \(testedVersion)"
     }
-    return "已检测到 · \(version)"
+    return "本机 \(version) · 测试 \(testedVersion)"
 }
 
 private func agentRuntimeIntegrationText(_ status: AgentRuntimeStatus) -> String {
@@ -319,15 +396,22 @@ private func agentRuntimeHealthColor(_ health: AgentHealth) -> NSColor {
 }
 
 private func agentRuntimeAccessibilitySummary(
-    _ status: AgentRuntimeStatus
+    _ status: AgentRuntimeStatus,
+    profile: AgentValidationProfile,
+    personalSessionCount: Int
 ) -> String {
     [
         status.metadata.displayName,
-        agentRuntimeVersionText(status),
+        agentRuntimeVersionText(status, testedVersion: profile.testedVersion),
+        profile.supportedCapabilitiesSummary,
+        profile.knownLimitation,
         status.diagnostics.summary,
         agentRuntimeIntegrationText(status),
         "运行 \(status.activeSessionCount)",
         "需你 \(status.attentionCount)",
+        agentPersonalReadinessText(
+            personalSessionCount: personalSessionCount
+        ),
     ].joined(separator: "，")
 }
 

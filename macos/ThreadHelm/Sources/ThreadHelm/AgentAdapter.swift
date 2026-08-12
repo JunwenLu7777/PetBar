@@ -193,7 +193,11 @@ func agentRuntimeStatusesWithActivity(
                     || $0.executionState == .running)
         }.count
         let attentionCount = attentionItems.filter {
-            $0.identity.agentID == agentID && $0.reason.isInterrupting
+            $0.identity.agentID == agentID
+                && AgentAttentionPolicy.shouldInterrupt(
+                    reason: $0.reason,
+                    evidenceQuality: $0.evidenceQuality
+                )
         }.count
         return AgentRuntimeStatus(
             metadata: status.metadata,

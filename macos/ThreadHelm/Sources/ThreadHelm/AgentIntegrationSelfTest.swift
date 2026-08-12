@@ -87,12 +87,24 @@ func runAgentIntegrationSelfTest() {
         actionability: .viewOnly,
         evidenceQuality: .nativeState,
         updatedAt: runtimeNow,
+        // Dashboard totals describe unresolved hard-attention work, not
+        // whether the interruption gate emitted another notification.
+        isInterrupting: false
+    )
+    let inferredBlockedAttention = AgentAttentionItem(
+        identity: runtimeIdentity,
+        reason: .blocked,
+        actionability: .viewOnly,
+        evidenceQuality: .inferred,
+        updatedAt: runtimeNow,
+        // Exercise the policy boundary independently from any stale producer
+        // flag: inferred blocked state is not verified hard attention.
         isInterrupting: true
     )
     let runtimeStatuses = agentRuntimeStatusesWithActivity(
         runtimePlaceholders,
         snapshots: [runtimeSnapshot],
-        attentionItems: [runtimeAttention]
+        attentionItems: [runtimeAttention, inferredBlockedAttention]
     )
     guard runtimePlaceholders.count == registry.count,
           runtimePlaceholders.first(where: {
@@ -177,6 +189,7 @@ func runAgentIntegrationSelfTest() {
     runCodexClaudeAdapterSelfTest()
     runAgentOpenMeasurementSelfTest()
     runAgentAttentionFeedbackSelfTest()
+    runAgentPersonalSessionEvidenceSelfTest()
     runClaudeAdapterLifecycleSelfTest()
     runAgentIntegrationManagerSelfTest()
 }

@@ -20,6 +20,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 - 灵动岛是唯一展示方式：胶囊可点击展开，展开态包含任务、确认与额度工作区。
 - 检测到 Claude Code CLI 时，可显示 Claude Code 的 5h、周额度与 Fable 周额度；未安装时只显示 Codex 来源。已安装但未登录或读取失败时保留 Claude Code 状态提示；不显示 Token、Credits 或行情模块。
 - 任务控制台统一显示本机 Codex、Claude Code、Cursor、ZCode 和 Pi；每个来源只展示已有证据支持的状态和打开能力，不把应用聚焦或目录 fallback 冒充为精确会话返回。
+- Agents 页面同时显示本机检测版本、真值夹具测试版本、支持能力、已知限制，以及只由主人显式记录的个人真实会话计数；自动化场景不计入个人证据，10 次也不会单独触发 `personal-ready`。
 - 运行中任务会显示开始时间与持续时间；已完成/失败任务的持续时间会固定，不继续增长。
 - 运行中任务预览只显示公开助手输出，新内容会及时替换，同时保留可滚动的完整输出；不展示 thinking、工具参数或原始工具输出。
 - 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json` 和会话公开输出；不会发起远程第三方行情请求。
