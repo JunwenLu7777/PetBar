@@ -3,22 +3,30 @@ set -euo pipefail
 
 ROOT="${0:A:h:h}"
 DOMAIN="gui/$(id -u)"
-LABEL="dev.chatbird.app"
-LEGACY_LABEL="dev.chatbird.codex-quota-panel"
+LABEL="dev.threadhelm.app"
+LEGACY_LABEL="dev.chatbird.app"
+OLDER_LEGACY_LABEL="dev.chatbird.codex-quota-panel"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LEGACY_PLIST="$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
-BUILD_APP="$ROOT/build/ChatBird.app"
-INSTALLED_APP="$HOME/Applications/ChatBird.app"
-LEGACY_APP_SHORTCUT="$HOME/Applications/ChatBird 额度面板.app"
-BUILD_BIN="$BUILD_APP/Contents/MacOS/ChatBird"
-INSTALLED_BIN="$INSTALLED_APP/Contents/MacOS/ChatBird"
-LEGACY_BIN="$LEGACY_APP_SHORTCUT/Contents/MacOS/ChatBirdQuotaPanel"
+OLDER_LEGACY_PLIST="$HOME/Library/LaunchAgents/$OLDER_LEGACY_LABEL.plist"
+BUILD_APP="$ROOT/build/ThreadHelm.app"
+INSTALLED_APP="$HOME/Applications/ThreadHelm.app"
+LEGACY_APP="$HOME/Applications/ChatBird.app"
+OLDER_LEGACY_APP="$HOME/Applications/ChatBird 额度面板.app"
+BUILD_BIN="$BUILD_APP/Contents/MacOS/ThreadHelm"
+INSTALLED_BIN="$INSTALLED_APP/Contents/MacOS/ThreadHelm"
+LEGACY_BIN="$LEGACY_APP/Contents/MacOS/ChatBird"
+OLDER_LEGACY_BIN="$OLDER_LEGACY_APP/Contents/MacOS/ChatBirdQuotaPanel"
 HEALTH_DIR="$HOME/Library/Caches/$LABEL"
 LEGACY_HEALTH_DIR="$HOME/Library/Caches/$LEGACY_LABEL"
-LOG="$HOME/Library/Logs/ChatBird.log"
-LEGACY_LOG="$HOME/Library/Logs/ChatBird额度面板.log"
+OLDER_LEGACY_HEALTH_DIR="$HOME/Library/Caches/$OLDER_LEGACY_LABEL"
+LOG="$HOME/Library/Logs/ThreadHelm.log"
+LEGACY_LOG="$HOME/Library/Logs/ChatBird.log"
+OLDER_LEGACY_LOG="$HOME/Library/Logs/ChatBird额度面板.log"
+OLDER_LEGACY_ALT_LOG="$HOME/Library/Logs/ChatBirdQuotaPanel.log"
 STATE="${CODEX_HOME:-$HOME/.codex}/.codex-global-state.json"
-NATIVE_NOTIFICATION_BACKUP="${CODEX_HOME:-$HOME/.codex}/chatbird-native-notification-backup.json"
+NATIVE_NOTIFICATION_BACKUP="${CODEX_HOME:-$HOME/.codex}/threadhelm-native-notification-backup.json"
+LEGACY_NATIVE_NOTIFICATION_BACKUP="${CODEX_HOME:-$HOME/.codex}/chatbird-native-notification-backup.json"
 CONFIG="${CODEX_HOME:-$HOME/.codex}/config.toml"
 
 detach_legacy_codex_pet_selection() {
@@ -27,7 +35,7 @@ detach_legacy_codex_pet_selection() {
     '^[[:space:]]*selected-avatar-id[[:space:]]*=[[:space:]]*"custom:chatbird-nt"' \
     "$CONFIG" || return 0
 
-  /bin/cp -p "$CONFIG" "$CONFIG.chatbird-independent-backup-$(date +%Y%m%d-%H%M%S)"
+  /bin/cp -p "$CONFIG" "$CONFIG.threadhelm-uninstall-backup-$(date +%Y%m%d-%H%M%S)"
   local temporary_config
   temporary_config="$(/usr/bin/mktemp "$CONFIG.tmp.XXXXXX")"
   /usr/bin/awk '
@@ -50,13 +58,19 @@ then
   exit 1
 fi
 
-/bin/launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-/bin/launchctl bootout "$DOMAIN/$LEGACY_LABEL" 2>/dev/null || true
+for label in "$LABEL" "$LEGACY_LABEL" "$OLDER_LEGACY_LABEL"; do
+  /bin/launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
+done
+/usr/bin/pkill -x ThreadHelm 2>/dev/null || true
 /usr/bin/pkill -x ChatBird 2>/dev/null || true
 /usr/bin/pkill -x ChatBirdQuotaPanel 2>/dev/null || true
 
 CLEANUP_BIN=""
-for candidate in "$INSTALLED_BIN" "$BUILD_BIN" "$LEGACY_BIN"; do
+for candidate in \
+  "$INSTALLED_BIN" \
+  "$BUILD_BIN" \
+  "$LEGACY_BIN" \
+  "$OLDER_LEGACY_BIN"; do
   if [[ -x "$candidate" ]]; then
     CLEANUP_BIN="$candidate"
     break
@@ -64,18 +78,42 @@ for candidate in "$INSTALLED_BIN" "$BUILD_BIN" "$LEGACY_BIN"; do
 done
 if [[ -n "$CLEANUP_BIN" ]]; then
   "$CLEANUP_BIN" --uninstall-claude-hook
+fi
+
+RESTORE_BACKUP=""
+if [[ -f "$NATIVE_NOTIFICATION_BACKUP" ]]; then
+  RESTORE_BACKUP="$NATIVE_NOTIFICATION_BACKUP"
+elif [[ -f "$LEGACY_NATIVE_NOTIFICATION_BACKUP" ]]; then
+  RESTORE_BACKUP="$LEGACY_NATIVE_NOTIFICATION_BACKUP"
+fi
+if [[ -n "$RESTORE_BACKUP" ]]; then
+  if [[ -z "$CLEANUP_BIN" ]]; then
+    echo "找不到可用于恢复 Codex 原生气泡设置的 ThreadHelm 或旧 ChatBird 程序。" >&2
+    exit 1
+  fi
   "$CLEANUP_BIN" \
     --restore-codex-overlay-notifications \
     "$STATE" \
-    "$NATIVE_NOTIFICATION_BACKUP"
+    "$RESTORE_BACKUP"
 fi
 
 detach_legacy_codex_pet_selection
 
-/bin/rm -f "$PLIST" "$LEGACY_PLIST" "$LOG" "$LEGACY_LOG"
+/bin/rm -f \
+  "$PLIST" \
+  "$LEGACY_PLIST" \
+  "$OLDER_LEGACY_PLIST" \
+  "$LOG" \
+  "$LEGACY_LOG" \
+  "$OLDER_LEGACY_LOG" \
+  "$OLDER_LEGACY_ALT_LOG" \
+  "$NATIVE_NOTIFICATION_BACKUP" \
+  "$LEGACY_NATIVE_NOTIFICATION_BACKUP"
 /bin/rm -rf \
   "$INSTALLED_APP" \
-  "$LEGACY_APP_SHORTCUT" \
+  "$LEGACY_APP" \
+  "$OLDER_LEGACY_APP" \
   "$HEALTH_DIR" \
-  "$LEGACY_HEALTH_DIR"
-echo "ChatBird 已卸载"
+  "$LEGACY_HEALTH_DIR" \
+  "$OLDER_LEGACY_HEALTH_DIR"
+echo "ThreadHelm 与旧 ChatBird 产品文件已卸载"
