@@ -56,9 +56,9 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 | --- | --- |
 | Codex | Existing local snapshot reads do not block Codex. |
 | Claude Code | Existing state reads fail independently; the verified native Claude path remains available. |
-| Cursor | Required adapter contract: hooks return a valid success response quickly when ThreadHelm is absent; runtime conformance is not yet implemented. |
-| ZCode | Required adapter contract: managed hooks fail open and never prevent ZCode work; runtime conformance is not yet implemented. |
-| Pi | Required adapter contract: extension failures are contained and Pi continues normally; runtime conformance is not yet implemented. |
+| Cursor | Isolated runtime self-tests verify that hooks return a valid success response quickly when ThreadHelm is absent and failures remain contained. Replay through the currently installed live hook is still pending. |
+| ZCode | Isolated runtime self-tests verify that managed hooks fail open and never prevent ZCode work. Replay through the currently installed live hook is still pending. |
+| Pi | Isolated runtime self-tests verify that extension failures are contained and Pi continues normally. Replay through the currently installed live extension is still pending. |
 
 ## Freshness
 
