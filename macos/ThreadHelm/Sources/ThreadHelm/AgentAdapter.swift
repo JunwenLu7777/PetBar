@@ -193,7 +193,7 @@ func agentRuntimeStatusesWithActivity(
                     || $0.executionState == .running)
         }.count
         let attentionCount = attentionItems.filter {
-            $0.identity.agentID == agentID
+            $0.identity.agentID == agentID && $0.reason.isInterrupting
         }.count
         return AgentRuntimeStatus(
             metadata: status.metadata,
@@ -821,17 +821,7 @@ func normalizedBuiltInAgentState(
         ))
     }
     snapshots.sort(by: agentSnapshotIsOrderedBefore)
-    let attentionItems = snapshots.compactMap { snapshot -> AgentAttentionItem? in
-        guard snapshot.attentionReason != .none else { return nil }
-        return AgentAttentionItem(
-            identity: snapshot.identity,
-            reason: snapshot.attentionReason,
-            actionability: snapshot.actionability,
-            evidenceQuality: snapshot.evidenceQuality,
-            updatedAt: snapshot.updatedAt,
-            isInterrupting: snapshot.attentionReason.isInterrupting
-        )
-    }
+    let attentionItems = agentAttentionItems(from: snapshots)
     return (snapshots, attentionItems)
 }
 

@@ -24,6 +24,10 @@ if let integrationExitCode = AgentIntegrationCLI.runIfRequested() {
     exit(integrationExitCode)
 }
 
+if let attentionFeedbackExitCode = runAgentAttentionFeedbackCLIIfRequested() {
+    exit(Int32(attentionFeedbackExitCode))
+}
+
 if CommandLine.arguments.contains("--print-quota") {
     printQuotaOnce()
 }

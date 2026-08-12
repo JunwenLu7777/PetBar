@@ -213,18 +213,7 @@ func agentDashboardProjection(
         }
     }
     let snapshots = snapshotsByKey.values.sorted(by: agentSnapshotIsOrderedBefore)
-    let attentionItems = snapshots.compactMap {
-        snapshot -> AgentAttentionItem? in
-        guard snapshot.attentionReason != .none else { return nil }
-        return AgentAttentionItem(
-            identity: snapshot.identity,
-            reason: snapshot.attentionReason,
-            actionability: snapshot.actionability,
-            evidenceQuality: snapshot.evidenceQuality,
-            updatedAt: snapshot.updatedAt,
-            isInterrupting: snapshot.attentionReason.isInterrupting
-        )
-    }
+    let attentionItems = agentAttentionItems(from: snapshots)
     let fallbackItems = polledCollection.items.filter {
         !overlaidLiveKeys.contains($0.identityKey)
     }
@@ -416,18 +405,7 @@ final class AgentLiveEventStore {
                 updatedAt: snapshot.updatedAt
             )
         }.sorted(by: agentSnapshotIsOrderedBefore)
-        let attentionItems = snapshots.compactMap {
-            snapshot -> AgentAttentionItem? in
-            guard snapshot.attentionReason != .none else { return nil }
-            return AgentAttentionItem(
-                identity: snapshot.identity,
-                reason: snapshot.attentionReason,
-                actionability: snapshot.actionability,
-                evidenceQuality: snapshot.evidenceQuality,
-                updatedAt: snapshot.updatedAt,
-                isInterrupting: snapshot.attentionReason.isInterrupting
-            )
-        }
+        let attentionItems = agentAttentionItems(from: snapshots)
         return AgentReductionResult(
             snapshots: snapshots,
             attentionItems: attentionItems,

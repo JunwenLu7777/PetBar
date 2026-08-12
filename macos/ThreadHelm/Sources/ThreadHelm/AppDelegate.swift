@@ -59,6 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let agentRegistry = AgentRegistry.builtIn
     private let agentLiveEventStore = AgentLiveEventStore()
     private let agentOpenMeasurementStore = AgentOpenMeasurementStore()
+    private let agentAttentionInterruptionGate =
+        AgentAttentionInterruptionGate()
     private var agentLiveReductionGate = AgentLiveReductionGate()
     private var agentEventChannelAvailable = false
     private var lastClaudePermissionOpenResult: OpenResult?
@@ -438,11 +440,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     guard self.agentLiveReductionGate.shouldApply(
                         revision: liveUpdate.revision
                     ) else { return }
-                    let projected = agentDashboardProjection(
+                    let projected = self.makeAgentDashboardProjection(
                         collection: self.lastPolledTaskCollection,
                         permissionQueue: queue,
-                        liveReduction: liveUpdate.reduction,
-                        registry: self.agentRegistry
+                        liveReduction: liveUpdate.reduction
                     )
                     snapshot.taskCollection = projected.taskCollection
                     snapshot.agentSnapshots = projected.snapshots
@@ -864,6 +865,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         snapshot.agentEventChannelAvailable = agentEventChannelAvailable
     }
 
+    private func makeAgentDashboardProjection(
+        collection: TaskProgressCollectionSnapshot,
+        permissionQueue: ClaudePermissionQueueSnapshot,
+        liveReduction: AgentReductionResult
+    ) -> AgentDashboardProjection {
+        let projected = agentDashboardProjection(
+            collection: collection,
+            permissionQueue: permissionQueue,
+            liveReduction: liveReduction,
+            registry: agentRegistry
+        )
+        return AgentDashboardProjection(
+            taskCollection: projected.taskCollection,
+            snapshots: projected.snapshots,
+            attentionItems: agentAttentionInterruptionGate.evaluate(
+                items: projected.attentionItems,
+                foregroundSessionKeys: foregroundHandledAgentSessionKeys(
+                    presentationState: dynamicIslandController?.state,
+                    selectedTaskKey: dynamicIslandController?.selectedTaskKey,
+                    permissionQueue: permissionQueue
+                )
+            )
+        )
+    }
+
     private func refreshTaskProgress() {
         guard let generation = taskProgressRefreshGate.begin() else { return }
         dashboardStore.update { $0.isTaskRefreshing = true }
@@ -890,11 +916,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         snapshot.isTaskRefreshing = false
                         return
                     }
-                    let projected = agentDashboardProjection(
+                    let projected = self.makeAgentDashboardProjection(
                         collection: collection,
                         permissionQueue: snapshot.permissionQueue,
-                        liveReduction: liveUpdate.reduction,
-                        registry: self.agentRegistry
+                        liveReduction: liveUpdate.reduction
                     )
                     snapshot.taskCollection = projected.taskCollection
                     snapshot.agentSnapshots = projected.snapshots
@@ -940,11 +965,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         dashboardStore.update { snapshot in
-            let projected = agentDashboardProjection(
+            let projected = makeAgentDashboardProjection(
                 collection: lastPolledTaskCollection,
                 permissionQueue: snapshot.permissionQueue,
-                liveReduction: update.reduction,
-                registry: agentRegistry
+                liveReduction: update.reduction
             )
             snapshot.taskCollection = projected.taskCollection
             snapshot.agentSnapshots = projected.snapshots

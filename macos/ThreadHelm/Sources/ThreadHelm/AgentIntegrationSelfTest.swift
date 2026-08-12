@@ -167,6 +167,7 @@ func runAgentIntegrationSelfTest() {
     runAgentReducerSelfTest()
     runAgentHookCommandSelfTest()
     runAgentLiveEventStoreSelfTest()
+    runAgentAttentionPolicySelfTest()
     guard runAgentEventSocketSelfTest() else {
         failAgentIntegrationSelfTest("owner-only event socket")
     }
@@ -175,6 +176,7 @@ func runAgentIntegrationSelfTest() {
     runPiAgentAdapterSelfTest()
     runCodexClaudeAdapterSelfTest()
     runAgentOpenMeasurementSelfTest()
+    runAgentAttentionFeedbackSelfTest()
     runClaudeAdapterLifecycleSelfTest()
     runAgentIntegrationManagerSelfTest()
 }

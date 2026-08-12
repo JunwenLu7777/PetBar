@@ -26,17 +26,7 @@ enum AgentEventReducer {
         })
         snapshots.sort(by: agentSnapshotIsOrderedBefore)
 
-        let attentionItems = snapshots.compactMap { snapshot -> AgentAttentionItem? in
-            guard snapshot.attentionReason != .none else { return nil }
-            return AgentAttentionItem(
-                identity: snapshot.identity,
-                reason: snapshot.attentionReason,
-                actionability: snapshot.actionability,
-                evidenceQuality: snapshot.evidenceQuality,
-                updatedAt: snapshot.updatedAt,
-                isInterrupting: snapshot.attentionReason.isInterrupting
-            )
-        }
+        let attentionItems = agentAttentionItems(from: snapshots)
 
         return AgentReductionResult(
             snapshots: snapshots,

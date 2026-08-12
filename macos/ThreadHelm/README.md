@@ -46,6 +46,7 @@ Codex 完全退出后，ThreadHelm 会短暂等待全局状态与任务索引稳
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --print-task-progress
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --print-panel-location
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --print-saved-panel-location
+./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --print-attention-feedback
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --agent-integrations status --root /tmp/threadhelm-isolated-root
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-placement
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-lifecycle
@@ -56,6 +57,23 @@ Codex 完全退出后，ThreadHelm 会短暂等待全局状态与任务索引稳
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-threadhelm-edition
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-dynamic-island
 ```
+
+注意力评价只接受五个固定 Agent ID（`codex`、`claudeCode`、`cursor`、
+`zcode`、`pi`）和四个固定分类，不接收标题、路径或 session ID：
+
+```bash
+./build/ThreadHelm.app/Contents/MacOS/ThreadHelm \
+  --record-attention-feedback cursor useful
+./build/ThreadHelm.app/Contents/MacOS/ThreadHelm \
+  --record-attention-feedback zcode unnecessary
+./build/ThreadHelm.app/Contents/MacOS/ThreadHelm \
+  --record-attention-feedback claudeCode wrongState
+./build/ThreadHelm.app/Contents/MacOS/ThreadHelm \
+  --record-attention-feedback codex wrongSession
+```
+
+未满 20 次真实评价时只显示原始计数和“样本不足”，不会给出看似可靠的
+百分比。
 
 灵动岛确定性预览：
 

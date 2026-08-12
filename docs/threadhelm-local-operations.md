@@ -14,6 +14,28 @@ ThreadHelm 只供这台 Mac 的当前用户使用。集成管理没有云端、�
 
 App 本身安装到 `~/Applications/ThreadHelm.app`，登录启动项是 `~/Library/LaunchAgents/dev.threadhelm.app.plist`。运行日志在 `~/Library/Logs/ThreadHelm.log`，健康文件在 `~/Library/Caches/dev.threadhelm.app/`。
 
+## 低噪声提醒和本地评价
+
+ThreadHelm 只把权限、问题、计划确认、已经验证的阻塞和任务级失败列为可打断原因。同一 Agent、同一原生会话、同一原因在未解决期间只提醒一次；原因短暂消失后 60 秒内再次出现仍合并。普通工具失败、进程抖动和完成/可查看状态只更新胶囊，不触发新的打断。当前构建没有开启完成通知。
+
+当灵动岛已经展开到同一个任务，或 Claude 确认面板正在处理当前请求时，对应提醒会在内存中标记为已经处理。这个合并状态不写磁盘。
+
+如需评价提醒是否有用，只能使用固定 Agent ID 和固定分类：
+
+```bash
+BIN="$HOME/Applications/ThreadHelm.app/Contents/MacOS/ThreadHelm"
+
+"$BIN" --record-attention-feedback cursor useful
+"$BIN" --record-attention-feedback cursor unnecessary
+"$BIN" --record-attention-feedback cursor wrongState
+"$BIN" --record-attention-feedback cursor wrongSession
+"$BIN" --print-attention-feedback
+```
+
+计数保存在 `~/Library/Application Support/ThreadHelm/attention-feedback-v1.json`，文件权限为 `0600`。文件只含 Agent ID、四种固定分类和非负整数；不含标题、提示词、命令、路径、session ID、时间戳或时间线，也不会发送网络遥测。少于 20 次真实评价时，诊断只显示原始计数，不计算百分比。
+
+如果遇到重复提醒，也归到 `unnecessary`；这样统计口径始终只有上述四类，不会为了备注而写入自由文本。
+
 ## 检查、安装、修复和卸载集成
 
 以下命令必须明确写 `--live` 才能接触真实主目录。没有 `--live` 时命令会拒绝执行；自动化测试使用 `--root` 加临时目录。
