@@ -82,15 +82,15 @@ final class AgentEventSocketServer {
             configuration.socketURL.deletingLastPathComponent()
         )
         try AgentEventSocketAddress.validate(path: configuration.socketURL.path)
+        try AgentEventSocketFileSystem.removeStaleSocket(
+            at: configuration.socketURL,
+            ownedBy: geteuid()
+        )
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw AgentEventSocketError.socketCreationFailed }
         AgentEventSocketOptions.disableSIGPIPE(on: fd)
 
-        try AgentEventSocketFileSystem.removeStaleSocket(
-            at: configuration.socketURL,
-            ownedBy: geteuid()
-        )
         do {
             try AgentEventSocketAddress.withSockAddr(
                 path: configuration.socketURL.path

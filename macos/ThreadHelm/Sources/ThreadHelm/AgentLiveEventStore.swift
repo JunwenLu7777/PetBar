@@ -9,7 +9,8 @@
 import Foundation
 
 enum AgentLiveEventPolicy {
-    static let maximumEventsPerAgent = 256
+    static let maximumEventsPerAgent = AgentTransportContract.maximumQueuedEvents
+    static let maximumBytesPerAgent = AgentTransportContract.maximumQueuedBytes
     static let activeFreshness: TimeInterval = 5 * 60
     static let idleFreshness: TimeInterval = 30 * 60
     static let terminalFreshness: TimeInterval = 24 * 60 * 60
@@ -296,8 +297,20 @@ func taskProgressItem(from snapshot: AgentSessionSnapshot) -> TaskProgressItem {
 
 final class AgentLiveEventStore {
     private let lock = NSLock()
-    private var eventsByAgentID: [AgentID: [String: AgentEvent]] = [:]
+    private let maximumEventsPerAgent: Int
+    private let maximumBytesPerAgent: Int
+    private var eventsByAgentID: [AgentID: [String: RetainedAgentLiveEvent]] = [:]
     private var revision: UInt64 = 0
+
+    init(
+        maximumEventsPerAgent: Int = AgentLiveEventPolicy.maximumEventsPerAgent,
+        maximumBytesPerAgent: Int = AgentLiveEventPolicy.maximumBytesPerAgent
+    ) {
+        precondition(maximumEventsPerAgent > 0)
+        precondition(maximumBytesPerAgent > 0)
+        self.maximumEventsPerAgent = maximumEventsPerAgent
+        self.maximumBytesPerAgent = maximumBytesPerAgent
+    }
 
     @discardableResult
     func ingest(
@@ -318,34 +331,61 @@ final class AgentLiveEventStore {
         receivedAt: Date = Date(),
         registry: AgentRegistry = .builtIn
     ) -> AgentLiveReductionUpdate? {
-        guard let event = AgentTransportEnvelopeProjection.event(
-            from: envelope,
-            receivedAt: receivedAt,
-            registry: registry
-        ) else { return nil }
+        let normalizedEnvelope = AgentTransportEnvelope(
+            agentID: envelope.agentID,
+            adapterVersion: envelope.adapterVersion,
+            nativeSessionCandidate: envelope.nativeSessionCandidate,
+            eventID: envelope.eventID,
+            sequence: envelope.sequence,
+            eventType: envelope.eventType,
+            monotonicNanoseconds: envelope.monotonicNanoseconds,
+            redactedPayload: envelope.redactedPayload
+        )
+        guard let encoding = try? AgentTransportEncoder.encode(normalizedEnvelope),
+              !encoding.wasReducedToMetadata,
+              encoding.data.count <= AgentTransportContract.maximumSerializedBytes,
+              let event = AgentTransportEnvelopeProjection.event(
+                  from: normalizedEnvelope,
+                  receivedAt: receivedAt,
+                  registry: registry
+              )
+        else { return nil }
 
         lock.lock()
         var indexed = eventsByAgentID[event.identity.agentID] ?? [:]
         let storageKey = agentLiveEventStorageKey(event)
+        let retained = RetainedAgentLiveEvent(
+            event: event,
+            serializedByteCount: encoding.data.count
+        )
         if let existing = indexed[storageKey] {
-            indexed[storageKey] = agentLiveEventIsEarlier(existing, event)
-                ? event
+            indexed[storageKey] = agentLiveEventIsEarlier(existing.event, event)
+                ? retained
                 : existing
         } else {
-            indexed[storageKey] = event
+            indexed[storageKey] = retained
         }
-        if indexed.count > AgentLiveEventPolicy.maximumEventsPerAgent {
+        var retainedByteCount = indexed.values.reduce(0) {
+            $0 + $1.serializedByteCount
+        }
+        if indexed.count > maximumEventsPerAgent
+            || retainedByteCount > maximumBytesPerAgent
+        {
             let orderedKeys = indexed.sorted {
-                eventEvictionComesFirst($0.value, $1.value)
+                eventEvictionComesFirst($0.value.event, $1.value.event)
             }.map(\.key)
-            for key in orderedKeys.prefix(
-                indexed.count - AgentLiveEventPolicy.maximumEventsPerAgent
-            ) {
-                indexed.removeValue(forKey: key)
+            for key in orderedKeys where indexed.count > maximumEventsPerAgent
+                || retainedByteCount > maximumBytesPerAgent
+            {
+                if let removed = indexed.removeValue(forKey: key) {
+                    retainedByteCount -= removed.serializedByteCount
+                }
             }
         }
         eventsByAgentID[event.identity.agentID] = indexed
-        let events = eventsByAgentID.values.flatMap { $0.values }
+        let events = eventsByAgentID.values.flatMap { values in
+            values.values.map(\.event)
+        }
         revision &+= 1
         let updateRevision = revision
         lock.unlock()
@@ -364,7 +404,9 @@ final class AgentLiveEventStore {
 
     func snapshotUpdate(at now: Date = Date()) -> AgentLiveReductionUpdate {
         lock.lock()
-        let events = eventsByAgentID.values.flatMap { $0.values }
+        let events = eventsByAgentID.values.flatMap { values in
+            values.values.map(\.event)
+        }
         revision &+= 1
         let updateRevision = revision
         lock.unlock()
@@ -375,6 +417,14 @@ final class AgentLiveEventStore {
                 at: now
             )
         )
+    }
+
+    func retainedSerializedByteCount(for agentID: AgentID) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return eventsByAgentID[agentID]?.values.reduce(0) {
+            $0 + $1.serializedByteCount
+        } ?? 0
     }
 
     private func freshened(
@@ -414,6 +464,11 @@ final class AgentLiveEventStore {
     }
 }
 
+private struct RetainedAgentLiveEvent {
+    let event: AgentEvent
+    let serializedByteCount: Int
+}
+
 private func agentLiveEventStorageKey(_ event: AgentEvent) -> String {
     let identity = event.identity.key
     return "\(identity.utf8.count):\(identity)\(event.eventID)"
@@ -448,8 +503,10 @@ private func eventEvictionComesFirst(
     _ lhs: AgentEvent,
     _ rhs: AgentEvent
 ) -> Bool {
-    if lhs.attentionReason.isInterrupting != rhs.attentionReason.isInterrupting {
-        return !lhs.attentionReason.isInterrupting
+    let lhsHasAttention = lhs.attentionReason != .none
+    let rhsHasAttention = rhs.attentionReason != .none
+    if lhsHasAttention != rhsHasAttention {
+        return !lhsHasAttention
     }
     if lhs.observedAt != rhs.observedAt {
         return lhs.observedAt < rhs.observedAt

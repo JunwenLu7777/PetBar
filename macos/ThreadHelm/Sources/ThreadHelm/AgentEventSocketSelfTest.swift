@@ -306,16 +306,27 @@ private final class AgentEventSocketSelfTest {
     private func assertExistingRegularFileIsPreserved(socketURL: URL) throws {
         let original = Data("do-not-unlink".utf8)
         try original.write(to: socketURL)
-        let server = AgentEventSocketServer(
-            configuration: AgentEventSocketConfiguration(socketURL: socketURL)
-        ) { _ in }
-        do {
-            try server.start()
-            server.stop()
-            throw fail("existing regular file was replaced")
-        } catch AgentEventSocketError.unsafeExistingPath {
+        let descriptorCountBefore = openAgentEventSocketDescriptorCount()
+        for _ in 0..<24 {
+            let server = AgentEventSocketServer(
+                configuration: AgentEventSocketConfiguration(
+                    socketURL: socketURL
+                )
+            ) { _ in }
+            do {
+                try server.start()
+                server.stop()
+                throw fail("existing regular file was replaced")
+            } catch AgentEventSocketError.unsafeExistingPath {
+            }
         }
-        guard try Data(contentsOf: socketURL) == original else {
+        let descriptorCountAfter = openAgentEventSocketDescriptorCount()
+        guard descriptorCountAfter == descriptorCountBefore,
+              try Data(contentsOf: socketURL) == original
+        else {
+            if descriptorCountAfter != descriptorCountBefore {
+                throw fail("unsafe existing socket path leaked descriptors")
+            }
             throw fail("existing regular file was not preserved")
         }
     }
@@ -460,6 +471,15 @@ private final class AgentEventSocketSelfTest {
 
     private func fail(_ message: String) -> AgentEventSocketSelfTestFailure {
         .failed(message)
+    }
+}
+
+private func openAgentEventSocketDescriptorCount() -> Int {
+    let upperBound = min(getdtablesize(), CInt(4_096))
+    return (0..<upperBound).reduce(into: 0) { count, descriptor in
+        if fcntl(descriptor, F_GETFD) >= 0 {
+            count += 1
+        }
     }
 }
 

@@ -100,6 +100,7 @@ func runAgentLiveEventStoreSelfTest() {
             makeLiveStoreEnvelope(
                 agentID: .cursor,
                 eventID: "bounded-\(index)",
+                nativeSessionCandidate: "bounded-\(index)",
                 sequence: index,
                 state: .running
             ),
@@ -113,6 +114,72 @@ func runAgentLiveEventStoreSelfTest() {
         failAgentLiveEventStoreSelfTest("bounded event retention")
     }
 
+    let reviewReady = makeLiveStoreEnvelope(
+        agentID: .cursor,
+        eventID: "review-ready",
+        nativeSessionCandidate: "review-ready",
+        sequence: 1,
+        state: .completed,
+        reason: .reviewReady
+    )
+    let oldChurn = makeLiveStoreEnvelope(
+        agentID: .cursor,
+        eventID: "old-churn",
+        nativeSessionCandidate: "old-churn",
+        sequence: 1,
+        state: .running
+    )
+    let newChurn = makeLiveStoreEnvelope(
+        agentID: .cursor,
+        eventID: "new-churn",
+        nativeSessionCandidate: "new-churn",
+        sequence: 1,
+        state: .running
+    )
+    let retainedByteLimit = serializedLiveStoreEnvelopeByteCount(reviewReady)
+        + serializedLiveStoreEnvelopeByteCount(newChurn)
+    let byteBoundedStore = AgentLiveEventStore(
+        maximumEventsPerAgent: AgentLiveEventPolicy.maximumEventsPerAgent,
+        maximumBytesPerAgent: retainedByteLimit
+    )
+    _ = byteBoundedStore.ingest(reviewReady, receivedAt: base)
+    _ = byteBoundedStore.ingest(
+        oldChurn,
+        receivedAt: base.addingTimeInterval(1)
+    )
+    _ = byteBoundedStore.ingest(
+        newChurn,
+        receivedAt: base.addingTimeInterval(2)
+    )
+    _ = byteBoundedStore.ingest(
+        makeLiveStoreEnvelope(
+            agentID: .zcode,
+            eventID: "zcode-independent",
+            nativeSessionCandidate: "zcode-independent",
+            sequence: 1,
+            state: .running
+        ),
+        receivedAt: base
+    )
+    let byteBounded = byteBoundedStore.snapshot(
+        at: base.addingTimeInterval(3)
+    )
+    let retainedKeys = Set(byteBounded.snapshots.map(\.identity.nativeID))
+    guard AgentLiveEventPolicy.maximumBytesPerAgent
+            == AgentTransportContract.maximumQueuedBytes,
+          byteBounded.processedEventCount == 3,
+          retainedKeys.contains("review-ready"),
+          retainedKeys.contains("new-churn"),
+          !retainedKeys.contains("old-churn"),
+          retainedKeys.contains("zcode-independent"),
+          byteBoundedStore.retainedSerializedByteCount(for: .cursor)
+            <= retainedByteLimit
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "per-adapter byte bound and attention-first retention"
+        )
+    }
+
     var reductionGate = AgentLiveReductionGate()
     guard reductionGate.shouldApply(revision: 2),
           !reductionGate.shouldApply(revision: 1),
@@ -120,6 +187,37 @@ func runAgentLiveEventStoreSelfTest() {
           reductionGate.shouldApply(revision: 3)
     else {
         failAgentLiveEventStoreSelfTest("live reduction revision gate")
+    }
+
+    let revisionStore = AgentLiveEventStore()
+    guard let delayedIngest = revisionStore.ingestUpdate(
+        makeLiveStoreEnvelope(
+            agentID: .pi,
+            eventID: "revision-running",
+            nativeSessionCandidate: "revision-session",
+            sequence: 1,
+            state: .running,
+            actionability: .viewOnly
+        ),
+        receivedAt: base
+    ) else {
+        failAgentLiveEventStoreSelfTest("live revision ingest")
+    }
+    let supersedingSnapshot = revisionStore.snapshotUpdate(
+        at: base.addingTimeInterval(1)
+    )
+    var supersedingGate = AgentLiveReductionGate()
+    guard supersedingSnapshot.revision > delayedIngest.revision,
+          supersedingGate.shouldApply(revision: supersedingSnapshot.revision),
+          supersedingSnapshot.reduction.snapshots.contains(where: {
+              $0.identity.nativeID == "revision-session"
+                  && $0.executionState == .running
+          }),
+          !supersedingGate.shouldApply(revision: delayedIngest.revision)
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "higher snapshot must safely supersede delayed ingest"
+        )
     }
 
     let projection = agentDashboardProjection(
@@ -195,6 +293,7 @@ func runAgentLiveEventStoreSelfTest() {
 private func makeLiveStoreEnvelope(
     agentID: AgentID,
     eventID: String,
+    nativeSessionCandidate: String = "session-one",
     sequence: Int?,
     state: ExecutionState,
     reason: AttentionReason = .none,
@@ -203,7 +302,7 @@ private func makeLiveStoreEnvelope(
     AgentTransportEnvelope(
         agentID: agentID,
         adapterVersion: "self-test",
-        nativeSessionCandidate: "session-one",
+        nativeSessionCandidate: nativeSessionCandidate,
         eventID: eventID,
         sequence: sequence,
         eventType: eventID,
@@ -216,6 +315,17 @@ private func makeLiveStoreEnvelope(
             "freshness": "fresh",
         ]
     )
+}
+
+private func serializedLiveStoreEnvelopeByteCount(
+    _ envelope: AgentTransportEnvelope
+) -> Int {
+    guard let encoding = try? AgentTransportEncoder.encode(envelope),
+          !encoding.wasReducedToMetadata
+    else {
+        failAgentLiveEventStoreSelfTest("valid envelope byte count")
+    }
+    return encoding.data.count
 }
 
 private func failAgentLiveEventStoreSelfTest(_ message: String) -> Never {
