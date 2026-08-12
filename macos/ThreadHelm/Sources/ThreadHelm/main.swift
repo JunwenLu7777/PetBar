@@ -13,6 +13,13 @@ import CoreGraphics
 import Darwin
 import Foundation
 
+// Agent hooks are synchronous vendor callbacks. Handle them before AppKit is
+// initialized, keep stdout empty, and always fail open even if ThreadHelm is
+// stopped or its local endpoint is unhealthy.
+if runAgentHookCommandIfRequested() {
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--print-quota") {
     printQuotaOnce()
 }

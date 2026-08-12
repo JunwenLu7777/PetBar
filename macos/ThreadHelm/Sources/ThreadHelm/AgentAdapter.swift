@@ -172,9 +172,9 @@ func builtInAgentAdapters() -> [any AgentAdapter] {
     return [
         CodexAgentAdapter(metadata: indexed[.codex]!),
         ClaudeCodeAgentAdapter(metadata: indexed[.claudeCode]!),
-        DescriptorAgentAdapter(metadata: indexed[.cursor]!),
-        DescriptorAgentAdapter(metadata: indexed[.zcode]!),
-        DescriptorAgentAdapter(metadata: indexed[.pi]!),
+        CursorAgentAdapter(metadata: indexed[.cursor]!),
+        ZCodeAgentAdapter(metadata: indexed[.zcode]!),
+        PiAgentAdapter(metadata: indexed[.pi]!),
     ]
 }
 
@@ -488,6 +488,12 @@ private func normalizedActionability(
     if agentID == .claudeCode,
        [.permission, .question, .planApproval].contains(reason) {
         return .inApp
+    }
+    if agentID == .cursor || agentID == .zcode {
+        return item.canOpen ? .openNativeApp : .viewOnly
+    }
+    if agentID == .pi {
+        return .viewOnly
     }
     if item.canOpen { return .openExactNativeSession }
     if item.workingDirectory != nil { return .openWorkingDirectory }

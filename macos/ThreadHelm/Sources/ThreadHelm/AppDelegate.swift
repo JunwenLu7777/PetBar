@@ -57,11 +57,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let healthWriter = RuntimeHealthWriter()
     private let dashboardStore = ActivityDashboardStore()
     private let agentRegistry = AgentRegistry.builtIn
+    private let agentLiveEventStore = AgentLiveEventStore()
+    private var agentLiveReductionGate = AgentLiveReductionGate()
+    private var agentEventChannelAvailable = false
+    private var lastPolledTaskCollection = TaskProgressCollectionSnapshot
+        .displaying([])
     private var claudePermissionCoordinator: ClaudePermissionCoordinator!
     private var dynamicIslandController: DynamicIslandWindowController!
     private var dynamicIslandConfirmationPresenter:
         DynamicIslandConfirmationPresenter!
     private var claudePermissionHookServer: ClaudePermissionHookServer?
+    private var agentEventSocketServer: AgentEventSocketServer?
     private var screenParametersObserver: NSObjectProtocol?
     private var statusItem: NSStatusItem?
     private var visibilityHotKey: ThreadHelmVisibilityHotKey?
@@ -131,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         makeDynamicIslandController()
         startCodexDesktopMonitoring()
         startClaudePermissionHook()
+        agentEventChannelAvailable = startAgentEventSocket()
         startScreenParameterMonitoring()
         makeStatusItem()
         makeVisibilityHotKey()
@@ -140,7 +147,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         showCurrentPresentation()
         updateStatusMenu()
-        healthWriter.write(status: "started", panelVisible: false, locationSource: nil, force: true)
+        healthWriter.write(
+            status: "started",
+            panelVisible: false,
+            locationSource: nil,
+            agentEventChannelAvailable: agentEventChannelAvailable,
+            force: true
+        )
         availableProviders.forEach { refreshQuota(provider: $0) }
         refreshTaskProgress()
         nativeActivityPillSuppressionMonitor.start()
@@ -182,6 +195,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dynamicIslandConfirmationPresenter?.setPresentationActive(false)
         claudePermissionCoordinator?.cancelAll()
         claudePermissionHookServer?.stop()
+        agentEventSocketServer?.stop()
+        agentEventSocketServer = nil
         dynamicIslandController?.hide()
         refreshTimer?.invalidate()
         taskProgressTimer?.invalidate()
@@ -190,7 +205,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSStatusBar.system.removeStatusItem(statusItem)
         }
         visibilityHotKey = nil
-        healthWriter.write(status: "terminated", panelVisible: false, locationSource: nil, force: true)
+        healthWriter.write(
+            status: "terminated",
+            panelVisible: false,
+            locationSource: nil,
+            agentEventChannelAvailable: agentEventChannelAvailable,
+            force: true
+        )
     }
 
     private func makeDynamicIslandController() {
@@ -402,13 +423,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let self else { return }
                 self.dashboardStore.update { snapshot in
                     snapshot.permissionQueue = queue
-                    let normalized = normalizedBuiltInAgentState(
-                        collection: snapshot.taskCollection,
+                    let liveUpdate = self.agentLiveEventStore.snapshotUpdate()
+                    guard self.agentLiveReductionGate.shouldApply(
+                        revision: liveUpdate.revision
+                    ) else { return }
+                    let projected = agentDashboardProjection(
+                        collection: self.lastPolledTaskCollection,
                         permissionQueue: queue,
+                        liveReduction: liveUpdate.reduction,
                         registry: self.agentRegistry
                     )
-                    snapshot.agentSnapshots = normalized.snapshots
-                    snapshot.attentionItems = normalized.attentionItems
+                    snapshot.taskCollection = projected.taskCollection
+                    snapshot.agentSnapshots = projected.snapshots
+                    snapshot.attentionItems = projected.attentionItems
                 }
             }
         )
@@ -547,6 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             status: "hidden-by-user",
             panelVisible: false,
             locationSource: nil,
+            agentEventChannelAvailable: agentEventChannelAvailable,
             force: true
         )
     }
@@ -777,15 +805,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 )
                 readerStore.releaseReader(for: generation, reuse: shouldApply)
                 guard shouldApply else { return }
+                self.lastPolledTaskCollection = collection
                 self.dashboardStore.update {
-                    $0.taskCollection = collection
-                    let normalized = normalizedBuiltInAgentState(
+                    let liveUpdate = self.agentLiveEventStore.snapshotUpdate()
+                    guard self.agentLiveReductionGate.shouldApply(
+                        revision: liveUpdate.revision
+                    ) else {
+                        $0.isTaskRefreshing = false
+                        return
+                    }
+                    let projected = agentDashboardProjection(
                         collection: collection,
                         permissionQueue: $0.permissionQueue,
+                        liveReduction: liveUpdate.reduction,
                         registry: self.agentRegistry
                     )
-                    $0.agentSnapshots = normalized.snapshots
-                    $0.attentionItems = normalized.attentionItems
+                    $0.taskCollection = projected.taskCollection
+                    $0.agentSnapshots = projected.snapshots
+                    $0.attentionItems = projected.attentionItems
                     $0.isTaskRefreshing = false
                 }
                 // 终端里直接回答后 Claude 不会关闭 hook 连接，靠这次刷新的会话
@@ -793,6 +830,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.claudePermissionCoordinator?
                     .dismissIfAnsweredInTerminal(in: collection.items)
             }
+        }
+    }
+
+    private func startAgentEventSocket() -> Bool {
+        let server = AgentEventSocketServer(
+            configuration: AgentEventSocketConfiguration(
+                socketURL: agentEventSocketURL()
+            )
+        ) { [weak self] envelope in
+            guard let self,
+                  let update = self.agentLiveEventStore.ingestUpdate(envelope)
+            else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.applyLiveAgentReduction(update)
+            }
+        }
+        do {
+            try server.start()
+            agentEventSocketServer = server
+            return true
+        } catch {
+            // This channel is observational only; the native agents must keep
+            // working when ThreadHelm cannot accept events.
+            fputs("ThreadHelm 本地 Agent 状态通道暂不可用。\n", stderr)
+            return false
+        }
+    }
+
+    private func applyLiveAgentReduction(_ update: AgentLiveReductionUpdate) {
+        guard agentLiveReductionGate.shouldApply(revision: update.revision) else {
+            return
+        }
+        dashboardStore.update { snapshot in
+            let projected = agentDashboardProjection(
+                collection: lastPolledTaskCollection,
+                permissionQueue: snapshot.permissionQueue,
+                liveReduction: update.reduction,
+                registry: agentRegistry
+            )
+            snapshot.taskCollection = projected.taskCollection
+            snapshot.agentSnapshots = projected.snapshots
+            snapshot.attentionItems = projected.attentionItems
         }
     }
 

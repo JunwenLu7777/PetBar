@@ -137,6 +137,9 @@ struct TaskProgressItem: Equatable {
             return (processID != nil && processStartIdentity != nil)
                 || (sessionID != nil && workingDirectory != nil)
         }
+        if source == .cursor || source == .zcode {
+            return sessionID != nil
+        }
         return false
     }
 

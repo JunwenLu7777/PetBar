@@ -210,6 +210,7 @@ final class RuntimeHealthWriter {
         status: String,
         panelVisible: Bool,
         locationSource: String?,
+        agentEventChannelAvailable: Bool? = nil,
         gap: CGFloat? = nil,
         centerError: CGFloat? = nil,
         panelScale: CGFloat = 1,
@@ -222,7 +223,10 @@ final class RuntimeHealthWriter {
         // Do not turn a live resize into 30 disk writes per second. Scale and
         // dimensions are included in the periodic payload, while the signature
         // remains limited to meaningful visibility/source changes.
-        let signature = "\(status)|\(panelVisible)|\(locationSource ?? "none")"
+        let eventChannel = agentEventChannelAvailable.map {
+            $0 ? "healthy" : "degraded"
+        } ?? "unknown"
+        let signature = "\(status)|\(panelVisible)|\(locationSource ?? "none")|\(eventChannel)"
         guard force || signature != lastSignature || now - lastWriteAt >= 15 else { return }
 
         var payload: [String: Any] = [
@@ -241,6 +245,9 @@ final class RuntimeHealthWriter {
             "locationSource": locationSource ?? NSNull(),
             "updatedAt": ISO8601DateFormatter().string(from: Date()),
         ]
+        if agentEventChannelAvailable != nil {
+            payload["agentEventChannel"] = eventChannel
+        }
         if let gap { payload["petGapPoints"] = gap }
         if let centerError { payload["pointerCenterErrorPoints"] = centerError }
 

@@ -110,6 +110,14 @@ func runAgentIntegrationSelfTest() {
 
     runAgentTaskProgressRegistrySelfTest(mockAgentID: mock.metadata.id)
     runAgentReducerSelfTest()
+    runAgentHookCommandSelfTest()
+    runAgentLiveEventStoreSelfTest()
+    guard runAgentEventSocketSelfTest() else {
+        failAgentIntegrationSelfTest("owner-only event socket")
+    }
+    runCursorAgentAdapterSelfTest()
+    runZCodeAgentAdapterSelfTest()
+    runPiAgentAdapterSelfTest()
     runCodexClaudeAdapterSelfTest()
     runClaudeAdapterLifecycleSelfTest()
 }

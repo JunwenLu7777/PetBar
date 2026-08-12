@@ -152,6 +152,28 @@ private func runClaudeAgentsCommandTimeoutSelfTest() {
 }
 
 private func runRuntimeHealthWriterFailureSelfTest() {
+    var healthPayload: Data?
+    let channelWriter = RuntimeHealthWriter(
+        fileURL: URL(fileURLWithPath: "/tmp/threadhelm-health-channel.json"),
+        createDirectory: { _, _ in },
+        writeData: { data, _ in healthPayload = data },
+        logFailure: { _ in }
+    )
+    channelWriter.write(
+        status: "started",
+        panelVisible: false,
+        locationSource: nil,
+        agentEventChannelAvailable: false,
+        force: true
+    )
+    let channelObject = healthPayload.flatMap {
+        try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+    }
+    guard channelObject?["agentEventChannel"] as? String == "degraded" else {
+        fputs("runtime health event-channel status missing\n", stderr)
+        exit(1)
+    }
+
     let blockedURL = URL(fileURLWithPath: "/tmp/threadhelm-health-blocked/panel-health.json")
     var messages: [String] = []
     let writer = RuntimeHealthWriter(
