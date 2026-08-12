@@ -401,8 +401,7 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
         processStartIdentity: liveClaudeProcessStartIdentity,
         activeKind: .running,
         startedAt: now.addingTimeInterval(-30),
-        modificationDate: now,
-        now: now
+        modificationDate: now
     )
     let sourceMerged = TaskProgressSnapshot.displaying([
         TaskProgressItem(

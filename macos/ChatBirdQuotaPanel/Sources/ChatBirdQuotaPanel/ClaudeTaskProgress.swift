@@ -369,7 +369,6 @@ final class ClaudeTaskProgressReader {
                     activeKind: agent?.kind,
                     startedAt: agent?.startedAt ?? candidate.modificationDate,
                     modificationDate: candidate.modificationDate,
-                    now: now,
                     statusOverride: agent?.statusOverride
                 )
                 parsedCache[cacheKey] = ParsedCacheEntry(
@@ -446,7 +445,6 @@ final class ClaudeTaskProgressReader {
         activeKind: TaskProgressKind?,
         startedAt: Date,
         modificationDate: Date,
-        now: Date,
         statusOverride: String? = nil
     ) -> TaskProgressItem? {
         guard UUID(uuidString: sessionID) != nil else { return nil }
@@ -609,8 +607,6 @@ final class ClaudeTaskProgressReader {
                 ),
                 to: events
             )
-        } else if now.timeIntervalSince(modificationDate) <= 30 * 60 {
-            kind = .running
         } else {
             return nil
         }

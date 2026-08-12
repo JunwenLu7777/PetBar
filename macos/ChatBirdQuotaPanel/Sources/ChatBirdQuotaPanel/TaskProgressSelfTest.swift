@@ -380,6 +380,21 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
     }
 
     let claudeSessionID = "b687a9ef-4535-4bb4-a9d5-e692bbcdb0a6"
+    let namedSessionMetadataOnly = #"{"type":"user","timestamp":"2026-08-12T06:22:05.276Z","message":{"role":"user","content":"<system-reminder>\nThe user named this session \"Pi验证\". This may indicate the session's focus or intent.\n</system-reminder>"}}"#
+    let inactiveNamedSession = ClaudeTaskProgressReader.parseTranscript(
+        lines: [namedSessionMetadataOnly],
+        sessionID: claudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/claude-project",
+        activeKind: nil,
+        startedAt: now,
+        modificationDate: now
+    )
+    guard inactiveNamedSession == nil else {
+        fputs("inactive Claude metadata transcript reported as running\n", stderr)
+        exit(1)
+    }
+
     let claudePublicText = #"{"type":"assistant","timestamp":"2026-07-25T10:01:00.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"隐藏推理绝不显示"},{"type":"text","text":"正在检查 Claude 任务"}],"stop_reason":null}}"#
     let claudeToolUse = #"{"type":"assistant","timestamp":"2026-07-25T10:02:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-claude-1","name":"Bash","input":{"command":"echo secret"}}],"stop_reason":null}}"#
     let claudeToolResult = #"{"type":"user","timestamp":"2026-07-25T10:03:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-claude-1","content":"secret output"}]}}"#
@@ -402,8 +417,7 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         workingDirectory: "/tmp/claude-project",
         activeKind: .running,
         startedAt: now.addingTimeInterval(-30),
-        modificationDate: now,
-        now: now
+        modificationDate: now
     )
     let claudeEvents = claudeWithEvents?.events ?? []
     guard claudeEvents.count == 4,
@@ -431,8 +445,7 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         workingDirectory: "/tmp/claude-project",
         activeKind: .running,
         startedAt: now.addingTimeInterval(-30),
-        modificationDate: now,
-        now: now
+        modificationDate: now
     )
     let claudeCredentialSurface = ([
         claudeCredentialSnapshot?.activityText,
