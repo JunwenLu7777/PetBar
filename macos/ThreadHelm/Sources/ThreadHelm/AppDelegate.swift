@@ -680,13 +680,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func openTask(_ item: TaskProgressItem) {
-        switch item.source {
-        case .codex:
+        if item.source == .codex {
             guard let threadID = item.threadID,
                   let url = codexThreadURL(threadID: threadID)
             else { return }
             NSWorkspace.shared.open(url)
-        case .claudeCode:
+            return
+        }
+        if item.source == .claudeCode {
             if claudePermissionCoordinator?
                 .handoffToTerminalIfPresenting(item) == true
             {
@@ -749,14 +750,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func refreshTaskProgress() {
         guard let generation = taskProgressRefreshGate.begin() else { return }
         dashboardStore.update { $0.isTaskRefreshing = true }
-        let claudeCodeAvailable = synchronizeQuotaProviderAvailability()
-            .contains(.claudeCode)
         let readerStore = taskProgressReaderStore
         let reader = readerStore.leaseReader(for: generation)
         DispatchQueue.global(qos: .utility).async { [weak self, readerStore] in
-            let collection = reader.readCollection(
-                claudeCodeAvailable: claudeCodeAvailable
-            )
+            let collection = reader.readCollection()
             DispatchQueue.main.async {
                 guard let self else {
                     readerStore.releaseReader(for: generation, reuse: false)

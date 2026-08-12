@@ -885,35 +885,28 @@ final class ClaudeTaskProgressReader {
 func combinedTaskProgressItems(
     codexItems: [TaskProgressItem],
     claudeItems: [TaskProgressItem],
-    claudeCodeAvailable: Bool
+    enabledAgentIDs: Set<AgentID>
 ) -> [TaskProgressItem] {
-    codexItems + (claudeCodeAvailable ? claudeItems : [])
+    (enabledAgentIDs.contains(.codex) ? codexItems : [])
+        + (enabledAgentIDs.contains(.claudeCode) ? claudeItems : [])
 }
 
 final class CombinedTaskProgressReader {
-    private let codexReader = CodexTaskProgressReader()
-    private let claudeReader = ClaudeTaskProgressReader()
+    private let registry: AgentTaskProgressRegistry
 
-    func readCollection(
-        claudeCodeAvailable: Bool = true
-    ) -> TaskProgressCollectionSnapshot {
-        let codexItems = codexReader.readCollection().items.filter {
-            $0.kind != .idle && $0.kind != .reading
-        }
-        let claudeItems = claudeCodeAvailable
-            ? claudeReader.readCollection().items.filter {
-                $0.kind != .idle && $0.kind != .reading
-            }
-            : []
-        return .displaying(combinedTaskProgressItems(
-            codexItems: codexItems,
-            claudeItems: claudeItems,
-            claudeCodeAvailable: claudeCodeAvailable
-        ))
+    init(
+        registry: AgentTaskProgressRegistry = AgentTaskProgressRegistry(
+            sources: defaultAgentTaskProgressSources()
+        )
+    ) {
+        self.registry = registry
     }
 
-    func read(claudeCodeAvailable: Bool = true) -> TaskProgressSnapshot {
-        readCollection(claudeCodeAvailable: claudeCodeAvailable)
-            .compactProjection()
+    func readCollection() -> TaskProgressCollectionSnapshot {
+        registry.readCollection()
+    }
+
+    func read() -> TaskProgressSnapshot {
+        readCollection().compactProjection()
     }
 }

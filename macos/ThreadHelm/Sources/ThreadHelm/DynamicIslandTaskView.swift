@@ -574,9 +574,7 @@ final class DynamicIslandTaskViewController:
             accessibilityDescription: item.statusText
         )
         stateSymbol.contentTintColor = tintColor(for: item.kind)
-        openButton.setDisplayTitle(
-            item.source == .claudeCode ? "回到终端" : "打开 Codex"
-        )
+        openButton.setDisplayTitle(item.openButtonTitle)
         openButton.isEnabled = item.canOpen
         copyButton.isEnabled = copyPathForSelfTest() != nil
         copyButton.setDisplayTitle("复制路径")
@@ -822,10 +820,7 @@ final class DynamicIslandTaskViewController:
     }
 
     private func providerName(for source: TaskSource) -> String {
-        switch source {
-        case .codex: return "Codex"
-        case .claudeCode: return "Claude Code"
-        }
+        agentPresentation(for: source).displayName
     }
 
     private func tintColor(for kind: TaskProgressKind) -> NSColor {
@@ -1121,7 +1116,7 @@ private final class DynamicIslandTaskRowView: NSTableCellView {
     }
 
     func apply(item: TaskProgressItem, selected: Bool) {
-        let provider: QuotaProvider = item.source == .codex ? .codex : .claudeCode
+        let provider = agentPresentation(for: item.source)
         let tint: NSColor
         switch item.kind {
         case .running, .completed:
@@ -1142,13 +1137,13 @@ private final class DynamicIslandTaskRowView: NSTableCellView {
             ? tint.withAlphaComponent(0.42).cgColor
             : NSColor.clear.cgColor
         statusDot.layer?.backgroundColor = tint.cgColor
-        providerBadge.layer?.backgroundColor = provider.brandColor
+        providerBadge.layer?.backgroundColor = provider.brandColor.color
             .withAlphaComponent(0.16).cgColor
-        providerBadge.layer?.borderColor = provider.brandColor
+        providerBadge.layer?.borderColor = provider.brandColor.color
             .withAlphaComponent(0.76).cgColor
-        providerIconView.image = providerIconImage(for: provider)
-        providerIconView.contentTintColor = provider.brandColor
-        providerField.stringValue = item.source == .codex ? "Codex" : "Claude"
+        providerIconView.image = agentIconImage(for: item.source)
+        providerIconView.contentTintColor = provider.brandColor.color
+        providerField.stringValue = provider.shortName
         providerField.textColor = DynamicIslandPalette.secondaryText
         titleField.stringValue = item.title
         statusField.stringValue = item.statusText
@@ -1165,8 +1160,7 @@ private final class DynamicIslandTaskRowView: NSTableCellView {
 
     var providerIconIsConcreteForSelfTest: Bool {
         guard let image = providerIconView.image else { return false }
-        return image.accessibilityDescription == "Codex"
-            || image.accessibilityDescription == "Claude Code"
+        return !(image.accessibilityDescription ?? "").isEmpty
     }
 }
 

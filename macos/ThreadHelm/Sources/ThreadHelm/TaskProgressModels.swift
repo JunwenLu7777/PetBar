@@ -25,10 +25,7 @@ enum TaskProgressKind: String, Equatable {
     }
 }
 
-enum TaskSource: String, Equatable {
-    case codex
-    case claudeCode
-}
+typealias TaskSource = AgentID
 
 let completedTaskPanelRetention: TimeInterval = 24 * 60 * 60
 
@@ -133,13 +130,18 @@ struct TaskProgressItem: Equatable {
     }
 
     var canOpen: Bool {
-        switch source {
-        case .codex:
+        if source == .codex {
             return threadID != nil
-        case .claudeCode:
+        }
+        if source == .claudeCode {
             return (processID != nil && processStartIdentity != nil)
                 || (sessionID != nil && workingDirectory != nil)
         }
+        return false
+    }
+
+    var openButtonTitle: String {
+        agentTaskOpenButtonTitle(for: self)
     }
 
     private var normalizedTitle: String {

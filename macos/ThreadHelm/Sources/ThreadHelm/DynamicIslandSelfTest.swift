@@ -933,6 +933,8 @@ private func assertDynamicIslandTaskWorkspace() {
     }
 
     let workspace = DynamicIslandWorkspaceViewController()
+    workspace.view.frame = NSRect(origin: .zero, size: dynamicIslandTaskSize)
+    workspace.view.layoutSubtreeIfNeeded()
     var emittedSourceFilters: [TaskSourceFilter] = []
     workspace.onSourceFilterChange = { emittedSourceFilters.append($0) }
     workspace.apply(
@@ -944,6 +946,8 @@ private func assertDynamicIslandTaskWorkspace() {
     }
     guard !workspace.sourceFilterIsHiddenForSelfTest(),
           topLevelTabLabels == ["任务 \(collection.items.count)", "额度"],
+          workspace.sourceFilterLabelsForSelfTest()
+              == ["全部", "Codex", "Claude", "Cursor", "ZCode", "Pi"],
           workspace.selectedTopLevelTabForSelfTest() == 0,
           !workspace.accessibilitySnapshotForSelfTest().contains("确认")
     else {
@@ -960,6 +964,34 @@ private func assertDynamicIslandTaskWorkspace() {
         fputs("dynamic island task source action self-test failed\n", stderr)
         exit(1)
     }
+
+    let mockAgentID = AgentID(rawValue: "mockSixth")
+    let mockTask = TaskProgressItem(
+        title: "Mock sixth running",
+        kind: .running,
+        startedAt: now,
+        source: mockAgentID,
+        threadID: "mock-sixth-session"
+    )
+    let extendedCollection = TaskProgressCollectionSnapshot.displaying(
+        collection.items + [mockTask]
+    )
+    workspace.apply(
+        snapshot: ActivityDashboardSnapshot(
+            taskCollection: extendedCollection,
+            availableAgentIDs: AgentID.builtInOrder + [mockAgentID]
+        ),
+        state: .expanded(.tasks)
+    )
+    workspace.setSourceFilterForSelfTest(TaskSourceFilter(agentID: mockAgentID))
+    guard workspace.sourceFilterLabelsForSelfTest().last == "mockSixth",
+          emittedSourceFilters.last?.agentID == mockAgentID,
+          workspace.taskVisibleKeysForSelfTest() == [mockTask.identityKey]
+    else {
+        fputs("dynamic island sixth agent rendering self-test failed\n", stderr)
+        exit(1)
+    }
+    workspace.setSourceFilterForSelfTest(.claudeCode)
     workspace.apply(
         snapshot: ActivityDashboardSnapshot(taskCollection: collection),
         state: .expanded(.quota)

@@ -593,12 +593,12 @@ func runClaudeQuotaSelfTest() -> Never {
     let codexOnlyTasks = combinedTaskProgressItems(
         codexItems: [codexTask],
         claudeItems: [claudeTask],
-        claudeCodeAvailable: false
+        enabledAgentIDs: [.codex]
     )
     let combinedTasks = combinedTaskProgressItems(
         codexItems: [codexTask],
         claudeItems: [claudeTask],
-        claudeCodeAvailable: true
+        enabledAgentIDs: [.codex, .claudeCode]
     )
     guard let remaining = try? ClaudeQuotaParser.parse(remainingFixture),
           let used = try? ClaudeQuotaParser.parse(usedFixture),

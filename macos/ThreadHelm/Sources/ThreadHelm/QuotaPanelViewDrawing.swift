@@ -495,22 +495,8 @@ extension QuotaPanelView {
     }
 
     private func taskSourceColor(for source: TaskSource) -> NSColor {
-        switch source {
-        case .codex:
-            return NSColor(
-                calibratedRed: 0.25,
-                green: 0.70,
-                blue: 1.0,
-                alpha: 0.92
-            )
-        case .claudeCode:
-            return NSColor(
-                calibratedRed: 0.75,
-                green: 0.48,
-                blue: 1.0,
-                alpha: 0.94
-            )
-        }
+        agentPresentation(for: source).brandColor.color
+            .withAlphaComponent(0.94)
     }
 
     func taskProgressColor(for kind: TaskProgressKind) -> NSColor {

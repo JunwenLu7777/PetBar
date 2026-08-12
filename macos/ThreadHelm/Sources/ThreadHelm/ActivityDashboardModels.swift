@@ -11,10 +11,31 @@ enum DynamicIslandTab: String, CaseIterable {
     case quota
 }
 
-enum TaskSourceFilter: String, CaseIterable {
-    case all
-    case codex
-    case claudeCode
+struct TaskSourceFilter: RawRepresentable, Hashable {
+    let rawValue: String
+
+    init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    init(agentID: AgentID) {
+        rawValue = agentID.rawValue
+    }
+
+    static let all = TaskSourceFilter(rawValue: "all")
+    static let codex = TaskSourceFilter(agentID: .codex)
+    static let claudeCode = TaskSourceFilter(agentID: .claudeCode)
+    static let cursor = TaskSourceFilter(agentID: .cursor)
+    static let zcode = TaskSourceFilter(agentID: .zcode)
+    static let pi = TaskSourceFilter(agentID: .pi)
+
+    var agentID: AgentID? {
+        self == .all ? nil : AgentID(rawValue: rawValue)
+    }
+
+    static func options(for agentIDs: [AgentID]) -> [TaskSourceFilter] {
+        [.all] + agentIDs.map(TaskSourceFilter.init(agentID:))
+    }
 }
 
 enum TaskStateFilter: String, CaseIterable {
@@ -43,10 +64,7 @@ struct TaskProgressCollectionSnapshot: Equatable {
     static func displaying(
         _ sourceItems: [TaskProgressItem]
     ) -> TaskProgressCollectionSnapshot {
-        let sorted = sourceItems.sorted {
-            if $0.updatedAt == $1.updatedAt { return $0.title < $1.title }
-            return $0.updatedAt > $1.updatedAt
-        }
+        let sorted = sourceItems.sorted(by: taskProgressItemIsOrderedBefore)
         var seenKeys = Set<String>()
         return TaskProgressCollectionSnapshot(items: sorted.filter {
             seenKeys.insert($0.deduplicationKey).inserted
@@ -73,15 +91,7 @@ struct TaskProgressCollectionSnapshot: Equatable {
         state: TaskStateFilter
     ) -> [TaskProgressItem] {
         items.filter { item in
-            let sourceMatches: Bool
-            switch source {
-            case .all:
-                sourceMatches = true
-            case .codex:
-                sourceMatches = item.source == .codex
-            case .claudeCode:
-                sourceMatches = item.source == .claudeCode
-            }
+            let sourceMatches = source.agentID.map { item.source == $0 } ?? true
             let stateMatches: Bool
             switch state {
             case .all:
@@ -101,6 +111,56 @@ struct TaskProgressCollectionSnapshot: Equatable {
 
     func count(state: TaskStateFilter) -> Int {
         filtered(source: .all, state: state).count
+    }
+}
+
+private func taskProgressItemIsOrderedBefore(
+    _ lhs: TaskProgressItem,
+    _ rhs: TaskProgressItem
+) -> Bool {
+    if lhs.updatedAt != rhs.updatedAt {
+        return lhs.updatedAt > rhs.updatedAt
+    }
+    let lhsPriority = taskProgressKindDeterministicPriority(lhs.kind)
+    let rhsPriority = taskProgressKindDeterministicPriority(rhs.kind)
+    if lhsPriority != rhsPriority {
+        return lhsPriority > rhsPriority
+    }
+    if lhs.identityKey != rhs.identityKey {
+        return lhs.identityKey < rhs.identityKey
+    }
+    if lhs.title != rhs.title {
+        return lhs.title < rhs.title
+    }
+    let lhsTieBreak = [
+        lhs.statusOverride,
+        lhs.activityText,
+        lhs.threadID,
+        lhs.sessionID,
+        lhs.workingDirectory,
+        lhs.processStartIdentity,
+    ].compactMap { $0 }.joined(separator: "|")
+    let rhsTieBreak = [
+        rhs.statusOverride,
+        rhs.activityText,
+        rhs.threadID,
+        rhs.sessionID,
+        rhs.workingDirectory,
+        rhs.processStartIdentity,
+    ].compactMap { $0 }.joined(separator: "|")
+    return lhsTieBreak < rhsTieBreak
+}
+
+private func taskProgressKindDeterministicPriority(
+    _ kind: TaskProgressKind
+) -> Int {
+    switch kind {
+    case .waitingForInput: return 6
+    case .failed: return 5
+    case .running: return 4
+    case .completed: return 3
+    case .reading: return 2
+    case .idle: return 1
     }
 }
 
@@ -193,6 +253,7 @@ struct ActivityDashboardSnapshot: Equatable {
     )
     var quotaStates: [QuotaProvider: QuotaProviderState] = [:]
     var availableProviders: [QuotaProvider] = [.codex]
+    var availableAgentIDs: [AgentID] = AgentID.builtInOrder
     var selectedQuotaProvider: QuotaProvider = .codex
     var permissionQueue = ClaudePermissionQueueSnapshot.empty
     var acknowledgedTerminalTaskKeys = Set<String>()

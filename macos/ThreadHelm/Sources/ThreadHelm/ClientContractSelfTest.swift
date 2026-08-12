@@ -11,6 +11,7 @@ import Darwin
 import Foundation
 
 func runClientContractSelfTest() -> Never {
+    runAgentTransportSelfTest()
     let now = Date(timeIntervalSince1970: 1_800_000_000)
     let expiresAt = Int64(now.addingTimeInterval(3_600).timeIntervalSince1970)
     let payload = """
@@ -117,7 +118,7 @@ func runClientContractSelfTest() -> Never {
     }
 
     print(
-        "client-contract-self-test: "
+        "client-contract-self-test: agent-transport=64KiB+250ms+metadata-only+fail-open "
         + "app-server-reset-credits=pass path-discovery=codex+claude "
             + "count-only-credits=pass process-timeout=term+kill "
             + "inherited-pipe=nonblocking codex-timeout=completion"

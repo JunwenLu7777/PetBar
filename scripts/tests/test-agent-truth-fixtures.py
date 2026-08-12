@@ -61,7 +61,7 @@ EXPECTED_ENUMS = {
 }
 
 FORBIDDEN_TEXT = (
-    "/Users/",
+    "/" + "Users/",
     "junwenlu",
     "authorization:",
     "bearer ",

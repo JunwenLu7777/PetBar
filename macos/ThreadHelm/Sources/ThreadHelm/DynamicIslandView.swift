@@ -30,7 +30,7 @@ struct DynamicIslandCapsulePresentation: Equatable {
     let statusText: String
     let activityText: String?
     let elapsedText: String?
-    let provider: QuotaProvider?
+    let provider: AgentID?
     let providerText: String?
     let badgeText: String?
     let quotaItems: [DynamicIslandCapsuleQuotaItem]
@@ -361,6 +361,21 @@ final class DynamicIslandSegmentedControl: NSView {
         setAccessibilityValue(labels.joined(separator: "，"))
     }
 
+    func setLabels(_ nextLabels: [String]) {
+        guard nextLabels != labels else { return }
+        labels = nextLabels
+        accentColors = Array(
+            repeating: DynamicIslandPalette.green,
+            count: nextLabels.count
+        )
+        if !nextLabels.indices.contains(selectedSegment) {
+            selectedSegment = nextLabels.isEmpty ? -1 : 0
+        }
+        rebuildButtons()
+        needsLayout = true
+        setAccessibilityValue(labels.joined(separator: "，"))
+    }
+
     func setAccentColor(_ color: NSColor, forSegment index: Int) {
         guard accentColors.indices.contains(index) else { return }
         accentColors[index] = color
@@ -515,8 +530,7 @@ func dynamicIslandCapsulePresentation(
         style: DynamicIslandProgressStyle
     ) -> DynamicIslandCapsulePresentation {
         let startAndElapsed = taskProgressStartAndDurationText(for: item, now: now)
-        let quotaProvider: QuotaProvider = item.source == .codex ? .codex : .claudeCode
-        let provider = quotaProvider.displayName
+        let provider = agentPresentation(for: item.source).displayName
         let activity = dynamicIslandSanitizedTaskActivityText(
             item.events.last?.text ?? item.activityText
         )
@@ -533,7 +547,7 @@ func dynamicIslandCapsulePresentation(
             statusText: status,
             activityText: activity,
             elapsedText: startAndElapsed,
-            provider: quotaProvider,
+            provider: item.source,
             providerText: provider,
             badgeText: nil,
             quotaItems: [],
@@ -1195,7 +1209,7 @@ final class DynamicIslandCapsuleViewController: NSViewController {
             .compactMap { $0 }
             .joined(separator: " · ")
         providerIconView.image = model.provider.flatMap {
-            providerIconImage(for: $0)
+            agentIconImage(for: $0)
         }
         quotaSummaryView.apply(model.quotaItems)
         quotaSummaryView.isHidden = !showsQuotaSummary
@@ -1321,7 +1335,9 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         labels: ["任务", "额度"]
     )
     private let sourceFilter = DynamicIslandSegmentedControl(
-        labels: ["全部", "Codex", "Claude"]
+        labels: TaskSourceFilter.options(for: AgentID.builtInOrder).map {
+            taskSourceFilterName($0)
+        }
     )
     private let refreshButton = DynamicIslandButton(
         title: "",
@@ -1347,6 +1363,9 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     private let statusField = DynamicIslandLabel(size: 13, weight: .medium)
     private let placeholderField = DynamicIslandLabel(size: 13, weight: .regular)
     private var currentSourceFilter = TaskSourceFilter.all
+    private var sourceFilterOptions = TaskSourceFilter.options(
+        for: AgentID.builtInOrder
+    )
     private var latestSnapshot = ActivityDashboardSnapshot()
     private var latestState = DynamicIslandPresentationState.capsule
 
@@ -1435,7 +1454,12 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         let height = view.bounds.height
         titleField.frame = NSRect(x: 22, y: height - 39, width: 118, height: 22)
         tabs.frame = NSRect(x: 146, y: height - 44, width: 160, height: 32)
-        sourceFilter.frame = NSRect(x: 324, y: height - 44, width: 214, height: 32)
+        sourceFilter.frame = NSRect(
+            x: 314,
+            y: height - 44,
+            width: max(1, width - 468),
+            height: 32
+        )
         refreshButton.frame = NSRect(x: width - 134, y: height - 44, width: 32, height: 32)
         collapseButton.frame = NSRect(x: width - 92, y: height - 44, width: 32, height: 32)
         hideButton.frame = NSRect(x: width - 50, y: height - 44, width: 32, height: 32)
@@ -1485,6 +1509,15 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             activeTab = .tasks
         }
         sourceFilter.isHidden = activeTab != .tasks
+        var seenAgentIDs = Set<AgentID>()
+        let availableAgentIDs = snapshot.availableAgentIDs
+            .filter { seenAgentIDs.insert($0).inserted }
+            .sorted()
+        sourceFilterOptions = TaskSourceFilter.options(for: availableAgentIDs)
+        if !sourceFilterOptions.contains(currentSourceFilter) {
+            currentSourceFilter = .all
+        }
+        sourceFilter.setLabels(sourceFilterOptions.map(taskSourceFilterName))
         tabs.setLabel(
             "  任务 \(taskCount)",
             forSegment: 0
@@ -1496,18 +1529,6 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         tabs.setAccessibilityValue(
             "任务 \(taskCount)，额度"
         )
-        sourceFilter.setLabel(
-            "  全部",
-            forSegment: 0
-        )
-        sourceFilter.setLabel(
-            "  Codex",
-            forSegment: 1
-        )
-        sourceFilter.setLabel(
-            "  Claude",
-            forSegment: 2
-        )
         if let segmentIndex = tabSegmentIndex(for: state) {
             tabs.selectSegment(segmentIndex)
         } else {
@@ -1515,7 +1536,9 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         }
         sourceFilter.selectSegment(sourceSegmentIndex(for: currentSourceFilter))
         sourceFilter.setAccessibilityValue(
-            "当前来源筛选 \(sourceFilterName(currentSourceFilter))，全部，Codex，Claude"
+            "当前来源筛选 \(taskSourceFilterName(currentSourceFilter))，"
+                + sourceFilterOptions.map(taskSourceFilterName)
+                    .joined(separator: "，")
         )
         refreshButton.isEnabled = dynamicIslandDashboardRefreshEnabled(
             snapshot: snapshot
@@ -1580,19 +1603,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     }
 
     private func sourceSegmentIndex(for filter: TaskSourceFilter) -> Int {
-        switch filter {
-        case .all: return 0
-        case .codex: return 1
-        case .claudeCode: return 2
-        }
-    }
-
-    private func sourceFilterName(_ filter: TaskSourceFilter) -> String {
-        switch filter {
-        case .all: return "全部"
-        case .codex: return "Codex"
-        case .claudeCode: return "Claude"
-        }
+        sourceFilterOptions.firstIndex(of: filter) ?? 0
     }
 
     func accessibilitySnapshotForSelfTest() -> String {
@@ -1617,11 +1628,9 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     }
 
     private func sourceChanged(index: Int) {
-        switch index {
-        case 1: currentSourceFilter = .codex
-        case 2: currentSourceFilter = .claudeCode
-        default: currentSourceFilter = .all
-        }
+        currentSourceFilter = sourceFilterOptions.indices.contains(index)
+            ? sourceFilterOptions[index]
+            : .all
         reapplyTaskControllerIfVisible(preferredTaskKey: nil)
         onSourceFilterChange?(currentSourceFilter)
     }
@@ -1714,12 +1723,13 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
 
     func setSourceFilterForSelfTest(_ filter: TaskSourceFilter) {
         _ = view
-        switch filter {
-        case .all: sourceFilter.selectSegment(0)
-        case .codex: sourceFilter.selectSegment(1)
-        case .claudeCode: sourceFilter.selectSegment(2)
-        }
+        sourceFilter.selectSegment(sourceSegmentIndex(for: filter))
         sourceChanged(index: sourceFilter.selectedSegment)
+    }
+
+    func sourceFilterLabelsForSelfTest() -> [String] {
+        _ = view
+        return sourceFilter.labelsForSelfTest()
     }
 
     func taskVisibleKeysForSelfTest() -> [String] {
