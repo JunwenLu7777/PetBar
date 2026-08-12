@@ -20,7 +20,7 @@ final class ClaudePermissionHookServer {
 
     private let expectedAuthenticationToken: String?
     private let queue = DispatchQueue(
-        label: "dev.chatbird.claude-permission-hook",
+        label: "dev.threadhelm.claude-permission-hook",
         qos: .userInitiated
     )
     private var listener: NWListener?
@@ -64,7 +64,7 @@ final class ClaudePermissionHookServer {
 
         guard let port = NWEndpoint.Port(rawValue: ClaudeHookConstants.port) else {
             throw NSError(
-                domain: "ChatBirdClaudeHook",
+                domain: "ThreadHelmClaudeHook",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "无效的 Hook 端口"]
             )
@@ -313,7 +313,7 @@ final class ClaudePermissionHookServer {
         var header = "HTTP/1.1 \(status) \(reason)\r\n"
         header += "Content-Length: \(body.count)\r\n"
         header += "Connection: close\r\n"
-        header += "X-ChatBird-Hook: claude-permission-v1\r\n"
+        header += "X-ThreadHelm-Hook: claude-permission-v1\r\n"
         if let contentType {
             header += "Content-Type: \(contentType)\r\n"
         }

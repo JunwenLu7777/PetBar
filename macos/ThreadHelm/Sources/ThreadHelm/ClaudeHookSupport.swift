@@ -6,12 +6,20 @@ import Security
 enum ClaudeHookConstants {
     static let host = "127.0.0.1"
     static let port: UInt16 = 27_841
-    static let path = "/chatbird/claude/permission"
+    static let path = "/threadhelm/claude/permission"
     static let url = "http://\(host):\(port)\(path)"
     static let timeoutSeconds = 600
     static let requestTimeoutSeconds: TimeInterval = 590
     static let maximumBodyBytes = 256 * 1_024
     static let maximumPendingRequests = 16
+    static let authenticationHeader = "X-ThreadHelm-Hook-Token"
+    static let statusMessage = "等待 ThreadHelm 确认…"
+}
+
+private enum LegacyClaudeHookConstants {
+    static let path = "/chatbird/claude/permission"
+    static let url =
+        "http://\(ClaudeHookConstants.host):\(ClaudeHookConstants.port)\(path)"
     static let authenticationHeader = "X-ChatBird-Hook-Token"
 }
 
@@ -446,7 +454,7 @@ enum ClaudeHookConfiguration {
         if !conflicts.isEmpty {
             return .conflict(conflicts)
         }
-        if handlers.contains(where: authenticatedManagedHandler) {
+        if handlers.contains(where: authenticatedCurrentManagedHandler) {
             return .installed
         }
         return .missing
@@ -469,15 +477,18 @@ enum ClaudeHookConfiguration {
         guard conflicts.isEmpty else {
             return false
         }
-        if handlers.contains(where: authenticatedManagedHandler) {
+        let ownedHandlers = handlers.filter(isOwnedManagedHandler)
+        if !ownedHandlers.isEmpty,
+           ownedHandlers.allSatisfy(authenticatedCurrentManagedHandler)
+        {
             return false
         }
 
         let token = makeAuthenticationToken()
 
-        if permissionEntries.contains(where: permissionEntryContainsManagedHandler) {
+        if permissionEntries.contains(where: permissionEntryContainsOwnedManagedHandler) {
             permissionEntries = permissionEntries.map {
-                authenticatedPermissionEntry($0, token: token)
+                upgradedPermissionEntry($0, token: token)
             }
             hooks["PermissionRequest"] = permissionEntries
             settings["hooks"] = hooks
@@ -491,7 +502,7 @@ enum ClaudeHookConfiguration {
                 "type": "http",
                 "url": ClaudeHookConstants.url,
                 "timeout": ClaudeHookConstants.timeoutSeconds,
-                "statusMessage": "等待 ChatBird 确认…",
+                "statusMessage": ClaudeHookConstants.statusMessage,
                 "headers": [ClaudeHookConstants.authenticationHeader: token],
             ]],
         ])
@@ -513,13 +524,13 @@ enum ClaudeHookConfiguration {
         var changed = false
         var remainingEntries: [[String: Any]] = []
         for var entry in rawEntries {
-            if isManagedHandler(entry) {
+            if isOwnedManagedHandler(entry) {
                 changed = true
                 continue
             }
             if let nestedHandlers = entry["hooks"] as? [[String: Any]] {
                 let filtered = nestedHandlers.filter { handler in
-                    if isManagedHandler(handler) {
+                    if isOwnedManagedHandler(handler) {
                         changed = true
                         return false
                     }
@@ -576,46 +587,72 @@ enum ClaudeHookConfiguration {
         }
     }
 
-    private static func isManagedHandler(_ handler: [String: Any]) -> Bool {
+    private static func isCurrentManagedHandler(_ handler: [String: Any]) -> Bool {
         guard handler["type"] as? String == "http",
               let url = handler["url"] as? String
         else { return false }
         return url == ClaudeHookConstants.url
     }
 
-    private static func authenticatedManagedHandler(_ handler: [String: Any]) -> Bool {
-        isManagedHandler(handler) && authenticationToken(handler) != nil
+    private static func isLegacyManagedHandler(_ handler: [String: Any]) -> Bool {
+        guard handler["type"] as? String == "http",
+              let url = handler["url"] as? String
+        else { return false }
+        return url == LegacyClaudeHookConstants.url
     }
 
-    private static func permissionEntryContainsManagedHandler(_ entry: [String: Any]) -> Bool {
-        if isManagedHandler(entry) { return true }
+    private static func isOwnedManagedHandler(_ handler: [String: Any]) -> Bool {
+        isCurrentManagedHandler(handler) || isLegacyManagedHandler(handler)
+    }
+
+    private static func authenticatedCurrentManagedHandler(
+        _ handler: [String: Any]
+    ) -> Bool {
+        isCurrentManagedHandler(handler) && authenticationToken(handler) != nil
+    }
+
+    private static func permissionEntryContainsOwnedManagedHandler(
+        _ entry: [String: Any]
+    ) -> Bool {
+        if isOwnedManagedHandler(entry) { return true }
         guard let nested = entry["hooks"] as? [[String: Any]] else { return false }
-        return nested.contains(where: isManagedHandler)
+        return nested.contains(where: isOwnedManagedHandler)
     }
 
-    private static func authenticatedPermissionEntry(
+    private static func upgradedPermissionEntry(
         _ entry: [String: Any],
         token: String
     ) -> [String: Any] {
-        if isManagedHandler(entry) {
-            return authenticatedHandler(entry, token: token)
+        if isOwnedManagedHandler(entry) {
+            return upgradedManagedHandler(entry, token: token)
         }
         guard let nested = entry["hooks"] as? [[String: Any]] else { return entry }
         var updated = entry
         updated["hooks"] = nested.map { handler in
-            isManagedHandler(handler)
-                ? authenticatedHandler(handler, token: token)
+            isOwnedManagedHandler(handler)
+                ? upgradedManagedHandler(handler, token: token)
                 : handler
         }
         return updated
     }
 
-    private static func authenticatedHandler(
+    private static func upgradedManagedHandler(
         _ handler: [String: Any],
         token: String
     ) -> [String: Any] {
         var updated = handler
-        var headers = updated["headers"] as? [String: Any] ?? [:]
+        updated["type"] = "http"
+        updated["url"] = ClaudeHookConstants.url
+        updated["timeout"] = ClaudeHookConstants.timeoutSeconds
+        updated["statusMessage"] = ClaudeHookConstants.statusMessage
+        let rawHeaders = updated["headers"] as? [String: Any] ?? [:]
+        var headers = rawHeaders.filter { key, _ in
+            key.caseInsensitiveCompare(ClaudeHookConstants.authenticationHeader)
+                != .orderedSame
+                && key.caseInsensitiveCompare(
+                    LegacyClaudeHookConstants.authenticationHeader
+                ) != .orderedSame
+        }
         headers[ClaudeHookConstants.authenticationHeader] = token
         updated["headers"] = headers
         return updated
@@ -624,7 +661,7 @@ enum ClaudeHookConfiguration {
     static func authenticationToken(at settingsURL: URL = defaultSettingsURL()) -> String? {
         guard let settings = try? loadSettings(at: settingsURL) else { return nil }
         return permissionHandlers(in: settings)
-            .first(where: isManagedHandler)
+            .first(where: isCurrentManagedHandler)
             .flatMap(authenticationToken)
     }
 
@@ -643,7 +680,7 @@ enum ClaudeHookConfiguration {
     }
 
     private static func conflictDescription(_ handler: [String: Any]) -> String? {
-        if isManagedHandler(handler) { return nil }
+        if isOwnedManagedHandler(handler) { return nil }
         if let url = handler["url"] as? String {
             return "HTTP \(url)"
         }
@@ -674,7 +711,7 @@ enum ClaudeHookConfiguration {
                 formatter.locale = Locale(identifier: "en_US_POSIX")
                 formatter.dateFormat = "yyyyMMdd-HHmmss"
                 let backupURL = url.deletingLastPathComponent().appendingPathComponent(
-                    "\(url.lastPathComponent).chatbird-backup-\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
+                    "\(url.lastPathComponent).threadhelm-backup-\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
                 )
                 try manager.copyItem(at: url, to: backupURL)
             }
@@ -686,7 +723,7 @@ enum ClaudeHookConfiguration {
             data.append(0x0A)
             data = lineEnding.apply(to: data)
             let temporaryURL = url.deletingLastPathComponent().appendingPathComponent(
-                ".\(url.lastPathComponent).chatbird-\(UUID().uuidString).tmp"
+                ".\(url.lastPathComponent).threadhelm-\(UUID().uuidString).tmp"
             )
             try data.write(to: temporaryURL, options: .atomic)
             try manager.setAttributes(
@@ -753,7 +790,7 @@ func runClaudeHookSelfTest() -> Never {
     {
       "tool_name": "AskUserQuestion",
       "session_id": "12345678-1234-1234-1234-123456789abc",
-      "cwd": "/tmp/chatbird",
+      "cwd": "/tmp/threadhelm",
       "tool_input": {
         "questions": [{
           "question": "选择输出格式",
@@ -812,7 +849,7 @@ func runClaudeHookSelfTest() -> Never {
     {
       "tool_name": "AskUserQuestion",
       "session_id": "12345678-1234-1234-1234-123456789abc",
-      "cwd": "/tmp/chatbird",
+      "cwd": "/tmp/threadhelm",
       "tool_input": {
         "questions": [{
           "question": "extended_offline 那 7 个红，这次要我做到哪一步？",
@@ -900,14 +937,14 @@ func runClaudeHookSelfTest() -> Never {
         kind: .waitingForInput,
         source: .claudeCode,
         sessionID: "87654321-4321-4321-4321-cba987654321",
-        workingDirectory: "/tmp/chatbird"
+        workingDirectory: "/tmp/threadhelm"
     )
     let matchingTask = TaskProgressItem(
         title: "当前 Claude 会话",
         kind: .waitingForInput,
         source: .claudeCode,
         sessionID: questionPrompt.sessionID?.uppercased(),
-        workingDirectory: "/tmp/chatbird"
+        workingDirectory: "/tmp/threadhelm"
     )
     guard coordinator.handoffToTerminalIfPresenting(unrelatedTask) == false,
           NSApp.windows.contains(where: {
@@ -948,14 +985,14 @@ func runClaudeHookSelfTest() -> Never {
         kind: .waitingForInput,
         source: .claudeCode,
         sessionID: questionPrompt.sessionID?.uppercased(),
-        workingDirectory: "/tmp/chatbird"
+        workingDirectory: "/tmp/threadhelm"
     )
     let answeredTask = TaskProgressItem(
         title: "当前 Claude 会话",
         kind: .running,
         source: .claudeCode,
         sessionID: questionPrompt.sessionID?.uppercased(),
-        workingDirectory: "/tmp/chatbird"
+        workingDirectory: "/tmp/threadhelm"
     )
     guard autoDismissCoordinator.dismissIfAnsweredInTerminal(in: []) == false,
           // 弹窗刚弹出时 Claude 仍在执行工具调用，会话是 running。此时收起会
@@ -1112,7 +1149,7 @@ func runClaudeHookSelfTest() -> Never {
        suggestionDecision["behavior"] as? String == "allow",
        (suggestionDecision["updatedPermissions"] as? [[String: Any]])?.count == 1,
        let denyBody = ClaudePermissionProtocol.responseBody(
-            for: .deny("用户在 ChatBird 中拒绝了这次操作"),
+            for: .deny("用户在 ThreadHelm 中拒绝了这次操作"),
             prompt: toolPrompt
        ),
        let denyJSON = try? JSONSerialization.jsonObject(with: denyBody)
@@ -1120,7 +1157,7 @@ func runClaudeHookSelfTest() -> Never {
        let denyOutput = denyJSON["hookSpecificOutput"] as? [String: Any],
        let denyDecision = denyOutput["decision"] as? [String: Any],
        denyDecision["behavior"] as? String == "deny",
-       denyDecision["message"] as? String == "用户在 ChatBird 中拒绝了这次操作",
+       denyDecision["message"] as? String == "用户在 ThreadHelm 中拒绝了这次操作",
        ClaudePermissionProtocol.responseBody(
             for: .nativeFallback,
             prompt: toolPrompt
@@ -1131,7 +1168,7 @@ func runClaudeHookSelfTest() -> Never {
 
     let manager = FileManager.default
     let temporaryRoot = manager.temporaryDirectory.appendingPathComponent(
-        "chatbird-hook-self-test-\(UUID().uuidString)",
+        "threadhelm-hook-self-test-\(UUID().uuidString)",
         isDirectory: true
     )
     let settingsURL = temporaryRoot.appendingPathComponent("settings.json")
@@ -1146,6 +1183,9 @@ func runClaudeHookSelfTest() -> Never {
     )
     let conflictingSettingsURL = temporaryRoot.appendingPathComponent(
         "conflicting-settings.json"
+    )
+    let legacySettingsURL = temporaryRoot.appendingPathComponent(
+        "legacy-settings.json"
     )
     do {
         try manager.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
@@ -1196,6 +1236,25 @@ func runClaudeHookSelfTest() -> Never {
             isClaudeAvailable: { true }
         ) else {
             fail("配置安装不具备幂等性")
+        }
+
+        let legacySettings = """
+        {"model":"legacy-model","hooks":{"PermissionRequest":[{"matcher":"","hooks":[{"type":"http","url":"http://127.0.0.1:27841/chatbird/claude/permission","timeout":600,"statusMessage":"等待 ChatBird 确认…","headers":{"X-ChatBird-Hook-Token":"legacy-token"}}]}]}}
+        """
+        try Data(legacySettings.utf8).write(to: legacySettingsURL)
+        guard try ClaudeHookConfiguration.install(
+            at: legacySettingsURL,
+            isClaudeAvailable: { true }
+        ), try ClaudeHookConfiguration.status(at: legacySettingsURL) == .installed,
+           let upgradedData = try? Data(contentsOf: legacySettingsURL),
+           let upgradedText = String(data: upgradedData, encoding: .utf8),
+           upgradedText.contains("/threadhelm/claude/permission"),
+           upgradedText.contains("X-ThreadHelm-Hook-Token"),
+           upgradedText.contains("等待 ThreadHelm 确认…"),
+           !upgradedText.contains("/chatbird/claude/permission"),
+           !upgradedText.contains("X-ChatBird-Hook-Token")
+        else {
+            fail("旧 ChatBird Hook 没有升级为 ThreadHelm")
         }
 
         try Data("{\r\n  \"model\": \"test\"\r\n}\r\n".utf8).write(to: crlfSettingsURL)
@@ -1278,6 +1337,16 @@ func runClaudeHookSelfTest() -> Never {
         else {
             fail("配置卸载破坏了其他字段")
         }
+        guard try ClaudeHookConfiguration.uninstall(at: legacySettingsURL),
+              let upgradedFinalData = try? Data(contentsOf: legacySettingsURL),
+              let upgradedFinalJSON = try JSONSerialization.jsonObject(
+                with: upgradedFinalData
+              ) as? [String: Any],
+              upgradedFinalJSON["model"] as? String == "legacy-model",
+              upgradedFinalJSON["hooks"] == nil
+        else {
+            fail("ThreadHelm Hook 卸载破坏了升级后的其他设置")
+        }
     } catch {
         fail(error.localizedDescription)
     }
@@ -1292,7 +1361,8 @@ func runClaudeHookSelfTest() -> Never {
             + "tool-decision=allow+suggestion+deny+nativeFallback; "
             + "plan-decision=allowOnce+feedback; "
             + "privacy=pass; auth=header; queue=bounded; "
-            + "config=optional+install+conflict-preserved+idempotent+uninstall+crlf+strict-json"
+            + "config=optional+install+legacy-upgrade+conflict-preserved"
+            + "+idempotent+uninstall+crlf+strict-json"
     )
     exit(0)
 }
