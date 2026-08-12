@@ -257,7 +257,18 @@ func claudeTerminalOpenRequest(
 func openClaudeTerminal(
     request: ClaudeTerminalOpenRequest
 ) -> Bool {
-    for action in claudeTerminalNavigationPlan(for: request) {
+    let currentRequest: ClaudeTerminalOpenRequest
+    if let sessionID = request.sessionID {
+        currentRequest = refreshedClaudeTerminalOpenRequest(
+            request,
+            liveProcessTarget: currentClaudeLiveProcessTarget(
+                forSessionID: sessionID
+            )
+        )
+    } else {
+        currentRequest = request
+    }
+    for action in claudeTerminalNavigationPlan(for: currentRequest) {
         switch action {
         case .focusProcess(let processID, let processStartIdentity):
             if focusExistingClaudeTerminal(

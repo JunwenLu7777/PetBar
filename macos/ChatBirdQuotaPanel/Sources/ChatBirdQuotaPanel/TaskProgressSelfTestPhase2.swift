@@ -466,6 +466,40 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
         appleScriptEscapedString
     )
     let ottyQuotedResume = ottyResumeScript(command: #"printf "Claude""#)
+    let liveClaudeTarget = claudeLiveProcessTarget(
+        forSessionID: claudeSessionID,
+        from: Data(
+            #"""
+            [
+              {
+                "sessionId":"b687a9ef-4535-4bb4-a9d5-e692bbcdb0a6",
+                "cwd":"/tmp/shared-project",
+                "kind":"background",
+                "state":"blocked"
+              },
+              {
+                "sessionId":"B687A9EF-4535-4BB4-A9D5-E692BBCDB0A6",
+                "cwd":"/tmp/shared-project",
+                "kind":"interactive",
+                "pid":57704,
+                "status":"idle"
+              }
+            ]
+            """#.utf8
+        ),
+        processStartIdentity: {
+            $0 == 57_704 ? liveClaudeProcessStartIdentity : nil
+        },
+        isProcessAlive: { $0 == 57_704 }
+    )
+    let refreshedClaudeRequest = refreshedClaudeTerminalOpenRequest(
+        ClaudeTerminalOpenRequest(
+            sessionID: claudeSessionID,
+            workingDirectory: "/tmp/shared-project",
+            processID: nil
+        ),
+        liveProcessTarget: liveClaudeTarget
+    )
     let installedOttyResumePreference = claudeResumeTerminalPreference(
         runningBundleIdentifiers: [],
         installedBundleIdentifiers: [
@@ -585,6 +619,22 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
           ottyQuotedResume.contains("set index of targetWindow to 1"),
           ottyQuotedResume.contains("activate"),
           ottyResumeScript(command: " \n") == nil,
+          liveClaudeTarget == ClaudeLiveProcessTarget(
+              sessionID: claudeSessionID,
+              processID: 57_704,
+              processStartIdentity: liveClaudeProcessStartIdentity
+          ),
+          claudeTerminalNavigationPlan(for: refreshedClaudeRequest).first
+            == .focusProcess(
+                processID: 57_704,
+                processStartIdentity: liveClaudeProcessStartIdentity
+            ),
+          claudeTerminalFocusStrategy(
+              bundleIdentifier: "dev.warp.Warp-Stable"
+          ) == .activateHostApplication,
+          claudeTerminalFocusStrategy(
+              bundleIdentifier: "com.googlecode.iterm2"
+          ) == .selectITermTTY,
           installedOttyResumePreference == [
               "io.appmakes.otty",
               "com.apple.Terminal",

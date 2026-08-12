@@ -203,18 +203,22 @@ func terminalHostApplication(
 ) -> NSRunningApplication? {
     var candidate = processID
     var visited = Set<Int32>()
+    var firstApplication: NSRunningApplication?
     for _ in 0..<16 {
         guard candidate > 1, visited.insert(candidate).inserted else { break }
         if let application = NSRunningApplication(processIdentifier: candidate),
            application.bundleURL?.pathExtension.lowercased() == "app",
            application.processIdentifier != ProcessInfo.processInfo.processIdentifier
         {
-            return application
+            firstApplication = firstApplication ?? application
+            if application.activationPolicy == .regular {
+                return application
+            }
         }
         guard let parent = parentProcessID(forProcessID: candidate) else { break }
         candidate = parent
     }
-    return nil
+    return firstApplication
 }
 
 func ottyExecutablePath() -> String? {
@@ -511,6 +515,109 @@ func claudeResumeTerminalPreference(
     return running + installed
 }
 
+struct ClaudeLiveProcessTarget: Equatable {
+    let sessionID: String
+    let processID: Int32
+    let processStartIdentity: String
+}
+
+func claudeLiveProcessTarget(
+    forSessionID sessionID: String,
+    from data: Data,
+    processStartIdentity: (Int32) -> String? =
+        currentProcessStartIdentity(forProcessID:),
+    isProcessAlive: (Int32) -> Bool = isLiveClaudeProcess
+) -> ClaudeLiveProcessTarget? {
+    let normalizedSessionID = sessionID
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    guard UUID(uuidString: normalizedSessionID) != nil,
+          let values = try? JSONSerialization.jsonObject(with: data)
+            as? [[String: Any]]
+    else { return nil }
+
+    return values.compactMap { value -> (Double, ClaudeLiveProcessTarget)? in
+        guard let rawSessionID = value["sessionId"] as? String,
+              rawSessionID.lowercased() == normalizedSessionID,
+              let rawProcessID = value["pid"] as? Int
+                ?? (value["pid"] as? NSNumber)?.intValue,
+              let processID = Int32(exactly: rawProcessID),
+              processID > 1,
+              isProcessAlive(processID),
+              let identity = processStartIdentity(processID)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !identity.isEmpty
+        else { return nil }
+        let startedAt = value["startedAt"] as? Double
+            ?? (value["startedAt"] as? NSNumber)?.doubleValue
+            ?? 0
+        return (
+            startedAt,
+            ClaudeLiveProcessTarget(
+                sessionID: normalizedSessionID,
+                processID: processID,
+                processStartIdentity: identity
+            )
+        )
+    }
+    .max { $0.0 < $1.0 }?
+    .1
+}
+
+func currentClaudeLiveProcessTarget(
+    forSessionID sessionID: String
+) -> ClaudeLiveProcessTarget? {
+    guard let executableURL = locateClaudeExecutable(),
+          let data = captureClaudeAgentsJSON(
+              executableURL: executableURL,
+              timeout: 1
+          )
+    else { return nil }
+    return claudeLiveProcessTarget(
+        forSessionID: sessionID,
+        from: data
+    )
+}
+
+func refreshedClaudeTerminalOpenRequest(
+    _ request: ClaudeTerminalOpenRequest,
+    liveProcessTarget: ClaudeLiveProcessTarget?
+) -> ClaudeTerminalOpenRequest {
+    guard let sessionID = request.sessionID,
+          let liveProcessTarget,
+          liveProcessTarget.sessionID.caseInsensitiveCompare(sessionID)
+            == .orderedSame
+    else { return request }
+    return ClaudeTerminalOpenRequest(
+        sessionID: sessionID,
+        workingDirectory: request.workingDirectory,
+        processID: liveProcessTarget.processID,
+        processStartIdentity: liveProcessTarget.processStartIdentity
+    )
+}
+
+enum ClaudeTerminalFocusStrategy: Equatable {
+    case selectOttyTTY
+    case selectITermTTY
+    case selectTerminalTTY
+    case activateHostApplication
+}
+
+func claudeTerminalFocusStrategy(
+    bundleIdentifier: String?
+) -> ClaudeTerminalFocusStrategy {
+    switch bundleIdentifier {
+    case "io.appmakes.otty":
+        return .selectOttyTTY
+    case "com.googlecode.iterm2":
+        return .selectITermTTY
+    case "com.apple.Terminal":
+        return .selectTerminalTTY
+    default:
+        return .activateHostApplication
+    }
+}
+
 func executeAppleScriptReturningBoolean(_ source: String) -> Bool {
     guard let script = NSAppleScript(source: source) else { return false }
     var error: NSDictionary?
@@ -525,20 +632,33 @@ func focusExistingClaudeTerminal(
     guard isLiveClaudeProcess(processID),
           currentProcessStartIdentity(forProcessID: processID)
             == processStartIdentity,
-          let tty = controllingTTY(forProcessID: processID),
           let hostApplication = terminalHostApplication(forProcessID: processID)
     else { return false }
 
     let source: String?
-    switch hostApplication.bundleIdentifier {
-    case "io.appmakes.otty":
+    switch claudeTerminalFocusStrategy(
+        bundleIdentifier: hostApplication.bundleIdentifier
+    ) {
+    case .selectOttyTTY:
+        guard let tty = controllingTTY(forProcessID: processID) else {
+            return false
+        }
         source = ottyFocusScript(tty: tty)
-    case "com.googlecode.iterm2":
+    case .selectITermTTY:
+        guard let tty = controllingTTY(forProcessID: processID) else {
+            return false
+        }
         source = iTerm2FocusScript(tty: tty)
-    case "com.apple.Terminal":
+    case .selectTerminalTTY:
+        guard let tty = controllingTTY(forProcessID: processID) else {
+            return false
+        }
         source = terminalFocusScript(tty: tty)
-    default:
-        return false
+    case .activateHostApplication:
+        return hostApplication.activate(options: [
+            .activateAllWindows,
+            .activateIgnoringOtherApps,
+        ])
     }
     guard let source else { return false }
     return executeAppleScriptReturningBoolean(source)
