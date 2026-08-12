@@ -504,7 +504,6 @@ private func assertDynamicIslandChromeAccessibility() {
         capsuleLayout.titleFrame,
         capsuleLayout.elapsedFrame,
         capsuleLayout.chevronFrame,
-        capsuleLayout.modeSwitchFrame,
     ]
     guard dynamicIslandCapsuleSize == NSSize(width: 404, height: 58),
           root.view.frame.size == dynamicIslandCapsuleSize,
@@ -515,25 +514,20 @@ private func assertDynamicIslandChromeAccessibility() {
           capsuleLayout.providerIconFrame == NSRect(x: 18, y: 19, width: 20, height: 20),
           capsuleLayout.statusDotFrame == NSRect(x: 46, y: 25, width: 8, height: 8),
           capsuleLayout.statusFrame == NSRect(x: 62, y: 19, width: 48, height: 20),
-          capsuleLayout.titleFrame == NSRect(x: 120, y: 18, width: 96, height: 22),
-          capsuleLayout.elapsedFrame == NSRect(x: 228, y: 19, width: 96, height: 20),
-          capsuleLayout.chevronFrame == NSRect(x: 326, y: 21, width: 8, height: 16),
-          capsuleLayout.modeSwitchFrame == NSRect(x: 340, y: 15, width: 50, height: 28),
+          capsuleLayout.titleFrame == NSRect(x: 120, y: 18, width: 144, height: 22),
+          capsuleLayout.elapsedFrame == NSRect(x: 276, y: 19, width: 96, height: 20),
+          capsuleLayout.chevronFrame == NSRect(x: 380, y: 21, width: 8, height: 16),
           capsuleContentFrames.allSatisfy({
               capsuleLayout.bounds.contains($0)
           }),
           capsuleContentFrames.isNonOverlappingHorizontally,
-          capsuleLayout.hitTargetFrame == NSRect(x: 0, y: 0, width: 334, height: 58),
-          !capsuleLayout.hitTargetFrame.intersects(capsuleLayout.modeSwitchFrame),
+          capsuleLayout.hitTargetFrame == NSRect(x: 0, y: 0, width: 404, height: 58),
           capsuleLayout.labelCount == 3,
-          capsuleLayout.buttonCount == 2,
-          capsuleLayout.hasVisibleButtonTitle,
-          capsuleLayout.modeSwitchIsFrontmost,
+          capsuleLayout.buttonCount == 1,
+          !capsuleLayout.hasVisibleButtonTitle,
           capsuleLayout.hitTargetToolTip == "点击展开 · 拖动到其他屏幕",
-          capsuleLayout.hitTargetAccessibilityHelp?.contains("拖动可移到其他屏幕") == true,
-          capsuleLayout.modeSwitchTitle == "面板",
-          capsuleLayout.modeSwitchToolTip == "切换到宠物面板",
-          capsuleLayout.modeSwitchAccessibilityLabel == "切换到宠物面板",
+          capsuleLayout.hitTargetAccessibilityHelp
+            == "点击展开灵动岛功能面板；拖动可移到其他屏幕",
           capsuleLayout.providerIconAccessibilityDescription == "Claude Code",
           !capsuleLayout.taskContentIsHidden,
           capsuleLayout.quotaSummaryIsHidden,
@@ -547,7 +541,7 @@ private func assertDynamicIslandChromeAccessibility() {
           accessibilitySnapshot.contains("刷新"),
           accessibilitySnapshot.contains("收起"),
           accessibilitySnapshot.contains("隐藏灵动岛"),
-          hitTargetSize == NSSize(width: 334, height: 58)
+          hitTargetSize == NSSize(width: 404, height: 58)
     else {
         fputs(
             "dynamic island chrome accessibility self-test failed "
@@ -578,7 +572,7 @@ private func assertDynamicIslandChromeAccessibility() {
                     rows: [
                         QuotaRow(
                             name: QuotaProvider.claudeCode.summaryRowName,
-                            remainingPercent: 17,
+                            remainingPercent: 100,
                             resetsAt: nil
                         )
                     ]
@@ -615,20 +609,14 @@ private func assertDynamicIslandChromeAccessibility() {
           idleCapsuleLayout.hitTargetFrame == NSRect(
               x: 0,
               y: 0,
-              width: 334,
+              width: 404,
               height: 58
           ),
           idleCapsuleLayout.chevronFrame == NSRect(
-              x: 326,
+              x: 380,
               y: 21,
               width: 8,
               height: 16
-          ),
-          idleCapsuleLayout.modeSwitchFrame == NSRect(
-              x: 340,
-              y: 15,
-              width: 50,
-              height: 28
           ),
           quotaSummaryLayout.frame == NSRect(
               x: 18,
@@ -637,17 +625,21 @@ private func assertDynamicIslandChromeAccessibility() {
               height: 20
           ),
           quotaSummaryLayout.iconFrames == [
-              NSRect(x: 17.5, y: 0, width: 20, height: 20),
-              NSRect(x: 150, y: 0, width: 20, height: 20),
+              NSRect(x: 15.5, y: 0, width: 20, height: 20),
+              NSRect(x: 148, y: 0, width: 20, height: 20),
           ],
           quotaSummaryLayout.nameFrames == [
-              NSRect(x: 45.5, y: 0, width: 30, height: 20),
-              NSRect(x: 178, y: 0, width: 52, height: 20),
+              NSRect(x: 43.5, y: 0, width: 30, height: 20),
+              NSRect(x: 176, y: 0, width: 52, height: 20),
           ],
           quotaSummaryLayout.valueFrames == [
-              NSRect(x: 83.5, y: 0, width: 42, height: 20),
-              NSRect(x: 238, y: 0, width: 42, height: 20),
+              NSRect(x: 81.5, y: 0, width: 46, height: 20),
+              NSRect(x: 236, y: 0, width: 46, height: 20),
           ],
+          quotaSummaryLayout.valueCellWidths.enumerated().allSatisfy({
+              index, width in
+              width <= quotaSummaryLayout.valueFrames[index].width
+          }),
           quotaSummaryLayout.dividerFrame == NSRect(
               x: 142.5,
               y: 3,
@@ -662,7 +654,7 @@ private func assertDynamicIslandChromeAccessibility() {
           abs(leftQuotaGroupFrame.midX - leftQuotaColumnMidX) <= 0.25,
           abs(rightQuotaGroupFrame.midX - rightQuotaColumnMidX) <= 0.25,
           quotaSummaryLayout.names == ["GPT", "Claude"],
-          quotaSummaryLayout.values == ["35%", "17%"],
+          quotaSummaryLayout.values == ["35%", "100%"],
           quotaSummaryLayout.iconAccessibilityDescriptions == [
               "Codex",
               "Claude Code",
@@ -701,27 +693,7 @@ private func assertDynamicIslandChromeAccessibility() {
         codexDesktopRunning: true
     ))
     let controller = DynamicIslandWindowController(store: expansionStore)
-    var requestedPetPanelCount = 0
-    controller.onRequestPetPanel = { requestedPetPanelCount += 1 }
     controller.showCapsule()
-    controller.rootControllerForSelfTest().performCapsuleModeSwitchForSelfTest()
-    guard requestedPetPanelCount == 1,
-          controller.state == .capsule
-    else {
-        fputs("dynamic island capsule mode switch isolation self-test failed\n", stderr)
-        exit(1)
-    }
-    expansionStore.update { $0.petEnabled = false }
-    controller.rootControllerForSelfTest().performCapsuleModeSwitchForSelfTest()
-    guard requestedPetPanelCount == 1,
-          controller.rootControllerForSelfTest()
-              .capsuleLayoutSnapshotForSelfTest()
-              .modeSwitchToolTip == "请先在 ChatBird 菜单开启桌面宠物"
-    else {
-        fputs("dynamic island disabled pet mode switch self-test failed\n", stderr)
-        exit(1)
-    }
-    expansionStore.update { $0.petEnabled = true }
     controller.rootControllerForSelfTest().expandCapsuleForSelfTest()
     controller.completeAnimationForSelfTest()
     guard controller.state == .expanded(.tasks),

@@ -19,17 +19,15 @@
 - 为关闭原生气泡，ChatBird 只把不含内容的本地任务 ID 写入 Codex 已有的 `avatar-overlay-muted-notification-ids-v1` 状态，并把 ChatBird 新增值记录到 `~/.codex/chatbird-native-notification-backup.json`。检测到 Codex 正在运行时不会改写该状态；完全退出且文件稳定后才会同步，写入失败会回滚本次备份变更，卸载时只移除已经记录的新增值。
 - 卸载器检测到 Codex 仍在运行时会停止，不会移除 ChatBird 或恢复文件；完全退出 Codex 后才会恢复原生气泡设置。
 - 若用户已经授予辅助功能权限，运行中的 ChatBird 会查找 Codex 暴露的固定辅助功能标签“显示活动，N 项 / Show activity, N item(s)”“打开通知 / Open notification”和“静音任务 / Mute task”。它只把同时具有固定窗口标题和计数按钮的透明角标窗口移到所有活动显示器之外，并调用 Codex 自带的菜单动作关闭新任务气泡；同名的任务列表窗口不会移动。读取到的其他辅助功能字符串不保留、不记录、不上传；ChatBird 不生成鼠标或键盘事件，也不会主动弹出授权请求。未授权时只检查授权状态，不访问 Codex 的辅助功能树、不移动窗口、不执行菜单动作，仍在 Codex 完全退出后同步任务 ID。
-- ChatBird 不再依赖或安装 Codex Pet，不写入 `selected-avatar-id`，也不选择 `custom:chatbird-nt`；自有桌面宠物由 `ChatBird.app` 进程创建和管理。
+- ChatBird 不包含桌面宠物或对应素材，不依赖或安装 Codex Pet，不写入 `selected-avatar-id`，也不选择 `custom:chatbird-nt`。
 - ChatBird 不会修改 `ChatGPT.app`、`Codex.app`、`app.asar` 或应用签名。
-- 宠物像素探针只在用户已经授予屏幕录制权限时工作；ChatBird 不会为定位主动弹出屏幕录制授权。截图像素只在内存中用于计算宠物边界，不落盘、不上传。
 - ChatBird 不显示 Token 或行情模块，也不发起远程第三方行情请求；只展示 Codex app-server 返回的重置额度次数与到期时间，不直接读取登录凭据。
 - Claude 额度读取与 Claude Hook 请求由用户已登录的 Claude CLI 完成，CLI 可能像正常使用 Claude Code 一样连接 Anthropic；ChatBird 不读取 Claude 凭据，也不直接调用 Anthropic OAuth API。
 - Mac 日志位于当前用户的 `~/Library/Logs/ChatBird.log`。
 
 ## macOS 权限
 
-- 辅助功能：可选，只用于隐藏 Codex 原生任务计数角标，并在当前 Codex 进程中自动执行其自带的“静音任务”菜单动作；未授权时额度、任务、宠物、灵动岛和退出后的气泡静音同步仍正常工作。
-- 屏幕录制：可选，只用于提高自有宠物可见边界的定位精度；未授权时优先使用 ChatBird 自有宠物窗口的几何位置。
+- 辅助功能：可选，只用于隐藏 Codex 原生任务计数角标，并在当前 Codex 进程中自动执行其自带的“静音任务”菜单动作；未授权时额度、任务、灵动岛和退出后的气泡静音同步仍正常工作。
 
 ## 发布前审计
 

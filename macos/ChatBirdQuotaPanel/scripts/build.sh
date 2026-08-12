@@ -7,7 +7,6 @@ LEGACY_APP="$ROOT/build/ChatBird 额度面板.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
-PET_SPRITESHEET="$ROOT/../../shared/pet/chatbird-nt/spritesheet.webp"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 SDK="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
@@ -20,8 +19,7 @@ fi
 
 for resource in \
   "$ROOT/Resources/ChatBird.icns" \
-  "$ROOT/Resources/ChatBird-AppIcon-1024.png" \
-  "$PET_SPRITESHEET"
+  "$ROOT/Resources/ChatBird-AppIcon-1024.png"
 do
   if [[ ! -f "$resource" ]]; then
     echo "缺少 ChatBird App 资源：$resource" >&2
@@ -56,8 +54,6 @@ cp "$ROOT"/Resources/ProviderIcon-*.svg "$RESOURCES/"
 cp "$ROOT/Resources/ChatBird.icns" "$RESOURCES/ChatBird.icns"
 cp "$ROOT/Resources/ChatBird-AppIcon-1024.png" \
   "$RESOURCES/ChatBird-AppIcon-1024.png"
-cp "$PET_SPRITESHEET" "$RESOURCES/ChatBirdPetSpritesheet.webp"
-
 cp "$TMP_DIR/ChatBird-arm64" "$MACOS/ChatBird"
 
 /usr/bin/codesign \

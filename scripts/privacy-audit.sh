@@ -20,8 +20,6 @@ audit_candidates() {
   # plus untracked files from directories copied or compiled into the package.
   git -C "$ROOT" ls-files -z
   git -C "$ROOT" ls-files --others --exclude-standard -z -- \
-    shared/pet/chatbird-nt \
-    shared/preview/chatbird-nt \
     macos/ChatBirdQuotaPanel \
     macos/package
 }

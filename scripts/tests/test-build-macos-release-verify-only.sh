@@ -14,7 +14,6 @@ fail() {
 
 run_verify() {
   CHATBIRD_RELEASE_ROOT="$FIXTURE" \
-  CHATBIRD_SKIP_STRICT_PET_MEDIA_CHECKS=true \
   CHATBIRD_SKIP_APP_BINARY_CHECKS=true \
     "$FIXTURE/scripts/build-macos-release.sh" --verify-only \
       >"$VERIFY_OUTPUT" 2>"$VERIFY_ERROR"
@@ -54,10 +53,8 @@ make_stage() {
   local local_app="$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app"
   /bin/rm -rf "$stage"
   mkdir -p \
-    "$stage/preview-qa" \
     "$stage/ChatBird.app/Contents/MacOS" \
     "$stage/ChatBird.app/Contents/Resources"
-  /bin/cp "$FIXTURE/shared/preview/chatbird-nt/panel-preview.png" "$stage/preview-qa/panel-preview.png"
   /bin/cp "$FIXTURE/macos/ChatBirdQuotaPanel/Resources/dev.chatbird.app.plist.in" \
     "$stage/dev.chatbird.app.plist.in"
   if [[ -d "$local_app" ]]; then
@@ -67,7 +64,6 @@ make_stage() {
     write_file "$stage/ChatBird.app/Contents/Info.plist" '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.chatbird.app</string><key>CFBundleExecutable</key><string>ChatBird</string><key>CFBundleIconFile</key><string>ChatBird.icns</string></dict></plist>'
     write_file "$stage/ChatBird.app/Contents/MacOS/ChatBird" "fake binary"
     write_file "$stage/ChatBird.app/Contents/Resources/ChatBird.icns" "fake icon"
-    write_file "$stage/ChatBird.app/Contents/Resources/ChatBirdPetSpritesheet.webp" "fake webp"
     /bin/chmod +x "$stage/ChatBird.app/Contents/MacOS/ChatBird"
   fi
   /bin/cp "$FIXTURE/macos/package/安装ChatBird.command" "$stage/安装ChatBird.command"
@@ -102,18 +98,13 @@ make_dist_from_stage() {
 mkdir -p "$FIXTURE/scripts" "$FIXTURE/macos/package" \
   "$FIXTURE/macos/ChatBirdQuotaPanel/Resources" \
   "$FIXTURE/macos/ChatBirdQuotaPanel/Sources/ChatBirdQuotaPanel" \
-  "$FIXTURE/macos/ChatBirdQuotaPanel/scripts" \
-  "$FIXTURE/shared/pet/chatbird-nt" \
-  "$FIXTURE/shared/preview/chatbird-nt"
+  "$FIXTURE/macos/ChatBirdQuotaPanel/scripts"
 
 /bin/cp "$ROOT/scripts/build-macos-release.sh" "$FIXTURE/scripts/build-macos-release.sh"
 /bin/cp "$ROOT/scripts/privacy-audit.sh" "$FIXTURE/scripts/privacy-audit.sh"
 /bin/cp "$ROOT/scripts/validate-repository-layout.py" "$FIXTURE/scripts/validate-repository-layout.py"
 /bin/chmod +x "$FIXTURE/scripts/build-macos-release.sh" "$FIXTURE/scripts/privacy-audit.sh"
 
-write_file "$FIXTURE/shared/pet/chatbird-nt/pet.json" '{"id":"chatbird-nt","spriteVersionNumber":2}'
-write_file "$FIXTURE/shared/pet/chatbird-nt/spritesheet.webp" "fake webp"
-write_file "$FIXTURE/shared/preview/chatbird-nt/panel-preview.png" "preview"
 write_file "$FIXTURE/macos/README.md" "macOS README"
 write_file "$FIXTURE/macos/VERSION.txt" "Version: 1.1.0"
 write_file "$FIXTURE/LICENSE" "license"
@@ -135,6 +126,10 @@ git -C "$FIXTURE" add -A
 expect_fail "missing dist archive"
 
 make_stage
+[[ ! -e "$FIXTURE/build/release/ChatBird-macOS-arm64-1.1.0/preview-qa" ]] \
+  || fail "valid stage contains pet preview assets"
+[[ ! -e "$FIXTURE/build/release/ChatBird-macOS-arm64-1.1.0/ChatBird.app/Contents/Resources/ChatBirdPetSpritesheet.webp" ]] \
+  || fail "valid stage contains pet spritesheet"
 sleep 1
 make_dist_from_stage
 /bin/rm -rf "$FIXTURE/build/release"
@@ -155,7 +150,6 @@ mkdir -p "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/MacOS" \
 write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/Info.plist" '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.chatbird.app</string><key>CFBundleExecutable</key><string>ChatBird</string><key>CFBundleIconFile</key><string>ChatBird.icns</string></dict></plist>'
 write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/MacOS/ChatBird" "fake binary"
 write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/Resources/ChatBird.icns" "fake icon"
-write_file "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/Resources/ChatBirdPetSpritesheet.webp" "fake webp"
 /bin/chmod +x "$FIXTURE/macos/ChatBirdQuotaPanel/build/ChatBird.app/Contents/MacOS/ChatBird"
 expect_fail "archive older than matching local app build"
 

@@ -6,7 +6,7 @@ ChatBird 是一个独立运行的 macOS App。当前发行版本为 **1.1.0**，
 ChatBird-macOS-arm64-1.1.0.zip
 ```
 
-该发行只面向 macOS 12.3+ 的 Apple 芯片（arm64），暂不支持 Intel Mac。包内包含 `ChatBird.app`、LaunchAgent 模板、三个安装检查命令、预览/QA 文件、License、隐私说明和资产说明。
+该发行只面向 macOS 12.3+ 的 Apple 芯片（arm64），暂不支持 Intel Mac。包内包含 `ChatBird.app`、LaunchAgent 模板、三个安装检查命令、License、隐私说明和资产说明。
 
 ## 官方仓库
 
@@ -16,15 +16,14 @@ ChatBird 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Junwe
 
 - 独立 App：安装位置为 `~/Applications/ChatBird.app`，可从 Finder、Dock、LaunchAgent 或安装脚本启动。
 - 独立身份：Executable 为 `ChatBird`，Bundle ID 和 LaunchAgent label 均使用 `dev.chatbird.app`。
-- 自有桌面宠物：ChatBird 自己创建、显示和拖拽宠物窗口，不再依赖 Codex 的 Pet 插件、`selected-avatar-id` 或 `custom:chatbird-nt`。
 - 独立 App Icon：使用 `ChatBird.icns`，在 Dock 与应用切换器中显示 ChatBird 自己的图标。
-- 灵动岛与宠物面板是两套展示方式：胶囊可点击展开，展开态包含任务、确认与额度工作区；宠物关闭时不允许切换到宠物面板。
+- 灵动岛是唯一展示方式：胶囊可点击展开，展开态包含任务、确认与额度工作区。
 - 检测到 Claude Code CLI 时，可显示 Claude Code 的 5h、周额度与 Fable 周额度；未安装时只显示 Codex 来源。已安装但未登录或读取失败时保留 Claude Code 状态提示；不显示 Token、Credits 或行情模块。
 - 任务状态约每 2 秒从本机 Codex 与可用的 Claude Code 状态读取；未安装 Claude Code 时不显示其残留会话。点击任务行可返回对应 Codex 任务或在 Terminal 恢复 Claude 会话。
 - 运行中任务会显示开始时间与持续时间；已完成/失败任务的持续时间会固定，不继续增长。
 - 运行中任务预览只显示公开助手输出，新内容会及时替换，同时保留可滚动的完整输出；不展示 thinking、工具参数或原始工具输出。
 - 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json` 和会话公开输出；不会发起远程第三方行情请求。
-- 若用户已经授予辅助功能权限，ChatBird 会通过 Codex 暴露的固定辅助功能标签隐藏/静音 Codex 原生任务气泡；未授权时仍可使用额度、任务、宠物和灵动岛。
+- 若用户已经授予辅助功能权限，ChatBird 会通过 Codex 暴露的固定辅助功能标签隐藏/静音 Codex 原生任务气泡；未授权时仍可使用额度、任务和灵动岛。
 - ChatBird 不修改 `ChatGPT.app`、`Codex.app`、`app.asar` 或应用签名。
 
 ## 安装
@@ -70,7 +69,6 @@ macOS 需要 Xcode Command Line Tools：
 ## 源码目录
 
 - `macos/ChatBirdQuotaPanel`：ChatBird macOS App 源码与资源。
-- `shared/preview/chatbird-nt`：预览和 QA 文件。
 - `scripts/build-macos-release.sh`：macOS 发布脚本。
 
 仓库布局校验会检查 tracked 文件，确保旧产品发布包、其他平台源码和非 ChatBird 素材不会再次进入主线：

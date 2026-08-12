@@ -49,16 +49,11 @@ struct DynamicIslandCapsuleLayoutSnapshot: Equatable {
     let elapsedFrame: NSRect
     let chevronFrame: NSRect
     let hitTargetFrame: NSRect
-    let modeSwitchFrame: NSRect
     let labelCount: Int
     let buttonCount: Int
     let hasVisibleButtonTitle: Bool
-    let modeSwitchIsFrontmost: Bool
     let hitTargetToolTip: String?
     let hitTargetAccessibilityHelp: String?
-    let modeSwitchTitle: String
-    let modeSwitchToolTip: String?
-    let modeSwitchAccessibilityLabel: String?
     let providerIconAccessibilityDescription: String?
     let taskContentIsHidden: Bool
     let quotaSummaryIsHidden: Bool
@@ -69,6 +64,7 @@ struct DynamicIslandCapsuleQuotaSummaryLayoutSnapshot: Equatable {
     let iconFrames: [NSRect]
     let nameFrames: [NSRect]
     let valueFrames: [NSRect]
+    let valueCellWidths: [CGFloat]
     let dividerFrame: NSRect
     let names: [String]
     let values: [String]
@@ -723,7 +719,6 @@ final class DynamicIslandCapsuleHitTargetButton: NSButton {
 final class DynamicIslandRootViewController: NSViewController {
     var onExpand: ((DynamicIslandTab, String?) -> Void)?
     var onCapsuleDragEnded: ((NSPoint) -> Void)?
-    var onRequestPetPanel: (() -> Void)?
     var onCollapse: (() -> Void)?
     var onHide: (() -> Void)?
     var onRefresh: (() -> Void)?
@@ -752,9 +747,6 @@ final class DynamicIslandRootViewController: NSViewController {
         }
         capsuleController.onDragEnded = { [weak self] point in
             self?.onCapsuleDragEnded?(point)
-        }
-        capsuleController.onRequestPetPanel = { [weak self] in
-            self?.onRequestPetPanel?()
         }
         workspaceController.onCollapse = { [weak self] in
             self?.onCollapse?()
@@ -799,7 +791,6 @@ final class DynamicIslandRootViewController: NSViewController {
             now: dynamicIslandCurrentDate()
         )
         capsuleController.apply(model)
-        capsuleController.setPetPanelAvailable(snapshot.petEnabled)
         workspaceController.selectedTaskKey = selectedTaskKey
         workspaceController.apply(snapshot: snapshot, state: state)
 
@@ -900,11 +891,6 @@ final class DynamicIslandRootViewController: NSViewController {
         capsuleController.performDragEndedForSelfTest(at: point)
     }
 
-    func performCapsuleModeSwitchForSelfTest() {
-        _ = view
-        capsuleController.performModeSwitchForSelfTest()
-    }
-
     func performTopRefreshButtonClickForSelfTest() {
         workspaceController.performTopRefreshButtonClickForSelfTest()
     }
@@ -973,7 +959,7 @@ final class DynamicIslandCapsuleQuotaSummaryView: NSView {
         let iconWidth: CGFloat = 20
         let itemSpacing: CGFloat = 8
         let nameWidths: [CGFloat] = [30, 52]
-        let valueWidth: CGFloat = 42
+        let valueWidth: CGFloat = 46
         let dividerWidth: CGFloat = 1
         let dividerHeight: CGFloat = 14
         let componentHeight: CGFloat = 20
@@ -1050,6 +1036,9 @@ final class DynamicIslandCapsuleQuotaSummaryView: NSView {
             iconFrames: iconViews.map(\.frame),
             nameFrames: nameFields.map(\.frame),
             valueFrames: valueFields.map(\.frame),
+            valueCellWidths: valueFields.map {
+                $0.cell?.cellSize.width ?? $0.intrinsicContentSize.width
+            },
             dividerFrame: dividerView.frame,
             names: nameFields.map(\.stringValue),
             values: valueFields.map(\.stringValue),
@@ -1063,7 +1052,6 @@ final class DynamicIslandCapsuleQuotaSummaryView: NSView {
 final class DynamicIslandCapsuleViewController: NSViewController {
     var onExpand: ((DynamicIslandTab, String?) -> Void)?
     var onDragEnded: ((NSPoint) -> Void)?
-    var onRequestPetPanel: (() -> Void)?
 
     private let backgroundView = DynamicIslandSurfaceView(
         cornerRadius: 29,
@@ -1085,15 +1073,10 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         target: nil,
         action: nil
     )
-    private let modeSwitchButton = DynamicIslandButton(
-        title: "面板",
-        style: .secondary
-    )
     private var model: DynamicIslandCapsulePresentation?
     private var contentChoices: [String] = []
     private var contentChoiceIndex = 0
     private var contentRotationTimer: Timer?
-    private var petPanelAvailable = true
 
     var hitTargetFrameForSelfTest: NSRect { hitTargetButton.frame }
 
@@ -1114,7 +1097,6 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         view.addSubview(quotaSummaryView)
         quotaSummaryView.isHidden = true
         view.addSubview(hitTargetButton)
-        view.addSubview(modeSwitchButton)
 
         statusDotView.wantsLayer = true
         providerIconView.imageScaling = .scaleProportionallyDown
@@ -1143,17 +1125,9 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         }
         hitTargetButton.setAccessibilityRole(.button)
         hitTargetButton.setAccessibilityHelp(
-            "点击展开灵动岛功能面板；拖动可移到其他屏幕；右侧按钮切换到宠物面板"
+            "点击展开灵动岛功能面板；拖动可移到其他屏幕"
         )
         hitTargetButton.toolTip = "点击展开 · 拖动到其他屏幕"
-
-        modeSwitchButton.target = self
-        modeSwitchButton.action = #selector(requestPetPanel)
-        modeSwitchButton.setAccessibilityLabel("切换到宠物面板")
-        modeSwitchButton.setAccessibilityHelp(
-            "关闭灵动岛并显示宠物面板"
-        )
-        modeSwitchButton.toolTip = "切换到宠物面板"
     }
 
     deinit {
@@ -1169,22 +1143,15 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         statusDotView.layer?.cornerRadius = 4
         statusField.frame = NSRect(x: 62, y: centerY - 10, width: 48, height: 20)
 
-        let modeSwitchFrame = NSRect(
-            x: max(0, view.bounds.width - 64),
-            y: centerY - 14,
-            width: 50,
-            height: 28
-        )
-        modeSwitchButton.frame = modeSwitchFrame
         let chevronFrame = NSRect(
-            x: max(0, modeSwitchFrame.minX - 14),
+            x: max(0, view.bounds.width - 24),
             y: centerY - 8,
             width: 8,
             height: 16
         )
         chevronView.frame = chevronFrame
         elapsedField.frame = NSRect(
-            x: max(0, modeSwitchFrame.minX - 112),
+            x: max(0, chevronFrame.minX - 104),
             y: centerY - 10,
             width: 96,
             height: 20
@@ -1204,7 +1171,7 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         hitTargetButton.frame = NSRect(
             x: 0,
             y: 0,
-            width: max(0, modeSwitchFrame.minX - 6),
+            width: view.bounds.width,
             height: view.bounds.height
         )
     }
@@ -1247,28 +1214,9 @@ final class DynamicIslandCapsuleViewController: NSViewController {
         hitTargetButton.setAccessibilityValue(model.accessibilityValue)
     }
 
-    func setPetPanelAvailable(_ available: Bool) {
-        _ = view
-        petPanelAvailable = available
-        modeSwitchButton.isEnabled = available
-        modeSwitchButton.toolTip = available
-            ? "切换到宠物面板"
-            : "请先在 ChatBird 菜单开启桌面宠物"
-        modeSwitchButton.setAccessibilityHelp(
-            available
-                ? "关闭灵动岛并显示宠物面板"
-                : "宠物面板不可用；请先在 ChatBird 菜单开启桌面宠物"
-        )
-    }
-
     @objc private func expandFromButton() {
         guard let model else { return }
         onExpand?(model.preferredTab, model.selectedTaskKey)
-    }
-
-    @objc private func requestPetPanel() {
-        guard petPanelAvailable else { return }
-        onRequestPetPanel?()
     }
 
     func expandForSelfTest() {
@@ -1277,10 +1225,6 @@ final class DynamicIslandCapsuleViewController: NSViewController {
 
     func performDragEndedForSelfTest(at point: NSPoint) {
         onDragEnded?(point)
-    }
-
-    func performModeSwitchForSelfTest() {
-        modeSwitchButton.performClick(nil)
     }
 
     private func updateContentRotationTimer() {
@@ -1319,18 +1263,12 @@ final class DynamicIslandCapsuleViewController: NSViewController {
             elapsedFrame: elapsedField.frame,
             chevronFrame: chevronView.frame,
             hitTargetFrame: hitTargetButton.frame,
-            modeSwitchFrame: modeSwitchButton.frame,
             labelCount: view.subviews.compactMap { $0 as? NSTextField }.count,
             buttonCount: buttons.count,
             hasVisibleButtonTitle: buttons.contains { !$0.title.isEmpty },
-            modeSwitchIsFrontmost: view.subviews.last === modeSwitchButton,
             hitTargetToolTip: hitTargetButton.toolTip,
             hitTargetAccessibilityHelp:
                 hitTargetButton.accessibilityHelp() as? String,
-            modeSwitchTitle: modeSwitchButton.title,
-            modeSwitchToolTip: modeSwitchButton.toolTip,
-            modeSwitchAccessibilityLabel:
-                modeSwitchButton.accessibilityLabel() as? String,
             providerIconAccessibilityDescription:
                 providerIconView.image?.accessibilityDescription,
             taskContentIsHidden: providerIconView.isHidden

@@ -26,7 +26,6 @@ ALLOWED_TOP_LEVEL = {
     "macos",
     "script",
     "scripts",
-    "shared",
 }
 ALLOWED_MACOS_PATHS = {
     "macos/README.md",
@@ -45,10 +44,6 @@ ALLOWED_SCRIPT_PATHS = {
 }
 ALLOWED_SCRIPT_PREFIXES = (
     "scripts/tests/",
-)
-ALLOWED_SHARED_PREFIXES = (
-    "shared/pet/chatbird-nt/",
-    "shared/preview/chatbird-nt/",
 )
 FORBIDDEN_PATH_MARKERS = (
     "bubu",
@@ -73,9 +68,6 @@ REQUIRED_FILES = {
     "macos/ChatBirdQuotaPanel/Resources/Info.plist",
     "macos/ChatBirdQuotaPanel/Sources/ChatBirdQuotaPanel/main.swift",
     "macos/ChatBirdQuotaPanel/scripts/build.sh",
-    "shared/pet/chatbird-nt/pet.json",
-    "shared/pet/chatbird-nt/spritesheet.webp",
-    "shared/preview/chatbird-nt/panel-preview.png",
 }
 
 
@@ -86,11 +78,12 @@ def tracked_files() -> set[str]:
         check=True,
         stdout=subprocess.PIPE,
     )
-    return {
+    paths = {
         raw.decode("utf-8", errors="surrogateescape")
         for raw in result.stdout.split(b"\0")
         if raw
     }
+    return {path for path in paths if (ROOT / path).exists()}
 
 
 def path_has_forbidden_marker(path: str) -> bool:
@@ -124,9 +117,6 @@ def validate(paths: set[str]) -> list[str]:
             and not path.startswith(ALLOWED_SCRIPT_PREFIXES)
         ):
             violations.append(f"{path}: unexpected repository script")
-
-        if path.startswith("shared/") and not path.startswith(ALLOWED_SHARED_PREFIXES):
-            violations.append(f"{path}: unexpected shared product content")
 
         if path.startswith("macos/ChatBirdQuotaPanel/Resources/Airplane/"):
             violations.append(f"{path}: unused legacy resource is forbidden")

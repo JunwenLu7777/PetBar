@@ -59,5 +59,13 @@ assert_no_legacy_path(
 )
 assert_legacy_path("macos/package/Windows/legacy.txt")
 assert_legacy_path("shared/pet/chatbird-nt/Bubu/legacy.txt")
+shared_violations = validator.validate(
+    base_paths() | {"shared/pet/chatbird-nt/pet.json"}
+)
+assert any(
+    violation.startswith("shared/pet/chatbird-nt/pet.json:")
+    and "unexpected top-level repository content" in violation
+    for violation in shared_violations
+), shared_violations
 
 print("layout validator path marker tests passed")

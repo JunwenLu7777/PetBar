@@ -23,19 +23,16 @@
 
 ## 包内容
 
-- `ChatBird.app`：独立 macOS App，包含自有桌面宠物、灵动岛、额度和任务状态功能。
+- `ChatBird.app`：独立 macOS App，包含灵动岛、额度和任务状态功能。
 - `dev.chatbird.app.plist.in`：当前用户 LaunchAgent 模板。
 - `安装ChatBird.command`：安装 App 和 LaunchAgent。
 - `检查ChatBird.command`：检查 App、arm64 架构、签名、LaunchAgent、运行状态、Codex 周额度、可选 Claude 三项额度和任务状态。
 - `卸载ChatBird.command`：卸载 App 和 LaunchAgent，并恢复本项目记录过的 Codex 原生气泡静音值。
-- `preview-qa/`：预览和 QA 文件。
 - `LICENSE`、`PRIVACY.md`、`ASSET-NOTICE.md`、`CHECKSUMS-SHA256.txt`。
 
 ## 功能
 
-- ChatBird 是独立 App，不再向 `$CODEX_HOME/pets` 安装宠物，也不写入 Codex `selected-avatar-id`。
-- 自有桌面宠物由 ChatBird 进程创建和管理，支持点击、拖拽、跨屏与位置保存；Codex 退出后 ChatBird 仍可继续运行。
-- 顶部菜单可在“宠物面板”和“灵动岛”模式之间切换；宠物关闭时不允许切换到宠物面板。
+- ChatBird 是独立 App，不包含桌面宠物，也不再向 `$CODEX_HOME/pets` 安装宠物或写入 Codex `selected-avatar-id`。
 - 灵动岛默认是胶囊，点击后展开为功能面板；胶囊可拖到其他屏幕并吸附到该屏幕顶部中央。
 - 检测到 Claude Code CLI 时可切换额度来源：Codex 显示周额度，Claude Code 同时显示 5h、周额度与 Fable 周额度；不显示 Token、Credits 或任何行情模块。
 - 任务状态约每 2 秒读取本机 Codex 与可用的 Claude Code 会话状态，并显示执行中、等待确认、已完成和执行失败；未安装 Claude Code 时不显示其残留会话。

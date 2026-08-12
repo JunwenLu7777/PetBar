@@ -265,23 +265,6 @@ func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
-    let petVisibleFrame = NSRect(x: -1_200, y: 40, width: 1_200, height: 760)
-    let defaultPetFrame = defaultChatBirdPetFrame(visibleFrame: petVisibleFrame)
-    let clampedPetFrame = clampedChatBirdPetFrame(
-        NSRect(x: -1_500, y: -100, width: 122, height: 112),
-        visibleFrame: petVisibleFrame
-    )
-    let petPosition = ChatBirdPetPositionPreference(defaults: migratedDefaults)
-    petPosition.origin = NSPoint(x: -888, y: 222)
-    guard petVisibleFrame.contains(defaultPetFrame),
-          petVisibleFrame.contains(clampedPetFrame),
-          petPosition.origin == NSPoint(x: -888, y: 222),
-          chatBirdPetAnimationFrames().count == 7
-    else {
-        fputs("standalone pet resource or cross-display placement failed\n", stderr)
-        exit(1)
-    }
-
     let now = Date(timeIntervalSince1970: 12_345)
     let activeTask = TaskProgressItem(
         title: "Active",

@@ -16,13 +16,10 @@ APP_PROJECT="$ROOT/macos/ChatBirdQuotaPanel"
 APP_BUILD="$APP_PROJECT/build/ChatBird.app"
 LABEL="dev.chatbird.app"
 PLIST_TEMPLATE="$APP_PROJECT/Resources/$LABEL.plist.in"
-PET_SOURCE="${CHATBIRD_PET_SOURCE:-$ROOT/shared/pet/chatbird-nt}"
-PREVIEW_QA_SOURCE="${CHATBIRD_PREVIEW_QA_SOURCE:-$ROOT/shared/preview/chatbird-nt}"
 INSTALL_COMMAND="$ROOT/macos/package/安装ChatBird.command"
 CHECK_COMMAND="$ROOT/macos/package/检查ChatBird.command"
 UNINSTALL_COMMAND="$ROOT/macos/package/卸载ChatBird.command"
 VERIFY_ONLY=false
-SKIP_STRICT_PET_MEDIA_CHECKS="${CHATBIRD_SKIP_STRICT_PET_MEDIA_CHECKS:-false}"
 SKIP_APP_BINARY_CHECKS="${CHATBIRD_SKIP_APP_BINARY_CHECKS:-false}"
 
 usage() {
@@ -50,30 +47,7 @@ require_dir() {
   [[ -d "$1" ]] || fail "missing directory: $1"
 }
 
-require_nonempty_dir() {
-  require_dir "$1"
-  find "$1" -type f -print -quit | /usr/bin/grep -q . \
-    || fail "directory has no files: $1"
-}
-
-verify_pet() {
-  require_file "$PET_SOURCE/pet.json"
-  require_file "$PET_SOURCE/spritesheet.webp"
-  [[ "$(/usr/bin/plutil -extract id raw "$PET_SOURCE/pet.json")" == "chatbird-nt" ]] \
-    || fail "pet id is not chatbird-nt"
-  [[ "$(/usr/bin/plutil -extract spriteVersionNumber raw "$PET_SOURCE/pet.json")" == "2" ]] \
-    || fail "pet spriteVersionNumber is not 2"
-  [[ "$SKIP_STRICT_PET_MEDIA_CHECKS" == true ]] && return 0
-  [[ "$(/usr/bin/sips -g pixelWidth "$PET_SOURCE/spritesheet.webp" | /usr/bin/awk '/pixelWidth:/{print $2}')" == "1536" ]] \
-    || fail "pet atlas width is not 1536"
-  [[ "$(/usr/bin/sips -g pixelHeight "$PET_SOURCE/spritesheet.webp" | /usr/bin/awk '/pixelHeight:/{print $2}')" == "2288" ]] \
-    || fail "pet atlas height is not 2288"
-}
-
 verify_inputs() {
-  require_dir "$PET_SOURCE"
-  verify_pet
-  require_nonempty_dir "$PREVIEW_QA_SOURCE"
   require_file "$APP_PROJECT/scripts/build.sh"
   require_file "$PLIST_TEMPLATE"
   require_file "$INSTALL_COMMAND"
@@ -134,6 +108,7 @@ scan_release_for_forbidden_terms() {
 verify_stage() {
   local target="$1"
   [[ ! -e "$target/pet" ]] || fail "release must not publish a standalone pet directory"
+  [[ ! -e "$target/preview-qa" ]] || fail "release must not publish pet preview assets"
   [[ ! -e "$target/quota-panel" ]] || fail "release must not publish a standalone quota-panel directory"
   require_dir "$target/ChatBird.app"
   require_file "$target/$LABEL.plist.in"
@@ -146,13 +121,12 @@ verify_stage() {
   require_file "$target/PRIVACY.md"
   require_file "$target/ASSET-NOTICE.md"
   require_file "$target/CHECKSUMS-SHA256.txt"
-  require_nonempty_dir "$target/preview-qa"
-
   local app="$target/ChatBird.app"
   local binary="$app/Contents/MacOS/ChatBird"
   local launch_agent="$target/$LABEL.plist.in"
   require_file "$app/Contents/Resources/ChatBird.icns"
-  require_file "$app/Contents/Resources/ChatBirdPetSpritesheet.webp"
+  [[ ! -e "$app/Contents/Resources/ChatBirdPetSpritesheet.webp" ]] \
+    || fail "release must not contain the desktop-pet spritesheet"
   [[ "$(/usr/bin/plutil -extract ProgramArguments.0 raw "$launch_agent" 2>/dev/null)" == "__EXECUTABLE__" ]] \
     && ! /usr/bin/plutil -extract ProgramArguments.1 raw "$launch_agent" >/dev/null 2>&1 \
     || fail "launch agent template must contain exactly one executable argument"
@@ -183,8 +157,7 @@ verify_stage_checksum_manifest() {
 
 stage_release() {
   /bin/rm -rf "$STAGE"
-  mkdir -p "$STAGE/preview-qa"
-  /usr/bin/ditto "$PREVIEW_QA_SOURCE" "$STAGE/preview-qa"
+  mkdir -p "$STAGE"
   /usr/bin/ditto "$APP_BUILD" "$STAGE/ChatBird.app"
   /bin/cp "$PLIST_TEMPLATE" "$STAGE/$LABEL.plist.in"
   /bin/cp "$INSTALL_COMMAND" "$STAGE/安装ChatBird.command"
@@ -207,7 +180,7 @@ stage_release() {
 
 release_input_paths() {
   local -a input_roots
-  input_roots=("$PET_SOURCE" "$PREVIEW_QA_SOURCE")
+  input_roots=()
   [[ -d "$APP_BUILD" ]] && input_roots+=("$APP_BUILD")
 
   print -r -- "$SCRIPT_PATH"
@@ -220,7 +193,9 @@ release_input_paths() {
   print -r -- "$INSTALL_COMMAND"
   print -r -- "$CHECK_COMMAND"
   print -r -- "$UNINSTALL_COMMAND"
-  find "${input_roots[@]}" -type f -print
+  if (( ${#input_roots[@]} > 0 )); then
+    find "${input_roots[@]}" -type f -print
+  fi
 }
 
 newest_release_input_mtime() {
@@ -264,7 +239,6 @@ verify_release_directory_matches() {
 
 verify_stage_matches_current_sources() {
   local target="$1"
-  verify_release_directory_matches "$PREVIEW_QA_SOURCE" "$target/preview-qa"
   verify_release_file_matches \
     "$PLIST_TEMPLATE" \
     "$target/$LABEL.plist.in"

@@ -16,7 +16,6 @@ final class DynamicIslandWindowController {
 
     var onOpenTask: ((TaskProgressItem) -> Void)?
     var onRequestHide: (() -> Void)?
-    var onRequestPetPanel: (() -> Void)?
     var onRefresh: (() -> Void)?
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
@@ -69,9 +68,6 @@ final class DynamicIslandWindowController {
         }
         rootController.onCapsuleDragEnded = { [weak self] point in
             self?.capsuleDragEnded(at: point)
-        }
-        rootController.onRequestPetPanel = { [weak self] in
-            self?.onRequestPetPanel?()
         }
         rootController.onCollapse = { [weak self] in
             self?.collapse()

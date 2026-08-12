@@ -1,15 +1,11 @@
 # ChatBird macOS App
 
-独立运行的 macOS AppKit 应用，提供 ChatBird 自有桌面宠物、灵动岛、额度和任务状态功能。源码目录仍保留历史路径 `macos/ChatBirdQuotaPanel`，但产品名称、Bundle、Executable 和安装产物均为 ChatBird。
-
-![ChatBird 预览](docs/chatbird-panel-preview.png)
+独立运行的 macOS AppKit 应用，提供灵动岛、额度和任务状态功能。源码目录仍保留历史路径 `macos/ChatBirdQuotaPanel`，但产品名称、Bundle、Executable 和安装产物均为 ChatBird。
 
 - 左侧可在 Codex 与 Claude Code 间切换：Codex 显示周额度，Claude Code 同时显示 5h、周额度与 Fable 周额度。
 - 不显示 Token、Credits 或行情区域。
 - 启动时立即读取额度，之后每分钟自动更新，也可点击刷新图标手动更新。
-- 自有桌面宠物由 ChatBird 进程创建和管理，支持点击、拖拽、跨屏与位置保存。
-- 点击“收起”会隐藏窗口；单击宠物或点击菜单栏 “ChatBird” 都可恢复显示。
-- 菜单栏可在“宠物面板”和“灵动岛”模式之间切换；宠物关闭时不允许切换到宠物面板，选择会写入本机 `presentation-mode` 并在下次启动恢复。
+- 点击“收起”会隐藏窗口；点击菜单栏 “ChatBird” 或使用全局快捷键可恢复显示。
 - 灵动岛模式使用 404×58 pt 单行胶囊，依次显示状态点、状态、任务标题、耗时和展开箭头；整颗胶囊可点击且不抢焦点，也可拖到其他屏幕后释放并吸附到该屏幕顶部中央。
 - 灵动岛展开态包含完整的任务、确认和额度工作区，右上角分别提供刷新、收起和隐藏：收起只返回胶囊，隐藏会让灵动岛完全消失且不响应后续任务刷新；从菜单栏选择“显示”可恢复胶囊。隐藏待确认请求不会同意、拒绝或丢弃该请求。
 - Codex 未运行时会立即静音已有本地任务；若 Codex 正在运行，ChatBird 会在 Codex 完全退出且状态落盘稳定后自动同步，避免下次打开时旧气泡恢复。
@@ -31,7 +27,7 @@
 
 安装后会把 App 安装到 `~/Applications/ChatBird.app`，注册当前用户的 `dev.chatbird.app` LaunchAgent，并从安装路径启动。用户主动退出后会保持关闭，不会被自动重新拉起。
 
-ChatBird 不再复制或选择 Codex Pet，不再写入 `selected-avatar-id`；如果旧配置仍选择 ChatBird Codex Pet，安装器会先备份再移除该选择。
+ChatBird 不包含桌面宠物素材，也不再复制或选择 Codex Pet，不写入 `selected-avatar-id`；如果旧配置仍选择 ChatBird Codex Pet，安装器会先备份再移除该选择。
 
 额度与任务功能本身不需要 macOS 辅助功能授权。若用户已经授权，ChatBird 只会把精确匹配计数按钮的透明窗口移到活动显示器之外，并调用 Codex 自带的“静音任务”菜单动作来关闭新任务气泡；未授权时不会主动弹出授权请求。
 
