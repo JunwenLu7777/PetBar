@@ -2,25 +2,25 @@
 set -euo pipefail
 
 SCRIPT_PATH="${0:A}"
-ROOT="${CHATBIRD_RELEASE_ROOT:-${SCRIPT_PATH:h:h}}"
+ROOT="${THREADHELM_RELEASE_ROOT:-${SCRIPT_PATH:h:h}}"
 VERSION="$(/usr/bin/awk -F': ' '$1 == "Version" { print $2; exit }' "$ROOT/macos/VERSION.txt")"
 [[ "$VERSION" == <->.<->.<-> ]] || {
   /bin/echo "error: invalid version in $ROOT/macos/VERSION.txt" >&2
   exit 1
 }
-RELEASE_ID="ChatBird-macOS-arm64-$VERSION"
+RELEASE_ID="ThreadHelm-macOS-arm64-$VERSION"
 STAGE="$ROOT/build/release/$RELEASE_ID"
 OUT="$ROOT/dist/$RELEASE_ID.zip"
 CHECKSUM_OUT="$OUT.sha256"
-APP_PROJECT="$ROOT/macos/ChatBirdQuotaPanel"
-APP_BUILD="$APP_PROJECT/build/ChatBird.app"
-LABEL="dev.chatbird.app"
+APP_PROJECT="$ROOT/macos/ThreadHelm"
+APP_BUILD="$APP_PROJECT/build/ThreadHelm.app"
+LABEL="dev.threadhelm.app"
 PLIST_TEMPLATE="$APP_PROJECT/Resources/$LABEL.plist.in"
-INSTALL_COMMAND="$ROOT/macos/package/安装ChatBird.command"
-CHECK_COMMAND="$ROOT/macos/package/检查ChatBird.command"
-UNINSTALL_COMMAND="$ROOT/macos/package/卸载ChatBird.command"
+INSTALL_COMMAND="$ROOT/macos/package/安装ThreadHelm.command"
+CHECK_COMMAND="$ROOT/macos/package/检查ThreadHelm.command"
+UNINSTALL_COMMAND="$ROOT/macos/package/卸载ThreadHelm.command"
 VERIFY_ONLY=false
-SKIP_APP_BINARY_CHECKS="${CHATBIRD_SKIP_APP_BINARY_CHECKS:-false}"
+SKIP_APP_BINARY_CHECKS="${THREADHELM_SKIP_APP_BINARY_CHECKS:-false}"
 
 usage() {
   /bin/echo "usage: $0 [--verify-only]"
@@ -66,13 +66,15 @@ path_has_forbidden_marker() {
   local candidate_path="${1:l}"
   local component token
   local -a components tokens markers
-  markers=(mayday bubu orange windows codex-only)
+  markers=(chatbird mayday bubu orange windows codex-only)
   components=("${(@s:/:)candidate_path}")
   for component in "${components[@]}"; do
     tokens=("${(@s:-:)${component//[^[:alnum:]-]/-}}")
     for token in "${tokens[@]}"; do
       for marker in "${markers[@]}"; do
-        if [[ "$component" == "$marker" || "$token" == "$marker" ]]; then
+        if [[ "$component" == "$marker" \
+              || "$token" == "$marker" \
+              || ("$marker" == "chatbird" && "$component" == chatbird*) ]]; then
           return 0
         fi
       done
@@ -110,32 +112,32 @@ verify_stage() {
   [[ ! -e "$target/pet" ]] || fail "release must not publish a standalone pet directory"
   [[ ! -e "$target/preview-qa" ]] || fail "release must not publish pet preview assets"
   [[ ! -e "$target/quota-panel" ]] || fail "release must not publish a standalone quota-panel directory"
-  require_dir "$target/ChatBird.app"
+  require_dir "$target/ThreadHelm.app"
   require_file "$target/$LABEL.plist.in"
-  require_file "$target/安装ChatBird.command"
-  require_file "$target/检查ChatBird.command"
-  require_file "$target/卸载ChatBird.command"
+  require_file "$target/安装ThreadHelm.command"
+  require_file "$target/检查ThreadHelm.command"
+  require_file "$target/卸载ThreadHelm.command"
   require_file "$target/README.md"
   require_file "$target/VERSION.txt"
   require_file "$target/LICENSE"
   require_file "$target/PRIVACY.md"
   require_file "$target/ASSET-NOTICE.md"
   require_file "$target/CHECKSUMS-SHA256.txt"
-  local app="$target/ChatBird.app"
-  local binary="$app/Contents/MacOS/ChatBird"
+  local app="$target/ThreadHelm.app"
+  local binary="$app/Contents/MacOS/ThreadHelm"
   local launch_agent="$target/$LABEL.plist.in"
-  require_file "$app/Contents/Resources/ChatBird.icns"
-  [[ ! -e "$app/Contents/Resources/ChatBirdPetSpritesheet.webp" ]] \
+  require_file "$app/Contents/Resources/ThreadHelm.icns"
+  [[ ! -e "$app/Contents/Resources/ThreadHelmPetSpritesheet.webp" ]] \
     || fail "release must not contain the desktop-pet spritesheet"
   [[ "$(/usr/bin/plutil -extract ProgramArguments.0 raw "$launch_agent" 2>/dev/null)" == "__EXECUTABLE__" ]] \
     && ! /usr/bin/plutil -extract ProgramArguments.1 raw "$launch_agent" >/dev/null 2>&1 \
     || fail "launch agent template must contain exactly one executable argument"
-  [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" == "dev.chatbird.app" ]] \
-    || fail "ChatBird bundle identifier is not dev.chatbird.app"
-  [[ "$(/usr/bin/plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")" == "ChatBird" ]] \
-    || fail "ChatBird executable identity is invalid"
+  [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" == "dev.threadhelm.app" ]] \
+    || fail "ThreadHelm bundle identifier is not dev.threadhelm.app"
+  [[ "$(/usr/bin/plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")" == "ThreadHelm" ]] \
+    || fail "ThreadHelm executable identity is invalid"
   if /usr/bin/plutil -extract LSUIElement raw "$app/Contents/Info.plist" >/dev/null 2>&1; then
-    fail "standalone ChatBird must not be an LSUIElement helper"
+    fail "standalone ThreadHelm must not be an LSUIElement helper"
   fi
   if [[ "$SKIP_APP_BINARY_CHECKS" != true ]]; then
     # 本发行只面向 Apple 芯片：要求 arm64，并拒收混入其他架构的胖二进制。
@@ -158,11 +160,11 @@ verify_stage_checksum_manifest() {
 stage_release() {
   /bin/rm -rf "$STAGE"
   mkdir -p "$STAGE"
-  /usr/bin/ditto "$APP_BUILD" "$STAGE/ChatBird.app"
+  /usr/bin/ditto "$APP_BUILD" "$STAGE/ThreadHelm.app"
   /bin/cp "$PLIST_TEMPLATE" "$STAGE/$LABEL.plist.in"
-  /bin/cp "$INSTALL_COMMAND" "$STAGE/安装ChatBird.command"
-  /bin/cp "$CHECK_COMMAND" "$STAGE/检查ChatBird.command"
-  /bin/cp "$UNINSTALL_COMMAND" "$STAGE/卸载ChatBird.command"
+  /bin/cp "$INSTALL_COMMAND" "$STAGE/安装ThreadHelm.command"
+  /bin/cp "$CHECK_COMMAND" "$STAGE/检查ThreadHelm.command"
+  /bin/cp "$UNINSTALL_COMMAND" "$STAGE/卸载ThreadHelm.command"
   /bin/chmod +x "$STAGE"/*.command
   /bin/cp "$ROOT/macos/README.md" "$STAGE/README.md"
   /bin/cp "$ROOT/macos/VERSION.txt" "$STAGE/VERSION.txt"
@@ -242,9 +244,9 @@ verify_stage_matches_current_sources() {
   verify_release_file_matches \
     "$PLIST_TEMPLATE" \
     "$target/$LABEL.plist.in"
-  verify_release_file_matches "$INSTALL_COMMAND" "$target/安装ChatBird.command"
-  verify_release_file_matches "$CHECK_COMMAND" "$target/检查ChatBird.command"
-  verify_release_file_matches "$UNINSTALL_COMMAND" "$target/卸载ChatBird.command"
+  verify_release_file_matches "$INSTALL_COMMAND" "$target/安装ThreadHelm.command"
+  verify_release_file_matches "$CHECK_COMMAND" "$target/检查ThreadHelm.command"
+  verify_release_file_matches "$UNINSTALL_COMMAND" "$target/卸载ThreadHelm.command"
   verify_release_file_matches "$ROOT/macos/README.md" "$target/README.md"
   verify_release_file_matches "$ROOT/macos/VERSION.txt" "$target/VERSION.txt"
   verify_release_file_matches "$ROOT/LICENSE" "$target/LICENSE"
@@ -254,13 +256,13 @@ verify_stage_matches_current_sources() {
   if [[ -d "$APP_BUILD" ]]; then
     verify_release_directory_matches \
       "$APP_BUILD" \
-      "$target/ChatBird.app"
+      "$target/ThreadHelm.app"
   fi
 }
 
 verify_dist_payload() {
   local unpack_root
-  unpack_root="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/chatbird-release-verify.XXXXXX")"
+  unpack_root="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/threadhelm-release-verify.XXXXXX")"
   /usr/bin/ditto -x -k "$OUT" "$unpack_root"
   verify_stage "$unpack_root/$RELEASE_ID"
   verify_stage_matches_current_sources "$unpack_root/$RELEASE_ID"
@@ -269,7 +271,7 @@ verify_dist_payload() {
 
 run_repository_checks() {
   /usr/bin/python3 "$ROOT/scripts/validate-repository-layout.py"
-  CHATBIRD_PRIVACY_AUDIT_ROOT="$ROOT" "$ROOT/scripts/privacy-audit.sh"
+  THREADHELM_PRIVACY_AUDIT_ROOT="$ROOT" "$ROOT/scripts/privacy-audit.sh"
 }
 
 verify_inputs
