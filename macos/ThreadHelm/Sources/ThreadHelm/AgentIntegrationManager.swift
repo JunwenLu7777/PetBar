@@ -109,15 +109,23 @@ struct AgentIntegrationManager {
                 activeAgentID = agentID
                 let before = adapter.integrationStatus(in: scope)
                 let result: AgentIntegrationOperationResult
-                switch operation {
-                case .install:
-                    result = try adapter.installIntegration(in: scope)
-                case .repair:
-                    result = try adapter.repairIntegration(in: scope)
-                case .uninstall:
-                    result = try adapter.uninstallIntegration(in: scope)
-                case .status, .restore:
-                    preconditionFailure("guarded above")
+                let requiresValidatedVersion = operation != .uninstall
+                    && !adapter.managedIntegrationRelativePaths.isEmpty
+                if requiresValidatedVersion,
+                   adapter.discover().compatibility != .validated
+                {
+                    result = .unchanged
+                } else {
+                    switch operation {
+                    case .install:
+                        result = try adapter.installIntegration(in: scope)
+                    case .repair:
+                        result = try adapter.repairIntegration(in: scope)
+                    case .uninstall:
+                        result = try adapter.uninstallIntegration(in: scope)
+                    case .status, .restore:
+                        preconditionFailure("guarded above")
+                    }
                 }
                 let after = adapter.integrationStatus(in: scope)
                 records.append(AgentIntegrationRunRecord(

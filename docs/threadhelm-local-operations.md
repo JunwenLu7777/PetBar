@@ -46,7 +46,7 @@ Agents 页面里的 `validated` 不是“看起来能用”，而是本机发现
 - ZCode `3.7.6` 和 build `3.7.6.4691`
 - Pi `0.84.1`
 
-只要版本没读到、少一个分量或有任意漂移，就显示 `unvalidated`，并隐藏只在固定版本上验证过的能力文案。例如本机 Cursor Desktop 即使只是升级到 `3.15.19`，也不能沿用 `3.15.6` 的验证结论。发现过程只读，不会安装集成或修改厂商配置。
+只要版本没读到、少一个分量或有任意漂移，就显示 `unvalidated`，并隐藏只在固定版本上验证过的能力文案。例如本机 Cursor Desktop 即使只是升级到 `3.15.19`，也不能沿用 `3.15.6` 的验证结论。发现过程只读；`unvalidated` Agent 的安装和修复会跳过，不会改厂商配置，卸载仍可只移除已确认属于 ThreadHelm 的条目。
 
 在源码目录构建后，可以运行生产回放器：
 
@@ -73,7 +73,7 @@ BIN="$HOME/Applications/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 "$BIN" --agent-integrations uninstall --live
 ```
 
-每次有写操作时，输出里的 `backupID` 都对应一个本机恢复点。Codex 应显示 `notManaged`；Agent 没安装时，相关适配器不会为它凭空创建配置。
+每次有写操作时，输出里的 `backupID` 都对应一个本机恢复点。Codex 应显示 `notManaged`；Agent 没安装或版本为 `unvalidated` 时，安装和修复不会为它创建或改写配置。卸载不受版本门禁影响，但仍只删除 ThreadHelm 自己拥有的受管条目。
 
 ## 备份和恢复
 

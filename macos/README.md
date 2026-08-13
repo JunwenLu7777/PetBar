@@ -20,7 +20,7 @@
 - Apple 芯片（arm64）；暂不支持 Intel Mac
 - 已安装并登录 Codex，用于读取本机额度与任务状态
 - Claude Code 额度与任务兼容为可选功能；未安装时 ThreadHelm 自动隐藏相关入口和任务，使用时需安装并登录 Claude Code
-- Cursor、ZCode 和 Pi 都是可选本机任务来源；未安装的 Agent 不会被安装器写入配置
+- Cursor、ZCode 和 Pi 都是可选本机任务来源；未安装或版本未验证的 Agent 不会被安装器创建或改写配置，卸载器仍可只移除 ThreadHelm 自己的条目
 
 ## 包内容
 

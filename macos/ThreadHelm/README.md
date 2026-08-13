@@ -12,7 +12,7 @@
 - 已授予辅助功能权限时，ThreadHelm 约每 2 秒把带有 `Show activity, N item(s)` / `显示活动，N 项` 按钮的 Codex 计数角标窗口移到所有活动显示器之外，并继续通过 Codex 自带的“静音任务”菜单关闭新任务气泡；同名的任务列表窗口不会移动。该过程不会移动鼠标或发送按键，只匹配固定辅助功能标签，其他字符串不保留、不记录、不上传。未授权时仍可手动静音，退出后会加入下次启动使用的静音列表。
 - 任务状态约每 2 秒读取本机 Codex 与 Claude Code 会话状态，显示执行中、等待确认、已完成和执行失败；点击任务行可打开 Codex 任务或在 Terminal 恢复 Claude 会话。
 - Agents 页面把本机检测版本和五 Agent 真值夹具的测试版本分开显示，同时列出已支持能力和已知限制。
-- `validated` 只表示本机发现到的全部版本分量与固定真值版本完全一致；缺失、部分匹配或漂移一律是 `unvalidated`，不会继承旧版本的支持结论。固定版本为 Codex `0.145.0`、Claude Code `2.1.226`、Cursor Desktop `3.15.6` + Agent CLI `2026.04.14-ee4b43a`、ZCode `3.7.6` + build `3.7.6.4691`、Pi `0.84.1`。
+- `validated` 只表示本机发现到的全部版本分量与固定真值版本完全一致；缺失、部分匹配或漂移一律是 `unvalidated`，不会继承旧版本的支持结论，也不会安装或修复该 Agent 的受管集成；卸载仍可只移除 ThreadHelm 自己的条目。固定版本为 Codex `0.145.0`、Claude Code `2.1.226`、Cursor Desktop `3.15.6` + Agent CLI `2026.04.14-ee4b43a`、ZCode `3.7.6` + build `3.7.6.4691`、Pi `0.84.1`。
 - 运行中任务显示开始时间与持续时间；已完成/失败任务的持续时间固定，不继续增长。
 - 灵动岛任务详情只显示经过清洗的助手公开输出，并提供滚动查看；不展示 thinking、工具参数或原始工具输出。
 - 启动后写入不含个人数据的运行状态文件，供安装器确认进程确实已启动。
@@ -29,7 +29,7 @@
 
 安装后会把 App 安装到 `~/Applications/ThreadHelm.app`，注册当前用户的 `dev.threadhelm.app` LaunchAgent，并从安装路径启动。用户主动退出后会保持关闭，不会被自动重新拉起。
 
-安装器会统一处理 Claude Code、Cursor、ZCode 和 Pi 的受管本机集成；Codex 集成明确为 `notManaged`，不会由该入口改写配置。更新前会备份旧 App、LaunchAgent 和受管配置，启动或健康检查失败会自动回滚。具体文件和恢复方法见[本机运维说明](../../docs/threadhelm-local-operations.md)。
+安装器会统一处理版本为 `validated` 的 Claude Code、Cursor、ZCode 和 Pi 受管本机集成；其他版本会跳过，Codex 集成明确为 `notManaged`，不会由该入口改写配置。更新前会备份旧 App、LaunchAgent 和受管配置，启动或健康检查失败会自动回滚。具体文件和恢复方法见[本机运维说明](../../docs/threadhelm-local-operations.md)。
 
 ThreadHelm 不包含桌面宠物素材，也不再复制或选择 Codex Pet，不写入 `selected-avatar-id`；如果旧配置仍选择已停用的 Codex Pet，安装器会先备份再移除该选择。
 

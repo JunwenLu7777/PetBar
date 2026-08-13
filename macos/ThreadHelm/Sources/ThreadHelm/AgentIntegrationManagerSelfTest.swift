@@ -31,6 +31,14 @@ private struct FailingManagedAdapter: AgentAdapter {
         [".failure/threadhelm.json"]
     }
 
+    func discover() -> AgentDiscovery {
+        AgentDiscovery(
+            isInstalled: true,
+            version: "self-test",
+            compatibility: .validated
+        )
+    }
+
     func integrationStatus(
         in scope: AgentIntegrationScope
     ) -> AgentIntegrationStatus {
@@ -155,6 +163,15 @@ func runAgentIntegrationManagerSelfTest() {
         try runIntegrationManagerRollbackSelfTest(
             root: root.appendingPathComponent("rollback", isDirectory: true)
         )
+        try runIntegrationManagerVersionGateSelfTest(
+            root: root.appendingPathComponent("version-gate", isDirectory: true)
+        )
+        try runLegacyClaudeHookVersionGateSelfTest(
+            root: root.appendingPathComponent(
+                "legacy-claude-version-gate",
+                isDirectory: true
+            )
+        )
         try runIntegrationAtomicWriteFailureSelfTest(
             root: root.appendingPathComponent("atomic", isDirectory: true)
         )
@@ -258,12 +275,14 @@ private func makeIntegrationManagerFixtures(
     return fixtures
 }
 
-private func makeIntegrationManagerRegistry() -> AgentRegistry {
+private func makeIntegrationManagerRegistry(
+    compatibility: AgentCompatibility = .validated
+) -> AgentRegistry {
     let installed = {
         AgentDiscovery(
             isInstalled: true,
             version: "self-test",
-            compatibility: .supported
+            compatibility: compatibility
         )
     }
     return AgentRegistry(adapters: [
@@ -289,6 +308,117 @@ private func makeIntegrationManagerRegistry() -> AgentRegistry {
             executablePath: { "/tmp/ThreadHelm" }
         ),
     ])
+}
+
+private func runIntegrationManagerVersionGateSelfTest(root: URL) throws {
+    let fileManager = FileManager.default
+    try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+    let fixtures = try makeIntegrationManagerFixtures(at: root)
+    let scope = AgentIntegrationScope.isolated(at: root)
+    let driftedManager = AgentIntegrationManager(
+        registry: makeIntegrationManagerRegistry(compatibility: .unvalidated)
+    )
+
+    let status = driftedManager.status(in: scope)
+    guard status.operation == .status,
+          status.backupID == nil,
+          try fixtures.matchesOriginalBytes(),
+          !fileManager.fileExists(atPath: fixtures.piManagedDirectory.path)
+    else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "status must remain read-only for drifted versions"
+        )
+    }
+
+    for operation in [
+        AgentIntegrationOperation.install,
+        AgentIntegrationOperation.repair,
+    ] {
+        let report = try driftedManager.perform(operation, in: scope)
+        let managedRecords = report.agents.filter { $0.agentID != .codex }
+        guard report.operation == operation,
+              report.backupID != nil,
+              managedRecords.count == 4,
+              managedRecords.allSatisfy({
+                  $0.result == .unchanged
+                      && $0.statusBefore == .notInstalled
+                      && $0.statusAfter == .notInstalled
+              }),
+              try fixtures.matchesOriginalBytes(),
+              !fileManager.fileExists(atPath: fixtures.piManagedDirectory.path)
+        else {
+            throw IntegrationManagerSelfTestError.assertion(
+                "\(operation.rawValue) changed drifted-version configuration"
+            )
+        }
+    }
+
+    let validatedManager = AgentIntegrationManager(
+        registry: makeIntegrationManagerRegistry()
+    )
+    _ = try validatedManager.perform(.install, in: scope)
+    let uninstalled = try driftedManager.perform(.uninstall, in: scope)
+    guard uninstalled.agents.allSatisfy({ record in
+        record.agentID == .codex
+            ? record.result == .notManaged
+            : record.result == .uninstalled
+                && record.statusAfter == .notInstalled
+    }),
+    try fixtures.unrelatedConfigurationIsPreserved(),
+    !fileManager.fileExists(atPath: fixtures.piManagedDirectory.path)
+    else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "drifted-version uninstall must remove only ThreadHelm-owned entries"
+        )
+    }
+}
+
+private func runLegacyClaudeHookVersionGateSelfTest(root: URL) throws {
+    let fileManager = FileManager.default
+    try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+    let fakeClaudeURL = root.appendingPathComponent("claude")
+    try Data("#!/bin/zsh\nprint -r -- 'Claude Code 9.9.9'\n".utf8)
+        .write(to: fakeClaudeURL)
+    try fileManager.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: fakeClaudeURL.path
+    )
+
+    guard let executableURL = Bundle.main.executableURL else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "current ThreadHelm executable is unavailable"
+        )
+    }
+    let configDirectory = root.appendingPathComponent(
+        "claude-config",
+        isDirectory: true
+    )
+    let output = Pipe()
+    let process = Process()
+    process.executableURL = executableURL
+    process.arguments = ["--install-claude-hook"]
+    var environment = ProcessInfo.processInfo.environment
+    environment["CLAUDE_BIN"] = fakeClaudeURL.path
+    environment["CLAUDE_CONFIG_DIR"] = configDirectory.path
+    process.environment = environment
+    process.standardOutput = output
+    process.standardError = output
+    try process.run()
+    process.waitUntilExit()
+    let message = String(
+        data: output.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+    ) ?? ""
+    guard process.terminationStatus == 0,
+          message.contains("版本未验证"),
+          !fileManager.fileExists(
+              atPath: configDirectory.appendingPathComponent("settings.json").path
+          )
+    else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "legacy Claude install wrote configuration for a drifted version"
+        )
+    }
 }
 
 private func runIntegrationManagerRollbackSelfTest(root: URL) throws {

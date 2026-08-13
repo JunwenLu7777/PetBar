@@ -21,7 +21,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 - 检测到 Claude Code CLI 时，可显示 Claude Code 的 5h、周额度与 Fable 周额度；未安装时只显示 Codex 来源。已安装但未登录或读取失败时保留 Claude Code 状态提示；不显示 Token、Credits 或行情模块。
 - 任务控制台统一显示本机 Codex、Claude Code、Cursor、ZCode 和 Pi；每个来源只展示已有证据支持的状态和打开能力，不把应用聚焦或目录 fallback 冒充为精确会话返回。
 - Agents 页面同时显示本机检测版本、真值夹具测试版本、支持能力和已知限制。
-- 只有本机发现到的所有固定版本分量完全匹配时才显示 `validated`：Codex `0.145.0`、Claude Code `2.1.226`、Cursor Desktop `3.15.6` + Agent CLI `2026.04.14-ee4b43a`、ZCode `3.7.6` + build `3.7.6.4691`、Pi `0.84.1`。缺版本、只匹配一部分或版本漂移都会显示 `unvalidated`，不会沿用旧版本的能力结论。
+- 只有本机发现到的所有固定版本分量完全匹配时才显示 `validated`：Codex `0.145.0`、Claude Code `2.1.226`、Cursor Desktop `3.15.6` + Agent CLI `2026.04.14-ee4b43a`、ZCode `3.7.6` + build `3.7.6.4691`、Pi `0.84.1`。缺版本、只匹配一部分或版本漂移都会显示 `unvalidated`，不会沿用旧版本的能力结论，也不会安装或修复该 Agent 的受管集成；卸载仍可只移除 ThreadHelm 自己的条目。
 - 运行中任务会显示开始时间与持续时间；已完成/失败任务的持续时间会固定，不继续增长。
 - 运行中任务预览只显示公开助手输出，新内容会及时替换，同时保留可滚动的完整输出；不展示 thinking、工具参数或原始工具输出。
 - 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json` 和会话公开输出；不会发起远程第三方行情请求。
@@ -38,7 +38,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 6. 安装完成后会复制到 `~/Applications/ThreadHelm.app`，并启动 `dev.threadhelm.app`。
 7. 若希望当前 Codex 运行中新建任务的原生气泡也自动静音，可在“系统设置 → 隐私与安全 → 辅助功能”中为“ThreadHelm”开启权限；未开启不影响核心功能。
 
-安装会处理 Claude Code、Cursor、ZCode 和 Pi 的受管本机集成；Codex 集成保持 `notManaged`。新版本启动失败时会恢复旧 App、LaunchAgent 和受管配置。恢复点及手工处理方式见[本机运维说明](docs/threadhelm-local-operations.md)。
+安装会处理版本为 `validated` 的 Claude Code、Cursor、ZCode 和 Pi 受管本机集成；其他版本会跳过，Codex 集成保持 `notManaged`。新版本启动失败时会恢复旧 App、LaunchAgent 和受管配置。恢复点及手工处理方式见[本机运维说明](docs/threadhelm-local-operations.md)。
 
 检查安装状态：
 

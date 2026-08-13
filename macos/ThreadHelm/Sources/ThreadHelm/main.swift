@@ -121,15 +121,21 @@ if let flag = CommandLine.arguments.firstIndex(
 
 if CommandLine.arguments.contains("--install-claude-hook") {
     do {
-        let claudeAvailable = locateClaudeExecutable() != nil
+        let discovery = ClaudeCodeAgentAdapter().discover()
+        guard discovery.compatibility == .validated else {
+            print(discovery.isInstalled
+                ? "Claude Code 版本未验证，已跳过 ThreadHelm Claude Hook"
+                : "未找到 Claude CLI，已跳过 ThreadHelm Claude Hook")
+            exit(0)
+        }
         let changed = try ClaudeHookConfiguration.install(
-            isClaudeAvailable: { claudeAvailable }
+            isClaudeAvailable: { true }
         )
         let status = try ClaudeHookConfiguration.status()
         switch classifyClaudeHookInstall(
             changed: changed,
             status: status,
-            claudeAvailable: claudeAvailable
+            claudeAvailable: true
         ) {
         case .installed:
             print("ThreadHelm Claude Hook 已安装：\(ClaudeHookConstants.url)")
