@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -21,6 +22,11 @@ source_uninstaller = read("macos/ThreadHelm/scripts/uninstall.sh")
 transaction_helper = read(
     "macos/ThreadHelm/scripts/local-install-transaction.zsh"
 )
+main_source = read("macos/ThreadHelm/Sources/ThreadHelm/main.swift")
+release_script = read("scripts/build-macos-release.sh")
+validate_workflow = read(".github/workflows/validate.yml")
+download_workflow = read(".github/workflows/update-download-links.yml")
+download_script = read("scripts/update-readme-downloads.sh")
 
 for installer in (package_installer, source_installer):
     for required in (
@@ -92,5 +98,44 @@ for required in (
     "threadhelm_restore_transaction_path",
 ):
     assert required in transaction_helper, required
+
+self_test_flags = set(
+    re.findall(
+        r'CommandLine\.arguments\.contains\("(--self-test-[^"]+)"\)',
+        main_source,
+    )
+)
+assert self_test_flags == {
+    "--self-test-lifecycle",
+    "--self-test-native-notification-state",
+    "--self-test-task-progress",
+    "--self-test-threadhelm-edition",
+    "--self-test-weekly-quota",
+    "--self-test-claude-quota",
+    "--self-test-claude-hook",
+    "--self-test-dynamic-island",
+    "--self-test-client-contract",
+}
+for flag in self_test_flags:
+    assert flag in validate_workflow, f"CI does not run {flag}"
+    assert flag in release_script, f"release gate does not run {flag}"
+for obsolete in (
+    "--self-test-placement",
+    "pet-click-restore",
+    "mode-switch=capsule-to-pet",
+    "mode-roundtrip=queued+empty",
+):
+    assert obsolete not in validate_workflow, (
+        f"CI still requires removed desktop-pet behavior: {obsolete}"
+    )
+assert "--verify-agent-truth" in validate_workflow
+assert "scenarios=81 persistent-state=unchanged" in validate_workflow
+assert "THREADHELM_RELEASE_ID" in validate_workflow
+assert "macos/VERSION.txt" in validate_workflow
+assert "ThreadHelm-macOS-arm64-1.1.0" not in validate_workflow
+
+for path in ("README.md", "macos/README.md"):
+    assert path in download_script, f"download updater ignores {path}"
+    assert path in download_workflow, f"download workflow ignores {path}"
 
 print("ThreadHelm install transition contract tests passed")

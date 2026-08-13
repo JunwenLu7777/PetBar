@@ -65,13 +65,13 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         shell: bash
         run: |
-          if git diff --quiet -- README.md; then
+          if git diff --quiet -- README.md macos/README.md; then
             echo "README 已经指向 ThreadHelm Release $VERSION"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md
+          git add README.md macos/README.md
           git commit -m "Keep ThreadHelm downloads aligned with the published release" \
             -m "Constraint: Release $VERSION must include the matching archive and checksum" \
             -m "Confidence: high" \

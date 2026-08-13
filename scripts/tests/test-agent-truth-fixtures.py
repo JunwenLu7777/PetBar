@@ -34,6 +34,13 @@ PREVIEW_STATES = (
     "quota-first-failure",
     "quota-unavailable",
 )
+EXPECTED_SCENARIO_COUNTS = {
+    "codex": 16,
+    "claudeCode": 17,
+    "cursor": 16,
+    "zcode": 16,
+    "pi": 16,
+}
 
 EXPECTED_ENUMS = {
     "executionState": {
@@ -216,13 +223,14 @@ for agent_id in AGENTS:
             per_agent_negatives[agent_id] += 1
         all_scenarios.append(scenario)
 
-assert len(all_scenarios) >= 60
+assert len(all_scenarios) == 81
 for agent_id in AGENTS:
-    assert per_agent_counts[agent_id] >= 12
+    assert per_agent_counts[agent_id] == EXPECTED_SCENARIO_COUNTS[agent_id]
     assert per_agent_interrupts[agent_id] >= 5
     assert per_agent_negatives[agent_id] >= 5
 assert index["counts"]["total"] == len(all_scenarios)
 assert index["counts"]["byAgent"] == dict(per_agent_counts)
+assert index["counts"]["byAgent"] == EXPECTED_SCENARIO_COUNTS
 
 assert isinstance(previews, dict)
 assert previews["schemaVersion"] == 1
@@ -262,6 +270,14 @@ for heading in (
     "Supported attention", "Unsupported or unknown",
 ):
     assert heading in matrix
+for stale_claim in (
+    "the current ThreadHelm runtime has no Cursor reader yet",
+    "the future adapter must expose",
+    "Future reducer must",
+):
+    assert stale_claim not in matrix, (
+        f"capability matrix still describes pre-implementation state: {stale_claim}"
+    )
 
 spec = spec_path.read_text(encoding="utf-8")
 for term in (

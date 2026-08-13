@@ -51,13 +51,28 @@ write_command() {
 write_truth_replay_binary() {
   local binary_path="$1"
   local marker="$2"
+  local failing_self_test="${3:-}"
   write_file "$binary_path" "#!/bin/zsh
 # $marker
-echo 'agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged'
-for agent_id in codex claudeCode cursor zcode pi; do
-  echo \"agent-truth-metric: agent=\$agent_id miss=0/1 falseAlert=0/1 duplicate=0/1 exactReturn=0/0 testedVersion=test collectionWindow=test..test source=redacted-truth-fixture\"
-done
-exit 0
+[[ \"\${1:-}\" != \"$failing_self_test\" ]] || exit 1
+case \"\${1:-}\" in
+  --verify-agent-truth)
+    echo 'agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged'
+    for agent_id in codex claudeCode cursor zcode pi; do
+      echo \"agent-truth-metric: agent=\$agent_id miss=0/1 falseAlert=0/1 duplicate=0/1 exactReturn=0/0 testedVersion=test collectionWindow=test..test source=redacted-truth-fixture\"
+    done
+    ;;
+  --self-test-lifecycle) echo 'lifecycle-self-test: pass' ;;
+  --self-test-native-notification-state) echo 'native-notification-state-self-test: pass' ;;
+  --self-test-task-progress) echo 'task-progress-self-test: pass' ;;
+  --self-test-weekly-quota) echo 'weekly-quota-self-test: pass' ;;
+  --self-test-claude-quota) echo 'claude-quota-self-test: pass' ;;
+  --self-test-claude-hook) echo 'claude-hook-self-test: pass' ;;
+  --self-test-client-contract) echo 'client-contract-self-test: pass' ;;
+  --self-test-threadhelm-edition) echo 'threadhelm-edition-self-test: pass' ;;
+  --self-test-dynamic-island) echo 'dynamic-island: pass' ;;
+  *) exit 64 ;;
+esac
 "
   /bin/chmod +x "$binary_path"
 }
@@ -247,5 +262,14 @@ make_stage
 make_dist_from_stage
 git -C "$FIXTURE" add dist
 expect_fail "packaged binary failing five-agent truth replay"
+
+write_truth_replay_binary \
+  "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm" \
+  "packaged binary failing App self-test" \
+  "--self-test-dynamic-island"
+make_stage
+make_dist_from_stage
+git -C "$FIXTURE" add dist
+expect_fail "packaged binary failing App self-test"
 
 /bin/echo "build macOS release verify-only tests passed"

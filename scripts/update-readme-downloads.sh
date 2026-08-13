@@ -8,28 +8,39 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-README="$ROOT/README.md"
-CURRENT_VERSION="$(
-  grep -oE 'ThreadHelm-macOS-arm64-[0-9]+\.[0-9]+\.[0-9]+\.zip' "$README" \
-    | head -n 1 \
-    | sed -E 's/^ThreadHelm-macOS-arm64-([0-9]+\.[0-9]+\.[0-9]+)\.zip$/\1/'
-)"
+READMES=("$ROOT/README.md" "$ROOT/macos/README.md")
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
+CHANGED=false
+INDEX=0
 
-[[ "$CURRENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-  echo "README 中找不到 ThreadHelm 当前版本。" >&2
-  exit 1
-}
+for README in "${READMES[@]}"; do
+  [[ -f "$README" ]] || {
+    echo "找不到 README：$README" >&2
+    exit 1
+  }
+  grep -qE 'ThreadHelm-macOS-arm64-[0-9]+\.[0-9]+\.[0-9]+\.zip' \
+    "$README" || {
+      echo "README 中找不到 ThreadHelm 当前版本：$README" >&2
+      exit 1
+    }
+  TEMP_FILE="$TEMP_DIR/readme-$INDEX"
+  sed -E \
+    "s/ThreadHelm-macOS-arm64-[0-9]+\\.[0-9]+\\.[0-9]+\\.zip/ThreadHelm-macOS-arm64-$VERSION.zip/g; s/当前发行版本为 \\*\\*[0-9]+\\.[0-9]+\\.[0-9]+\\*\\*/当前发行版本为 **$VERSION**/g" \
+    "$README" > "$TEMP_FILE"
+  if ! cmp -s "$README" "$TEMP_FILE"; then
+    CHANGED=true
+  fi
+  INDEX=$((INDEX + 1))
+done
 
-if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
+if [[ "$CHANGED" == true ]]; then
+  INDEX=0
+  for README in "${READMES[@]}"; do
+    /bin/cp "$TEMP_DIR/readme-$INDEX" "$README"
+    INDEX=$((INDEX + 1))
+  done
+  echo "README 已更新到 ThreadHelm Release ${VERSION}。"
+else
   echo "README 已经指向 ThreadHelm Release ${VERSION}。"
-  exit 0
 fi
-
-TEMP_FILE="$(mktemp)"
-trap 'rm -f "$TEMP_FILE"' EXIT
-sed "s/ThreadHelm-macOS-arm64-$CURRENT_VERSION\\.zip/ThreadHelm-macOS-arm64-$VERSION.zip/g; s/当前发行版本为 \\*\\*$CURRENT_VERSION\\*\\*/当前发行版本为 **$VERSION**/g" \
-  "$README" > "$TEMP_FILE"
-mv "$TEMP_FILE" "$README"
-trap - EXIT
-
-echo "README 已更新到 ThreadHelm Release ${VERSION}。"

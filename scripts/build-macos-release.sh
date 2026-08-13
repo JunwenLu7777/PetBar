@@ -87,6 +87,32 @@ verify_agent_truth_replay() {
   done
 }
 
+verify_app_self_tests() {
+  local binary="$1"
+  local check flag marker output
+  local -a checks
+  [[ -x "$binary" ]] || fail "ThreadHelm binary is not executable: $binary"
+  checks=(
+    '--self-test-lifecycle|lifecycle-self-test:'
+    '--self-test-native-notification-state|native-notification-state-self-test:'
+    '--self-test-task-progress|task-progress-self-test:'
+    '--self-test-weekly-quota|weekly-quota-self-test:'
+    '--self-test-claude-quota|claude-quota-self-test:'
+    '--self-test-claude-hook|claude-hook-self-test:'
+    '--self-test-client-contract|client-contract-self-test:'
+    '--self-test-threadhelm-edition|threadhelm-edition-self-test:'
+    '--self-test-dynamic-island|dynamic-island:'
+  )
+  for check in "${checks[@]}"; do
+    flag="${check%%|*}"
+    marker="${check#*|}"
+    output="$("$binary" "$flag")" \
+      || fail "ThreadHelm App self-test failed: $flag"
+    [[ "$output" == *"$marker"* ]] \
+      || fail "ThreadHelm App self-test summary is incomplete: $flag"
+  done
+}
+
 path_has_forbidden_marker() {
   local candidate_path="${1:l}"
   local component token
@@ -301,8 +327,9 @@ verify_dist_payload() {
   /usr/bin/ditto -x -k "$OUT" "$unpack_root"
   verify_stage "$unpack_root/$RELEASE_ID"
   verify_stage_matches_current_sources "$unpack_root/$RELEASE_ID"
-  verify_agent_truth_replay \
-    "$unpack_root/$RELEASE_ID/ThreadHelm.app/Contents/MacOS/ThreadHelm"
+  local binary="$unpack_root/$RELEASE_ID/ThreadHelm.app/Contents/MacOS/ThreadHelm"
+  verify_app_self_tests "$binary"
+  verify_agent_truth_replay "$binary"
   /bin/rm -rf "$unpack_root"
 }
 
@@ -321,6 +348,7 @@ if [[ "$VERIFY_ONLY" == true ]]; then
   if [[ -d "$STAGE" ]]; then
     verify_stage "$STAGE"
     verify_stage_matches_current_sources "$STAGE"
+    verify_app_self_tests "$STAGE/ThreadHelm.app/Contents/MacOS/ThreadHelm"
     verify_agent_truth_replay "$STAGE/ThreadHelm.app/Contents/MacOS/ThreadHelm"
   fi
   /bin/echo "verify-only passed"
@@ -332,6 +360,7 @@ require_dir "$APP_BUILD"
 stage_release
 verify_stage "$STAGE"
 verify_stage_matches_current_sources "$STAGE"
+verify_app_self_tests "$STAGE/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 verify_agent_truth_replay "$STAGE/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 mkdir -p "$ROOT/dist"
 /bin/rm -f "$OUT"

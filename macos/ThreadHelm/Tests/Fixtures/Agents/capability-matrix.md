@@ -6,9 +6,9 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 | --- | --- | --- | --- | --- |
 | Codex | 0.145.0 | `codex --version`, local process/session state | Existing ThreadHelm reader observes active turns, terminal states, and retained recent sessions | Supported: native thread UUID |
 | Claude Code | 2.1.226 | `claude --version`, `claude agents --json` | Agent snapshot, top-level transcript, live process, and existing permission hook | Supported: Claude session ID plus a separately checked live process |
-| Cursor | Desktop 3.15.6; Agent CLI 2026.04.14-ee4b43a | Application bundle plus separate desktop and Agent CLI commands | Official local hooks expose session/tool/stop signals; the current ThreadHelm runtime has no Cursor reader yet | Candidate `session_id` is documented; resumable identity mapping remains unknown until an end-to-end fixture passes |
-| ZCode | 3.7.6 (build 3.7.6.4691) | Application bundle `dev.zcode.app`; bundled CLI exists inside the app | Bundled documentation lists SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, and Stop | Unknown; no stable session identity has been proven from this installed version |
-| Pi | 0.84.1 | `pi --version`, installed package, bundled extension documentation | Extension API documents session, agent, tool, compact, settled, and shutdown events | Candidate session ID/path exists in the CLI; exact mapping remains unknown until an end-to-end fixture passes |
+| Cursor | Desktop 3.15.6; Agent CLI 2026.04.14-ee4b43a | Application bundle plus separate desktop and Agent CLI commands | The managed hook adapter normalizes official session/tool/stop signals into the bounded local event store; installed-hook replay remains pending | Candidate `session_id` is documented; resumable identity mapping remains unknown until an end-to-end fixture passes |
+| ZCode | 3.7.6 (build 3.7.6.4691) | Application bundle `dev.zcode.app`; bundled CLI exists inside the app | The managed hook adapter observes the documented lifecycle subset without inventing SessionEnd; installed-hook replay remains pending | Unknown; no stable session identity has been proven from this installed version |
+| Pi | 0.84.1 | `pi --version`, installed package, bundled extension documentation | The state-only extension adapter observes session, agent, tool, compact, settled, and shutdown events; installed-extension replay remains pending | Candidate session ID/path exists in the CLI; exact mapping remains unknown until an end-to-end fixture passes |
 
 ## Exact return
 
@@ -66,7 +66,7 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 | --- | --- |
 | Codex | Explicit active/terminal state wins. Retained terminal sessions may remain visible for up to 24 hours; an ambiguous non-terminal record becomes stale after the existing 30-minute freshness window. |
 | Claude Code | Live process and agents snapshot are strongest; transcript-only state is bounded by existing stale/process checks. |
-| Cursor | Unknown until hook payload timestamps and restart behavior are replayed; the future adapter must expose a documented expiry. |
+| Cursor | The shared live store expires active evidence after 5 minutes, idle evidence after 30 minutes, and terminal evidence after 24 hours; installed-hook restart timing remains unverified. |
 | ZCode | Stop plus process observation and a documented stale timeout are required because SessionEnd is unavailable in the bundled hook list. |
 | Pi | `agent_end` is not terminal by itself because retry/compact may follow; `agent_settled` or shutdown plus expiry is required. |
 
@@ -76,9 +76,9 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 | --- | --- |
 | Codex | Native thread UUID is the deduplication identity; terminal state must not regress to an older active snapshot. |
 | Claude Code | Session/request identity and FIFO coordinator semantics are authoritative; completed requests must not be resurrected by older transcript data. |
-| Cursor | Future reducer must deduplicate by agent + native session candidate + reason and ignore regressive sequences. |
-| ZCode | Future reducer must tolerate repeated hooks and timestamps without inventing a SessionEnd event. |
-| Pi | Future reducer must tolerate `agent_end` followed by compact/retry and wait for `agent_settled` before terminal classification. |
+| Cursor | The shared reducer deduplicates by agent plus native session candidate, scopes event IDs to the session, and ignores regressive sequences. |
+| ZCode | The shared reducer tolerates repeated hooks and timestamps without inventing a SessionEnd event. |
+| Pi | The shared reducer tolerates `agent_end` followed by compact/retry and waits for `agent_settled` before terminal classification. |
 
 ## Supported attention
 

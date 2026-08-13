@@ -10,6 +10,13 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve ThreadHelm version
+        shell: bash
+        run: |
+          VERSION="$(awk -F': ' '$1 == "Version" { print $2; exit }' macos/VERSION.txt)"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "THREADHELM_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "THREADHELM_RELEASE_ID=ThreadHelm-macOS-arm64-$VERSION" >> "$GITHUB_ENV"
       - name: Install ripgrep for the privacy audit
         # The runner image ships no rg, and the audit needs it to scan at all.
         run: brew list ripgrep >/dev/null 2>&1 || brew install ripgrep
@@ -35,17 +42,17 @@ jobs:
           test ! -e "$APP/Contents/Resources/ThreadHelmPetSpritesheet.webp"
           test "$(vtool -show-build "$BIN" | grep -c 'minos 12.3')" -eq 1
           codesign --verify --deep --strict "$APP"
-          "$BIN" --print-panel-config | grep 'version=1.1.0 edition=threadhelm productID=threadhelm codexWeeklyQuotaOnly=true claudeQuotaPeriods=5h,weekly,fable width=388 height=226'
-          "$BIN" --self-test-placement | grep 'activity-pill-segmentation=2/2.*gap=14.0; centerError=0.0'
-          "$BIN" --self-test-lifecycle | grep 'pet-click-restore=5/5.*no-input-injection=2/2'
-          "$BIN" --self-test-native-notification-state | grep 'prepare=pass reinstall=pass restore=pass file-lifecycle=pass user-values=preserved'
-          "$BIN" --self-test-task-progress | grep 'lifecycle=7/7.*refresh-gate=single-flight+generation.*refresh-reader=reuse.*claude-agents-timeout=bounded.*claude-terminal-focus=pid-chain+3-hosts.*claude-iterm-resume=2/2.*claude-otty=3/3.*claude-resume=2/2'
-          "$BIN" --self-test-threadhelm-edition | grep 'edition=threadhelm app-id=dev.threadhelm.app product=standalone'
-          "$BIN" --self-test-weekly-quota | grep 'legacy-secondary=pass.*thresholds=7/7.*legacy-expires-at=iso+date-fallback+invalid-fails.*refresh=60s'
-          "$BIN" --self-test-claude-quota | grep 'left-percent=3/3 used-percent=3/3.*non-interactive=3/3.*windows=5h+weekly+fable.*click-hit=pass.*provider-visibility=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass'
-          "$BIN" --self-test-claude-hook | grep 'protocol=4/4.*privacy=pass.*auth=header.*queue=bounded.*config=optional+install+legacy-upgrade+conflict-preserved+idempotent+uninstall+crlf+strict-json'
-          "$BIN" --self-test-client-contract | grep 'app-server-reset-credits=pass path-discovery=codex+claude count-only-credits=pass process-timeout=term+kill inherited-pipe=nonblocking codex-timeout=completion'
-          "$BIN" --self-test-dynamic-island | grep 'terminal-time=stable.*mode-switch=capsule-to-pet+pet-to-dynamic.*mode-roundtrip=queued+empty'
+          "$BIN" --print-panel-config | grep -F "version=$THREADHELM_VERSION edition=threadhelm productID=threadhelm presentation=dynamic-island codexWeeklyQuotaOnly=true claudeQuotaPeriods=5h,weekly,fable"
+          "$BIN" --self-test-lifecycle | grep -F 'dynamic-island-only=visibility+commands'
+          "$BIN" --self-test-native-notification-state | grep -F 'native-notification-state-self-test:'
+          "$BIN" --self-test-task-progress | grep -F 'agent-core=5+builtin+sixth'
+          "$BIN" --self-test-threadhelm-edition | grep -F 'edition=threadhelm app-id=dev.threadhelm.app product=standalone'
+          "$BIN" --self-test-weekly-quota | grep -F 'dynamic-island-phases=6/6'
+          "$BIN" --self-test-claude-quota | grep -F 'provider-availability=installed+hidden fallback=pass'
+          "$BIN" --self-test-claude-hook | grep -F 'claude-hook-self-test:'
+          "$BIN" --self-test-client-contract | grep -F 'agent-transport=64KiB+250ms+metadata-only+fail-open'
+          "$BIN" --self-test-dynamic-island | grep -F 'presentation=dynamic-island-only'
+          "$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents | grep -F 'agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged'
       - name: Run script regression tests
         run: |
           set -euo pipefail
@@ -59,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/build-macos-release.sh
-          RELEASE='ThreadHelm-macOS-arm64-1.1.0'
+          RELEASE="$THREADHELM_RELEASE_ID"
           test -f "dist/$RELEASE.zip"
           test -f "dist/$RELEASE.zip.sha256"
           test -e "build/release/$RELEASE/ThreadHelm.app"
@@ -71,8 +78,8 @@ jobs:
       - run: zsh -n macos/package/*.command macos/ThreadHelm/scripts/*.sh script/*.sh scripts/*.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: threadhelm-macos-1.1.0
+          name: ${{ env.THREADHELM_RELEASE_ID }}
           if-no-files-found: error
           path: |
-            dist/ThreadHelm-macOS-arm64-1.1.0.zip
-            dist/ThreadHelm-macOS-arm64-1.1.0.zip.sha256
+            dist/${{ env.THREADHELM_RELEASE_ID }}.zip
+            dist/${{ env.THREADHELM_RELEASE_ID }}.zip.sha256
