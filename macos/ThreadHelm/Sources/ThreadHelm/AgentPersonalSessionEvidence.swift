@@ -23,19 +23,19 @@ struct AgentPersonalReadinessAssessment: Equatable {
     static let requiredPersonalSessionCount = 10
 
     let personalSessionCount: Int
-    let independentlyReviewed: Bool
+    let ownerReviewed: Bool
 
     init(
         personalSessionCount: Int,
-        independentlyReviewed: Bool
+        ownerReviewed: Bool
     ) {
         self.personalSessionCount = max(0, personalSessionCount)
-        self.independentlyReviewed = independentlyReviewed
+        self.ownerReviewed = ownerReviewed
     }
 
     var readiness: AgentPersonalReadiness {
         personalSessionCount >= Self.requiredPersonalSessionCount
-            && independentlyReviewed
+            && ownerReviewed
             ? .personalReady
             : .experimental
     }
@@ -265,6 +265,8 @@ enum AgentPersonalSessionEvidenceCLIRequest: Equatable {
     case invalid
     case printSnapshot
     case record(agentID: AgentID)
+    case confirmReadiness(agentID: AgentID)
+    case revokeReadiness(agentID: AgentID)
 }
 
 func parseAgentPersonalSessionEvidenceCLI(
@@ -273,66 +275,136 @@ func parseAgentPersonalSessionEvidenceCLI(
     if arguments.contains("--print-personal-session-evidence") {
         return arguments.count == 2 ? .printSnapshot : .invalid
     }
-    guard let flagIndex = arguments.firstIndex(
-        of: "--record-personal-session"
-    ) else { return .notRequested }
+    let supportedFlags = [
+        "--record-personal-session",
+        "--confirm-personal-readiness",
+        "--revoke-personal-readiness",
+    ]
+    guard let flagIndex = arguments.indices.first(where: { index in
+        supportedFlags.contains(arguments[index])
+    }) else { return .notRequested }
     guard arguments.count == 3, flagIndex == 1 else { return .invalid }
     let agentID = AgentID(rawValue: arguments[flagIndex + 1])
     guard AgentID.builtInOrder.contains(agentID) else { return .invalid }
-    return .record(agentID: agentID)
+    switch arguments[flagIndex] {
+    case "--record-personal-session":
+        return .record(agentID: agentID)
+    case "--confirm-personal-readiness":
+        return .confirmReadiness(agentID: agentID)
+    case "--revoke-personal-readiness":
+        return .revokeReadiness(agentID: agentID)
+    default:
+        return .invalid
+    }
 }
 
 func runAgentPersonalSessionEvidenceCLIIfRequested(
     arguments: [String] = CommandLine.arguments,
-    store: AgentPersonalSessionEvidenceStore? = nil
+    store: AgentPersonalSessionEvidenceStore? = nil,
+    reviewStore: AgentPersonalReadinessReviewStore? = nil,
+    writeOutput: (String) -> Void = { Swift.print($0) },
+    writeError: (String) -> Void = { fputs($0, stderr) }
 ) -> Int? {
     switch parseAgentPersonalSessionEvidenceCLI(arguments) {
     case .notRequested:
         return nil
     case .invalid:
-        fputs(
+        writeError(
             "用法：--print-personal-session-evidence 或 "
-                + "--record-personal-session {codex|claudeCode|cursor|zcode|pi}\n",
-            stderr
+                + "--record-personal-session {codex|claudeCode|cursor|zcode|pi} 或 "
+                + "--confirm-personal-readiness {codex|claudeCode|cursor|zcode|pi} 或 "
+                + "--revoke-personal-readiness {codex|claudeCode|cursor|zcode|pi}\n"
         )
         return 2
     case .printSnapshot:
         let activeStore = store ?? AgentPersonalSessionEvidenceStore()
-        print(agentPersonalSessionEvidenceDiagnosticText(activeStore.snapshot()))
+        let activeReviewStore = reviewStore
+            ?? AgentPersonalReadinessReviewStore()
+        writeOutput(agentPersonalSessionEvidenceDiagnosticText(
+            activeStore.snapshot(),
+            reviews: activeReviewStore.snapshot()
+        ))
         return 0
     case .record(let agentID):
         let activeStore = store ?? AgentPersonalSessionEvidenceStore()
+        let activeReviewStore = reviewStore
+            ?? AgentPersonalReadinessReviewStore()
         guard activeStore.record(
             agentID: agentID,
             source: .explicitOwnerRecord
         ) else {
-            fputs("ThreadHelm 无法写入本地个人会话计数。\n", stderr)
+            writeError("ThreadHelm 无法写入本地个人会话计数。\n")
             return 1
         }
-        print("personal-session-evidence: recorded \(agentID.rawValue)")
-        print(agentPersonalSessionEvidenceDiagnosticText(activeStore.snapshot()))
+        writeOutput("personal-session-evidence: recorded \(agentID.rawValue)")
+        writeOutput(agentPersonalSessionEvidenceDiagnosticText(
+            activeStore.snapshot(),
+            reviews: activeReviewStore.snapshot()
+        ))
         return 0
+    case .confirmReadiness(let agentID):
+        let activeStore = store ?? AgentPersonalSessionEvidenceStore()
+        let activeReviewStore = reviewStore
+            ?? AgentPersonalReadinessReviewStore()
+        let sessions = activeStore.refreshedSnapshot()
+        switch activeReviewStore.confirm(
+            agentID: agentID,
+            personalSessions: sessions
+        ) {
+        case .updated, .unchanged:
+            writeOutput("personal-readiness: confirmed \(agentID.rawValue)")
+            writeOutput(agentPersonalSessionEvidenceDiagnosticText(
+                sessions,
+                reviews: activeReviewStore.snapshot()
+            ))
+            return 0
+        case .insufficientPersonalSessions:
+            writeError(
+                "ThreadHelm 只能在该 Agent 满 10 次真实会话后确认主人复核。\n"
+            )
+            return 1
+        case .invalidAgent, .failed:
+            writeError("ThreadHelm 无法写入本地主人复核状态。\n")
+            return 1
+        }
+    case .revokeReadiness(let agentID):
+        let activeStore = store ?? AgentPersonalSessionEvidenceStore()
+        let activeReviewStore = reviewStore
+            ?? AgentPersonalReadinessReviewStore()
+        switch activeReviewStore.revoke(agentID: agentID) {
+        case .updated, .unchanged:
+            writeOutput("personal-readiness: revoked \(agentID.rawValue)")
+            writeOutput(agentPersonalSessionEvidenceDiagnosticText(
+                activeStore.refreshedSnapshot(),
+                reviews: activeReviewStore.snapshot()
+            ))
+            return 0
+        case .insufficientPersonalSessions, .invalidAgent, .failed:
+            writeError("ThreadHelm 无法撤销本地主人复核状态。\n")
+            return 1
+        }
     }
 }
 
 func agentPersonalSessionEvidenceDiagnosticText(
-    _ snapshot: AgentPersonalSessionEvidenceSnapshot
+    _ snapshot: AgentPersonalSessionEvidenceSnapshot,
+    reviews: AgentPersonalReadinessReviewSnapshot
 ) -> String {
     AgentID.builtInOrder.map { agentID in
         "\(agentID.rawValue) " + agentPersonalReadinessText(
             personalSessionCount: snapshot.count(for: agentID),
-            independentlyReviewed: false
+            ownerReviewed: reviews.isReviewed(for: agentID)
         )
     }.joined(separator: "\n")
 }
 
 func agentPersonalReadinessText(
     personalSessionCount: Int,
-    independentlyReviewed: Bool = false
+    ownerReviewed: Bool
 ) -> String {
     let assessment = AgentPersonalReadinessAssessment(
         personalSessionCount: personalSessionCount,
-        independentlyReviewed: independentlyReviewed
+        ownerReviewed: ownerReviewed
     )
     let count = assessment.personalSessionCount
     var text = "\(assessment.readiness.rawValue) · 真实会话 \(count)/"
@@ -340,7 +412,7 @@ func agentPersonalReadinessText(
     if assessment.readiness == .experimental,
        count >= AgentPersonalReadinessAssessment.requiredPersonalSessionCount
     {
-        text += " · 待独立验收"
+        text += " · 待主人复核"
     }
     return text
 }

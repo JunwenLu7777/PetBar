@@ -40,6 +40,8 @@ final class DynamicIslandAgentHealthViewController:
     private var statuses: [AgentRuntimeStatus] = []
     private var personalSessionEvidence =
         AgentPersonalSessionEvidenceSnapshot.zero
+    private var personalReadinessReviews =
+        AgentPersonalReadinessReviewSnapshot.none
     private let validationProfiles = builtInAgentValidationProfiles()
     private var eventChannelAvailable: Bool?
 
@@ -123,6 +125,7 @@ final class DynamicIslandAgentHealthViewController:
                 $0.metadata.id < $1.metadata.id
             }
         personalSessionEvidence = snapshot.personalSessionEvidence
+        personalReadinessReviews = snapshot.personalReadinessReviews
         renderChannelStatus()
         tableView.reloadData()
         view.needsLayout = true
@@ -145,6 +148,9 @@ final class DynamicIslandAgentHealthViewController:
             profile: validationProfile(for: status.metadata.id),
             personalSessionCount: personalSessionEvidence.count(
                 for: status.metadata.id
+            ),
+            ownerReviewed: personalReadinessReviews.isReviewed(
+                for: status.metadata.id
             )
         )
     }
@@ -162,6 +168,9 @@ final class DynamicIslandAgentHealthViewController:
                 status,
                 profile: validationProfile(for: status.metadata.id),
                 personalSessionCount: personalSessionEvidence.count(
+                    for: status.metadata.id
+                ),
+                ownerReviewed: personalReadinessReviews.isReviewed(
                     for: status.metadata.id
                 )
             )
@@ -240,7 +249,8 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
     init(
         status: AgentRuntimeStatus,
         profile: AgentValidationProfile,
-        personalSessionCount: Int
+        personalSessionCount: Int,
+        ownerReviewed: Bool
     ) {
         super.init(frame: .zero)
         addSubview(card)
@@ -293,14 +303,21 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
         activityField.stringValue = "运行 \(status.activeSessionCount) · 需你 \(status.attentionCount)"
         activityField.textColor = DynamicIslandPalette.tertiaryText
         readinessField.stringValue = agentPersonalReadinessText(
-            personalSessionCount: personalSessionCount
+            personalSessionCount: personalSessionCount,
+            ownerReviewed: ownerReviewed
         )
-        readinessField.textColor = DynamicIslandPalette.amber
+        readinessField.textColor = AgentPersonalReadinessAssessment(
+            personalSessionCount: personalSessionCount,
+            ownerReviewed: ownerReviewed
+        ).readiness == .personalReady
+            ? DynamicIslandPalette.green
+            : DynamicIslandPalette.amber
 
         let summary = agentRuntimeAccessibilitySummary(
             status,
             profile: profile,
-            personalSessionCount: personalSessionCount
+            personalSessionCount: personalSessionCount,
+            ownerReviewed: ownerReviewed
         )
         setAccessibilityLabel(status.metadata.displayName)
         setAccessibilityValue(summary)
@@ -398,7 +415,8 @@ private func agentRuntimeHealthColor(_ health: AgentHealth) -> NSColor {
 private func agentRuntimeAccessibilitySummary(
     _ status: AgentRuntimeStatus,
     profile: AgentValidationProfile,
-    personalSessionCount: Int
+    personalSessionCount: Int,
+    ownerReviewed: Bool
 ) -> String {
     [
         status.metadata.displayName,
@@ -410,7 +428,8 @@ private func agentRuntimeAccessibilitySummary(
         "运行 \(status.activeSessionCount)",
         "需你 \(status.attentionCount)",
         agentPersonalReadinessText(
-            personalSessionCount: personalSessionCount
+            personalSessionCount: personalSessionCount,
+            ownerReviewed: ownerReviewed
         ),
     ].joined(separator: "，")
 }

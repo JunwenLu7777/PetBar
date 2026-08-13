@@ -92,7 +92,16 @@ Codex 完全退出后，ThreadHelm 会短暂等待全局状态与任务索引稳
   --record-personal-session pi
 ```
 
-初始状态为 `experimental · 真实会话 0/10`。10 次只代表可以进入独立验收，不会仅凭计数自动升级为 `personal-ready`。JSON 只包含五个 Agent ID 和非负整数；相邻的零字节锁文件只避免并发记录互相覆盖，二者都不保存会话身份、时间或任务内容。完整口径见[本机运维说明](../../docs/threadhelm-local-operations.md)。
+初始状态为 `experimental · 真实会话 0/10`。单个 Agent 满 10 次后仍须由主人单独显式复核，不会仅凭计数自动升级为 `personal-ready`：
+
+```bash
+./build/ThreadHelm.app/Contents/MacOS/ThreadHelm \
+  --confirm-personal-readiness cursor
+./build/ThreadHelm.app/Contents/MacOS/ThreadHelm \
+  --revoke-personal-readiness cursor
+```
+
+计数 JSON 只包含五个 Agent ID 和非负整数；复核 JSON 只包含同五个 Agent ID 和布尔值。两类相邻零字节锁文件只避免并发写入互相覆盖；这些文件都不保存会话身份、时间、备注或任务内容。完整口径见[本机运维说明](../../docs/threadhelm-local-operations.md)。
 
 灵动岛确定性预览：
 

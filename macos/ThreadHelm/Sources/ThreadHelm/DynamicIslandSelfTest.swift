@@ -1051,7 +1051,16 @@ private func assertDynamicIslandTaskWorkspace() {
     )
     agentHealthSnapshot.agentEventChannelAvailable = false
     agentHealthSnapshot.personalSessionEvidence =
-        AgentPersonalSessionEvidenceSnapshot(counts: ["cursor": 3])
+        AgentPersonalSessionEvidenceSnapshot(counts: [
+            "claudeCode": 9,
+            "cursor": 10,
+            "zcode": 10,
+        ])
+    agentHealthSnapshot.personalReadinessReviews =
+        AgentPersonalReadinessReviewSnapshot(reviewed: [
+            "claudeCode": true,
+            "cursor": true,
+        ])
     agentHealthSnapshot.agentStatuses = builtInAgentMetadata().map { metadata in
         AgentRuntimeStatus(
             metadata: metadata,
@@ -1084,13 +1093,25 @@ private func assertDynamicIslandTaskWorkspace() {
               guard let profile = validationProfiles[agentID] else {
                   return false
               }
+              let expectedReadiness: String
+              switch agentID {
+              case .claudeCode:
+                  expectedReadiness =
+                      "experimental · 真实会话 9/10"
+              case .cursor:
+                  expectedReadiness =
+                      "personal-ready · 真实会话 10/10"
+              case .zcode:
+                  expectedReadiness =
+                      "experimental · 真实会话 10/10 · 待主人复核"
+              default:
+                  expectedReadiness =
+                      "experimental · 真实会话 0/10"
+              }
               return summary.contains("测试 \(profile.testedVersion)")
                   && summary.contains(profile.supportedCapabilitiesSummary)
                   && summary.contains(profile.knownLimitation)
-                  && summary.contains(
-                      "experimental · 真实会话 "
-                          + "\(agentID == .cursor ? 3 : 0)/10"
-                  )
+                  && summary.contains(expectedReadiness)
           }),
           agentHealthRows.first?.contains(
               "本机 0.145.0 · 测试 0.145.0"

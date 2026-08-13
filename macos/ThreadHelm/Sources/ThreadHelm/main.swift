@@ -34,6 +34,12 @@ if let personalSessionWriterSelfTestExitCode =
     exit(Int32(personalSessionWriterSelfTestExitCode))
 }
 
+if let personalReadinessReviewWriterSelfTestExitCode =
+    runAgentPersonalReadinessReviewWriterSelfTestIfRequested()
+{
+    exit(Int32(personalReadinessReviewWriterSelfTestExitCode))
+}
+
 if let personalSessionExitCode =
     runAgentPersonalSessionEvidenceCLIIfRequested()
 {

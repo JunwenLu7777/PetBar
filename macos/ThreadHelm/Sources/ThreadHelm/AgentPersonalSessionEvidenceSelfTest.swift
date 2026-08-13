@@ -69,7 +69,7 @@ func runAgentPersonalSessionEvidenceSelfTest() {
     }
     guard AgentPersonalReadinessAssessment(
         personalSessionCount: 9,
-        independentlyReviewed: true
+        ownerReviewed: true
     ).readiness == .experimental else {
         failAgentPersonalSessionEvidenceSelfTest(
             "fewer than ten sessions left experimental"
@@ -81,11 +81,11 @@ func runAgentPersonalSessionEvidenceSelfTest() {
     }
     guard AgentPersonalReadinessAssessment(
         personalSessionCount: 10,
-        independentlyReviewed: false
+        ownerReviewed: false
     ).readiness == .experimental,
           AgentPersonalReadinessAssessment(
               personalSessionCount: 10,
-              independentlyReviewed: true
+              ownerReviewed: true
           ).readiness == .personalReady
     else {
         failAgentPersonalSessionEvidenceSelfTest(

@@ -299,6 +299,7 @@ struct ActivityDashboardSnapshot: Equatable {
     var attentionItems: [AgentAttentionItem] = []
     var agentStatuses: [AgentRuntimeStatus] = []
     var personalSessionEvidence = AgentPersonalSessionEvidenceSnapshot.zero
+    var personalReadinessReviews = AgentPersonalReadinessReviewSnapshot.none
     var agentEventChannelAvailable: Bool? = nil
     var acknowledgedTerminalTaskKeys = Set<String>()
     var isTaskRefreshing = false

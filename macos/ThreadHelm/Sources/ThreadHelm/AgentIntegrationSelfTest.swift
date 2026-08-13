@@ -190,6 +190,7 @@ func runAgentIntegrationSelfTest() {
     runAgentOpenMeasurementSelfTest()
     runAgentAttentionFeedbackSelfTest()
     runAgentPersonalSessionEvidenceSelfTest()
+    runAgentPersonalReadinessReviewSelfTest()
     runClaudeAdapterLifecycleSelfTest()
     runAgentIntegrationManagerSelfTest()
 }

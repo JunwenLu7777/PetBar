@@ -61,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let agentOpenMeasurementStore = AgentOpenMeasurementStore()
     private let agentPersonalSessionEvidenceStore =
         AgentPersonalSessionEvidenceStore()
+    private let agentPersonalReadinessReviewStore =
+        AgentPersonalReadinessReviewStore()
     private let agentAttentionInterruptionGate =
         AgentAttentionInterruptionGate()
     private var agentLiveReductionGate = AgentLiveReductionGate()
@@ -151,6 +153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             )
             snapshot.personalSessionEvidence =
                 agentPersonalSessionEvidenceStore.snapshot()
+            snapshot.personalReadinessReviews =
+                agentPersonalReadinessReviewStore.snapshot()
         }
         refreshAgentRuntimeStatuses()
         startScreenParameterMonitoring()
@@ -851,6 +855,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     snapshot.personalSessionEvidence =
                         self.agentPersonalSessionEvidenceStore
                             .refreshedSnapshot()
+                    snapshot.personalReadinessReviews =
+                        self.agentPersonalReadinessReviewStore
+                            .refreshedSnapshot()
                     snapshot.agentEventChannelAvailable =
                         self.agentEventChannelAvailable
                 }
@@ -871,6 +878,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         snapshot.personalSessionEvidence =
             agentPersonalSessionEvidenceStore.refreshedSnapshot()
+        snapshot.personalReadinessReviews =
+            agentPersonalReadinessReviewStore.refreshedSnapshot()
         snapshot.agentEventChannelAvailable = agentEventChannelAvailable
     }
 
