@@ -522,49 +522,6 @@ func runClaudeQuotaSelfTest() -> Never {
     Claude Code is not logged in.
     Run /login to continue.
     """
-    _ = NSApplication.shared
-    let providerView = QuotaPanelView(
-        frame: NSRect(origin: .zero, size: panelSizeForTaskRows(1))
-    )
-    let providerWindow = NSWindow(
-        contentRect: providerView.frame,
-        styleMask: .borderless,
-        backing: .buffered,
-        defer: false
-    )
-    providerWindow.contentView = providerView
-    providerView.pointerSide = .bottom
-    var clickedProvider: QuotaProvider?
-    providerView.onSelectQuotaProvider = { clickedProvider = $0 }
-    providerView.availableQuotaProviders = [.codex]
-    let providerPointInWindow = providerView.convert(
-        NSPoint(x: 135, y: 20),
-        to: nil
-    )
-    if let event = NSEvent.mouseEvent(
-        with: .leftMouseDown,
-        location: providerPointInWindow,
-        modifierFlags: [],
-        timestamp: 0,
-        windowNumber: providerWindow.windowNumber,
-        context: nil,
-        eventNumber: 1,
-        clickCount: 1,
-        pressure: 1
-    ) {
-        providerView.mouseDown(with: event)
-        guard clickedProvider == nil else {
-            fputs("hidden Claude provider accepted a click\n", stderr)
-            exit(1)
-        }
-        providerView.availableQuotaProviders = QuotaProvider.allCases
-        providerView.mouseDown(with: event)
-        guard providerView.selectedQuotaProvider == .codex else {
-            fputs("provider click mutated view-owned selection\n", stderr)
-            exit(1)
-        }
-    }
-
     let customClaudeURL = locateClaudeExecutable(
         environment: ["CLAUDE_BIN": "/custom/bin/claude"],
         homeDirectory: URL(fileURLWithPath: "/test-home", isDirectory: true),
@@ -631,13 +588,12 @@ func runClaudeQuotaSelfTest() -> Never {
           customClaudeURL?.path == "/custom/bin/claude",
           missingClaudeURL == nil,
           codexOnlyTasks.map(\.source) == [.codex],
-          combinedTasks.map(\.source) == [.codex, .claudeCode],
-          clickedProvider == .claudeCode
+          combinedTasks.map(\.source) == [.codex, .claudeCode]
     else {
         fputs("claude quota self-test failed\n", stderr)
         exit(1)
     }
 
-    print("claude-quota-self-test: left-percent=3/3 used-percent=3/3 non-interactive=3/3 windows=5h+weekly+fable legacy-without-fable=pass provider-buttons=2/2 click-hit=pass provider-visibility=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass")
+    print("claude-quota-self-test: left-percent=3/3 used-percent=3/3 non-interactive=3/3 windows=5h+weekly+fable legacy-without-fable=pass provider-availability=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass")
     exit(0)
 }

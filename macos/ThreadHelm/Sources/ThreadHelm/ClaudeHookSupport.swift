@@ -758,20 +758,29 @@ private extension Data {
     }
 }
 
+private final class ClaudePermissionPresenterProbe: ClaudePermissionPresenting {
+    private(set) var isPresenting = false
+    private(set) var presentCount = 0
+    private(set) var dismissCount = 0
+
+    func present(_ presentation: ClaudePermissionPresentation) {
+        _ = presentation
+        isPresenting = true
+        presentCount += 1
+    }
+
+    func dismiss() {
+        isPresenting = false
+        dismissCount += 1
+    }
+
+    func reposition() {}
+}
+
 func runClaudeHookSelfTest() -> Never {
     func fail(_ message: String) -> Never {
         fputs("claude-hook-self-test failed: \(message)\n", stderr)
         exit(1)
-    }
-
-    func descendantButtons(in view: NSView) -> [NSButton] {
-        let current = (view as? NSButton).map { [$0] } ?? []
-        return current + view.subviews.flatMap(descendantButtons)
-    }
-
-    func descendantCards(in view: NSView) -> [ClaudeInsetCardView] {
-        let current = (view as? ClaudeInsetCardView).map { [$0] } ?? []
-        return current + view.subviews.flatMap(descendantCards)
     }
 
     let questionFixture = """
@@ -798,123 +807,26 @@ func runClaudeHookSelfTest() -> Never {
        questionPrompt.questions.count == 1,
        questionPrompt.questions[0].answerKey == "选择输出格式",
        questionPrompt.questions[0].options.map(\.label) == ["简洁", "详细"],
-       claudeQuestionPanelHeight(questionCount: 1) == 620,
-       claudeQuestionPanelHeight(questionCount: 4) == 620,
-       clampedClaudeQuestionPageIndex(-1, count: 3) == 0,
-       clampedClaudeQuestionPageIndex(1, count: 3) == 1,
-       clampedClaudeQuestionPageIndex(8, count: 3) == 2,
-       clampedClaudeQuestionPageIndex(8, count: 0) == 0
+       questionPrompt.questions[0].options.map(\.detail)
+        == ["只给结论", "包含解释"]
     else {
-        fail("AskUserQuestion 解析或分页布局")
-    }
-
-    _ = NSApplication.shared
-    let questionController = ClaudePermissionPromptViewController(
-        prompt: questionPrompt
-    )
-    questionController.view.frame = NSRect(
-        origin: .zero,
-        size: questionController.preferredPanelSize
-    )
-    questionController.view.layoutSubtreeIfNeeded()
-    let renderedChoiceCopy = descendantButtons(
-        in: questionController.view
-    ).map(\.attributedTitle.string)
-    guard renderedChoiceCopy.contains(where: {
-        $0.contains("简洁") && $0.contains("只给结论")
-    }), renderedChoiceCopy.contains(where: {
-        $0.contains("详细") && $0.contains("包含解释")
-    })
-    else {
-        fail("AskUserQuestion 选项说明未直接显示")
-    }
-
-    // 尺寸契约：长选项文本与满额选项数都不得改变面板尺寸。真实展示路径
-    // （ClaudePermissionPanelPresenter.present）把控制器交给
-    // contentViewController，窗口会按 view 的 fittingSize 定尺，所以这里
-    // 刻意不预设 frame，直接校验 fittingSize 与卡片是否溢出各自容器。
-    let longChoiceFixture = """
-    {
-      "tool_name": "AskUserQuestion",
-      "session_id": "12345678-1234-1234-1234-123456789abc",
-      "cwd": "/tmp/threadhelm",
-      "tool_input": {
-        "questions": [{
-          "question": "extended_offline 那 7 个红，这次要我做到哪一步？",
-          "header": "范围",
-          "options": [
-            {
-              "label": "先只做诊断，不改代码",
-              "description": "实施 suite 拿到真实红名单，逐个定位夹具与新 planning-inputs 契约的差异点，输出分组与工作量评估。改不改、怎么改由你决定。"
-            },
-            {
-              "label": "诊断 + 直接修夹具",
-              "description": "定位后直接把夹具迁到新 planning-inputs 契约，修到 suite 全绿，再做负向回归验证。工作量可能较大且会改动多个 fixture。"
-            },
-            {
-              "label": "暂时不动 extended_offline",
-              "description": "这轮不碰，我转去处理清单里第 5 项（业务仓重挂）或第 6 项（gate 口径对齐）。"
-            },
-            {
-              "label": "只补回归测试",
-              "description": "先把红名单固化成回归测试，等契约稳定后再统一迁移夹具，避免重复返工。"
-            }
-          ],
-          "multiSelect": false
-        }]
-      }
-    }
-    """
-    guard let longChoicePrompt = try? ClaudePermissionProtocol.decodePrompt(
-        from: Data(longChoiceFixture.utf8)
-    ) else {
-        fail("长选项 fixture 解析")
-    }
-    let longChoiceController = ClaudePermissionPromptViewController(
-        prompt: longChoicePrompt
-    )
-    let expectedPanelSize = longChoiceController.preferredPanelSize
-    longChoiceController.view.layoutSubtreeIfNeeded()
-    let longChoiceFitting = longChoiceController.view.fittingSize
-    guard longChoiceFitting.width == expectedPanelSize.width,
-          longChoiceFitting.height == expectedPanelSize.height
-    else {
-        fail(
-            "长选项文本改变了面板尺寸：fittingSize "
-                + "\(Int(longChoiceFitting.width))x\(Int(longChoiceFitting.height))"
-                + " 期望 \(Int(expectedPanelSize.width))x\(Int(expectedPanelSize.height))"
-        )
-    }
-
-    longChoiceController.view.frame = NSRect(origin: .zero, size: expectedPanelSize)
-    longChoiceController.view.layoutSubtreeIfNeeded()
-    if let overflowing = descendantCards(in: longChoiceController.view).first(where: {
-        $0.frame.height > 0 && $0.fittingSize.height > $0.frame.height + 0.5
-    }) {
-        fail(
-            "选项卡片内容溢出容器：需要 \(Int(overflowing.fittingSize.height))"
-                + " 可用 \(Int(overflowing.frame.height))"
-        )
+        fail("AskUserQuestion 解析")
     }
 
     var openedPromptID: UUID?
-    var panelWasHiddenBeforeTerminalOpen = false
+    var presenterWasDismissedBeforeTerminalOpen = false
     var hookWasReleasedBeforeTerminalOpen = false
     var completedWithNativeFallback = false
-    let panelPresenter = ClaudePermissionPanelPresenter(
-        anchorWindowProvider: { nil }
-    )
+    let presenter = ClaudePermissionPresenterProbe()
     let coordinator = ClaudePermissionCoordinator(
         openTerminal: {
             openedPromptID = $0.requestID
             hookWasReleasedBeforeTerminalOpen = completedWithNativeFallback
-            panelWasHiddenBeforeTerminalOpen = NSApp.windows.allSatisfy {
-                !($0 is ClaudePermissionPanel) || !$0.isVisible
-            }
+            presenterWasDismissedBeforeTerminalOpen = !presenter.isPresenting
         },
         onQueueChange: { _ in }
     )
-    coordinator.setPresenter(panelPresenter)
+    coordinator.setPresenter(presenter)
     coordinator.enqueue(prompt: questionPrompt) { decision in
         if case .nativeFallback = decision {
             completedWithNativeFallback = true
@@ -935,17 +847,15 @@ func runClaudeHookSelfTest() -> Never {
         workingDirectory: "/tmp/threadhelm"
     )
     guard coordinator.handoffToTerminalIfPresenting(unrelatedTask) == false,
-          NSApp.windows.contains(where: {
-              $0 is ClaudePermissionPanel && $0.isVisible
-          }),
+          presenter.isPresenting,
           coordinator.handoffToTerminalIfPresenting(matchingTask),
           openedPromptID == questionPrompt.requestID,
-          panelWasHiddenBeforeTerminalOpen,
+          presenterWasDismissedBeforeTerminalOpen,
           hookWasReleasedBeforeTerminalOpen,
           completedWithNativeFallback,
-          NSApp.windows.allSatisfy({
-              !($0 is ClaudePermissionPanel) || !$0.isVisible
-          })
+          !presenter.isPresenting,
+          presenter.presentCount == 1,
+          presenter.dismissCount >= 1
     else {
         fail("任务列表恢复终端没有关闭同会话问题弹窗")
     }
@@ -955,9 +865,7 @@ func runClaudeHookSelfTest() -> Never {
     // 保持，避免读取抖动关掉正要回答的弹窗；只有明确不再等待才收起，且不拉起终端。
     var terminalOpenedForAutoDismiss = false
     var autoDismissReleasedHook = false
-    let autoDismissPresenter = ClaudePermissionPanelPresenter(
-        anchorWindowProvider: { nil }
-    )
+    let autoDismissPresenter = ClaudePermissionPresenterProbe()
     let autoDismissCoordinator = ClaudePermissionCoordinator(
         openTerminal: { _ in terminalOpenedForAutoDismiss = true },
         onQueueChange: { _ in }
@@ -988,24 +896,18 @@ func runClaudeHookSelfTest() -> Never {
           autoDismissCoordinator.dismissIfAnsweredInTerminal(
               in: [answeredTask]
           ) == false,
-          NSApp.windows.contains(where: {
-              $0 is ClaudePermissionPanel && $0.isVisible
-          }),
+          autoDismissPresenter.isPresenting,
           autoDismissCoordinator.dismissIfAnsweredInTerminal(
               in: [stillWaitingTask]
           ) == false,
           autoDismissCoordinator.dismissIfAnsweredInTerminal(
               in: [unrelatedTask]
           ) == false,
-          NSApp.windows.contains(where: {
-              $0 is ClaudePermissionPanel && $0.isVisible
-          }),
+          autoDismissPresenter.isPresenting,
           autoDismissCoordinator.dismissIfAnsweredInTerminal(in: [answeredTask]),
           autoDismissReleasedHook,
           !terminalOpenedForAutoDismiss,
-          NSApp.windows.allSatisfy({
-              !($0 is ClaudePermissionPanel) || !$0.isVisible
-          })
+          !autoDismissPresenter.isPresenting
     else {
         fail("终端内回答后问答弹窗没有自动收起")
     }
@@ -1341,8 +1243,8 @@ func runClaudeHookSelfTest() -> Never {
     try? manager.removeItem(at: temporaryRoot)
 
     print(
-        "claude-hook-self-test: protocol=4/4; question-panel=620pt+paging; "
-            + "question-detail=2/2; terminal-handoff=matched+hidden+released; "
+        "claude-hook-self-test: protocol=4/4; question-decode=label+detail; "
+            + "terminal-handoff=matched+presenter-dismissed+released; "
             + "auto-dismiss=prewait-kept+waiting-kept+unknown-kept"
             + "+answered-dismissed; "
             + "presenter-switch=no-completion; decision=exactly-once; "

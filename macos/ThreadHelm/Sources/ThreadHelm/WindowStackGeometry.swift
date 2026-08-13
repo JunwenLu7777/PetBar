@@ -2,81 +2,14 @@
 //  WindowStackGeometry.swift
 //  ThreadHelm
 //
-//  模块职责：窗口栈几何——宠物定位结果模型、Codex 原生窗口识别
-//  （mascot effect/锚点/活动堆叠/合成表面）、窗口栈枚举与遮挡判定、
-//  overlay 状态文件签名与重载判定。
+//  模块职责：枚举窗口栈，识别 Codex 原生活动窗口，并判断它与
+//  ThreadHelm 动态岛的相交和遮挡关系。
 //
 
 import AppKit
-import ApplicationServices
 import CoreGraphics
 import Darwin
 import Foundation
-
-struct LocatedPet {
-    let overlayRect: NSRect
-    let visibleRect: NSRect
-    let panelScale: CGFloat
-    let screen: NSScreen
-    let source: String
-}
-
-func locatedPetGeometryDiffers(
-    _ previous: LocatedPet?,
-    from current: LocatedPet
-) -> Bool {
-    guard let previous else { return true }
-    return rectDiffers(previous.visibleRect, from: current.visibleRect)
-        || rectDiffers(previous.screen.visibleFrame, from: current.screen.visibleFrame)
-        || abs(previous.panelScale - current.panelScale) > 0.01
-}
-
-struct MascotEffectPetGeometry {
-    let visibleRect: CGRect
-    let scale: CGFloat
-}
-
-func isMascotEffectWindow(
-    name: String?,
-    layer: Int,
-    rect: CGRect
-) -> Bool {
-    let normalizedName = name?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased() ?? ""
-    if !normalizedName.isEmpty {
-        return normalizedName == "codex pet mascot effect"
-    }
-    guard layer == 2,
-          rect.width >= 120,
-          rect.width <= 600,
-          rect.height >= 120,
-          rect.height <= 600
-    else { return false }
-    let aspect = rect.width / rect.height
-    return aspect >= 0.55 && aspect <= 1.45
-}
-
-func isMascotAnchorWindow(
-    name: String?,
-    layer: Int,
-    rect: CGRect
-) -> Bool {
-    let normalizedName = name?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased() ?? ""
-    if !normalizedName.isEmpty,
-       normalizedName != "codex",
-       normalizedName != "chatgpt"
-    {
-        return false
-    }
-    return layer == 3
-        && rect.width >= 160
-        && rect.width <= 900
-        && rect.height >= 80
-        && rect.height <= 300
-}
 
 struct WindowStackEntry {
     let number: CGWindowID
@@ -108,7 +41,7 @@ func isCodexNativeActivityStackWindow(
         && entry.bounds.height <= 300
 }
 
-func isCodexPetCompositionSurfaceWindow(
+func isCodexNativeCompositionSurfaceWindow(
     _ entry: WindowStackEntry
 ) -> Bool {
     let normalizedName = entry.name
@@ -163,7 +96,7 @@ func nativeActivityStackOccludesPanel(
             return true
         }
         return entries[..<panelIndex].contains { surface in
-            isCodexPetCompositionSurfaceWindow(surface)
+            isCodexNativeCompositionSurfaceWindow(surface)
                 && nativeWindowOwnersMatch(surface, activity)
                 && surface.bounds.intersects(panelBounds)
         }
@@ -212,70 +145,4 @@ func currentWindowStackEntries() -> [WindowStackEntry] {
             bounds: bounds
         )
     }
-}
-
-func mascotEffectPetGeometry(
-    effectRect: CGRect,
-    anchorRect: CGRect
-) -> MascotEffectPetGeometry? {
-    guard effectRect.width >= 80,
-          effectRect.height >= 80,
-          anchorRect.width >= 160,
-          anchorRect.height >= 80,
-          abs(effectRect.midX - anchorRect.midX) <= max(effectRect.width, anchorRect.width) * 0.40,
-          anchorRect.minY >= effectRect.minY - 4,
-          anchorRect.minY <= effectRect.maxY
-    else { return nil }
-
-    let scale = normalizedPanelScale(effectRect.width / 356)
-    guard scale.isFinite, scale >= minimumPanelScale, scale <= maximumPanelScale else {
-        return nil
-    }
-
-    let width = canonicalPetSpriteSize.width * scale
-    let height = canonicalPetSpriteSize.height * scale
-    let visibleRect = CGRect(
-        x: effectRect.midX - width / 2,
-        y: anchorRect.minY,
-        width: width,
-        height: height
-    )
-    guard visibleRect.maxY <= effectRect.maxY + max(12, effectRect.height * 0.15) else {
-        return nil
-    }
-    return MascotEffectPetGeometry(visibleRect: visibleRect, scale: scale)
-}
-
-struct OverlayStateFileSignature: Equatable {
-    let modificationDate: Date
-    let byteCount: UInt64
-    let fileNumber: UInt64?
-
-    init?(attributes: [FileAttributeKey: Any]) {
-        guard let modificationDate = attributes[.modificationDate] as? Date,
-              let byteCount = (attributes[.size] as? NSNumber)?.uint64Value
-        else { return nil }
-        self.modificationDate = modificationDate
-        self.byteCount = byteCount
-        self.fileNumber = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
-    }
-}
-
-func overlayStateNeedsReload(
-    previous: OverlayStateFileSignature?,
-    current: OverlayStateFileSignature?
-) -> Bool {
-    guard let current else { return true }
-    return current != previous
-}
-
-func shouldDiscoverMascotEffectWindows(
-    now: CFAbsoluteTime,
-    lastDiscoveryAt: CFAbsoluteTime,
-    hasCachedGenericWindow: Bool
-) -> Bool {
-    if !hasCachedGenericWindow || lastDiscoveryAt <= 0 || now < lastDiscoveryAt {
-        return true
-    }
-    return now - lastDiscoveryAt >= overlayStateRefreshInterval
 }

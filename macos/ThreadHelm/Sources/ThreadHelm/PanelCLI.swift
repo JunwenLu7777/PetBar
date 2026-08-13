@@ -2,7 +2,7 @@
 //  PanelCLI.swift
 //  ThreadHelm
 //
-//  模块职责：命令行一次性操作——单次额度打印、面板配置/位置打印、
+//  模块职责：命令行一次性操作——单次额度打印、运行配置打印、
 //  Codex 原生气泡状态的准备与恢复、辅助功能状态检查、原生任务气泡
 //  抑制。均由 main.swift 的 CLI 分发调用后退出进程。
 //
@@ -65,10 +65,9 @@ func printPanelConfiguration() -> Never {
     print(
         "panel-config: version=\(panelVersion) "
             + "edition=\(panelEdition) productID=\(threadHelmProductID) "
+            + "presentation=dynamic-island "
             + "codexWeeklyQuotaOnly=true "
-            + "claudeQuotaPeriods=5h,weekly,fable "
-            + "width=\(Int(expandedPanelSize.width)) "
-            + "height=\(Int(expandedPanelSize.height))"
+            + "claudeQuotaPeriods=5h,weekly,fable"
     )
     exit(0)
 }
@@ -79,39 +78,6 @@ func printTaskProgressOnce() -> Never {
         "\(index + 1):\(item.title)[\(item.source.rawValue):\(item.kind.rawValue)]"
     }.joined(separator: " | ")
     print("task-progress: count=\(snapshot.items.count) \(details)")
-    exit(0)
-}
-
-func printPanelPlacementOnce(savedStateOnly: Bool = false) -> Never {
-    let locator = PetWindowLocator()
-    let result = savedStateOnly ? locator.locateSavedState() : locator.locate()
-    guard let location = result else {
-        fputs("没有找到已打开的 ThreadHelm 窗口或已保存的位置\n", stderr)
-        exit(1)
-    }
-
-    let livePanelScale = presentedPanelScale(location.panelScale)
-    let livePanelSize = scaledPanelSize(expandedPanelSize, scale: livePanelScale)
-    let placement = panelPlacement(
-        petVisibleRect: location.visibleRect,
-        panelSize: livePanelSize,
-        panelScale: livePanelScale,
-        screenVisibleFrame: location.screen.visibleFrame
-    )
-    print(
-        "panel-location: source=\(location.source) "
-            + "overlayX=\(Int(location.overlayRect.minX.rounded())) "
-            + "overlayY=\(Int(location.overlayRect.minY.rounded())) "
-            + "petCenterX=\(Int(location.visibleRect.midX.rounded())) "
-            + "petTop=\(Int(location.visibleRect.maxY.rounded())) "
-            + "panelX=\(Int(placement.origin.x)) "
-            + "panelY=\(Int(placement.origin.y)) "
-            + "panelScale=\(String(format: "%.3f", livePanelScale)) "
-            + "panelWidth=\(String(format: "%.1f", livePanelSize.width)) "
-            + "panelHeight=\(String(format: "%.1f", livePanelSize.height)) "
-            + "gap=\(String(format: "%.1f", placement.actualGap)) "
-            + "centerError=\(String(format: "%.1f", placement.centerError))"
-    )
     exit(0)
 }
 

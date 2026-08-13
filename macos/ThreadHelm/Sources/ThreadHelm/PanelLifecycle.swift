@@ -89,24 +89,14 @@ final class RuntimeHealthWriter {
     func write(
         status: String,
         panelVisible: Bool,
-        locationSource: String?,
         agentEventChannelAvailable: Bool? = nil,
-        gap: CGFloat? = nil,
-        centerError: CGFloat? = nil,
-        panelScale: CGFloat = 1,
-        panelSize: NSSize? = nil,
         force: Bool = false
     ) {
         let now = CFAbsoluteTimeGetCurrent()
-        let safeScale = normalizedPanelScale(panelScale)
-        let livePanelSize = panelSize ?? scaledPanelSize(expandedPanelSize, scale: safeScale)
-        // Do not turn a live resize into 30 disk writes per second. Scale and
-        // dimensions are included in the periodic payload, while the signature
-        // remains limited to meaningful visibility/source changes.
         let eventChannel = agentEventChannelAvailable.map {
             $0 ? "healthy" : "degraded"
         } ?? "unknown"
-        let signature = "\(status)|\(panelVisible)|\(locationSource ?? "none")|\(eventChannel)"
+        let signature = "\(status)|\(panelVisible)|\(eventChannel)"
         guard force || signature != lastSignature || now - lastWriteAt >= 15 else { return }
 
         var payload: [String: Any] = [
@@ -118,19 +108,11 @@ final class RuntimeHealthWriter {
             "panelVisible": panelVisible,
             "codexWeeklyQuotaOnly": true,
             "claudeQuotaPeriods": ["5h", "weekly", "fable"],
-            "panelBaseHeightPoints": expandedPanelSize.height,
-            "panelWidthPoints": livePanelSize.width,
-            "panelHeightPoints": livePanelSize.height,
-            "panelScale": safeScale,
-            "locationSource": locationSource ?? NSNull(),
             "updatedAt": ISO8601DateFormatter().string(from: Date()),
         ]
         if agentEventChannelAvailable != nil {
             payload["agentEventChannel"] = eventChannel
         }
-        if let gap { payload["petGapPoints"] = gap }
-        if let centerError { payload["pointerCenterErrorPoints"] = centerError }
-
         do {
             try createDirectory(fileURL.deletingLastPathComponent(), true)
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])

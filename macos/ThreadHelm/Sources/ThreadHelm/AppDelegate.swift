@@ -168,8 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStatusMenu()
         healthWriter.write(
             status: "started",
-            panelVisible: false,
-            locationSource: nil,
+            panelVisible: true,
             agentEventChannelAvailable: agentEventChannelAvailable,
             force: true
         )
@@ -227,7 +226,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         healthWriter.write(
             status: "terminated",
             panelVisible: false,
-            locationSource: nil,
             agentEventChannelAvailable: agentEventChannelAvailable,
             force: true
         )
@@ -590,7 +588,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         healthWriter.write(
             status: "hidden-by-user",
             panelVisible: false,
-            locationSource: nil,
             agentEventChannelAvailable: agentEventChannelAvailable,
             force: true
         )

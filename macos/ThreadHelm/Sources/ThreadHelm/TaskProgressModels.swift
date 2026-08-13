@@ -344,8 +344,6 @@ struct TaskProgressSnapshot: Equatable {
         items.first?.statusText ?? "等待任务"
     }
 
-    var rowCount: Int { max(1, min(maximumVisibleTaskRows, items.count)) }
-
     static let reading = TaskProgressSnapshot(items: [TaskProgressItem(
         title: "正在读取任务",
         kind: .reading
@@ -378,13 +376,6 @@ func claudeProcessID(
 ) -> Int32? {
     claudeTaskItem(forSessionID: sessionID, in: items)?.processID
 }
-
-struct TaskActivityPreviewPayload: Equatable {
-    let taskKey: String
-    let body: String
-}
-
-let maximumTaskActivityLines = 3
 
 func taskActivityParagraph(from text: String) -> String? {
     let paragraph = text.components(separatedBy: .newlines)
@@ -479,83 +470,4 @@ func appendingTaskActivityEvent(
         return $0.occurredAt < $1.occurredAt
     }
     return next
-}
-
-func taskActivityVisibleTailText(
-    from text: String,
-    width: CGFloat,
-    font: NSFont,
-    lineSpacing: CGFloat,
-    maximumLineCount: Int
-) -> String {
-    guard width > 0, maximumLineCount > 0, !text.isEmpty else {
-        return ""
-    }
-
-    func renderedLineCount(_ candidate: String) -> Int {
-        guard !candidate.isEmpty else { return 0 }
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byCharWrapping
-        paragraph.lineSpacing = lineSpacing
-        let storage = NSTextStorage(
-            string: candidate,
-            attributes: [
-                .font: font,
-                .paragraphStyle: paragraph,
-            ]
-        )
-        let layoutManager = NSLayoutManager()
-        let textContainer = NSTextContainer(
-            size: NSSize(
-                width: width,
-                height: .greatestFiniteMagnitude
-            )
-        )
-        textContainer.lineFragmentPadding = 0
-        textContainer.lineBreakMode = .byCharWrapping
-        layoutManager.addTextContainer(textContainer)
-        storage.addLayoutManager(layoutManager)
-        layoutManager.ensureLayout(for: textContainer)
-
-        var lineCount = 0
-        layoutManager.enumerateLineFragments(
-            forGlyphRange: NSRange(
-                location: 0,
-                length: layoutManager.numberOfGlyphs
-            )
-        ) { _, _, _, _, _ in
-            lineCount += 1
-        }
-        return lineCount
-    }
-
-    guard renderedLineCount(text) > maximumLineCount else {
-        return text
-    }
-
-    let characters = Array(text)
-    var lowerBound = 1
-    var upperBound = characters.count
-    while lowerBound < upperBound {
-        let candidateStart = lowerBound
-            + (upperBound - lowerBound) / 2
-        let candidate = String(characters.dropFirst(candidateStart))
-        if renderedLineCount(candidate) <= maximumLineCount {
-            upperBound = candidateStart
-        } else {
-            lowerBound = candidateStart + 1
-        }
-    }
-    return String(characters.dropFirst(lowerBound))
-}
-
-func taskActivityPreviewPayload(
-    for item: TaskProgressItem
-) -> TaskActivityPreviewPayload? {
-    guard item.kind == .running else { return nil }
-    let body = item.activityText.flatMap(taskActivityParagraph)
-    return TaskActivityPreviewPayload(
-        taskKey: item.identityKey,
-        body: body ?? "正在思考"
-    )
 }

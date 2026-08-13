@@ -564,8 +564,6 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
           claudeProcessChainDetected,
           reusedUnrelatedProcessRejected,
           codexTaskProgressRescanInterval == 5,
-          taskAnimationFramesPerSecond == 8,
-          taskAnimationDegreesPerTick == 36,
           !shouldRefreshClaudeAgents(
               cachedAgentCount: 0,
               hasRecentlyModifiedTranscript: false

@@ -2,7 +2,7 @@
 //  main.swift
 //  ThreadHelm
 //
-//  模块职责：进程入口与命令行分发——一次性 CLI 操作（额度/位置/配置打印、
+//  模块职责：进程入口与命令行分发——一次性 CLI 操作（额度/配置打印、
 //  overlay 通知准备与恢复、Claude Hook 管理、预览渲染、各项自测）在此
 //  分发到对应模块；无任何旗标时启动 NSApplication 进入常驻面板模式。
 //
@@ -54,14 +54,6 @@ if CommandLine.arguments.contains("--print-claude-quota") {
     printClaudeQuotaOnce()
 }
 
-if CommandLine.arguments.contains("--print-panel-location") {
-    printPanelPlacementOnce()
-}
-
-if CommandLine.arguments.contains("--print-saved-panel-location") {
-    printPanelPlacementOnce(savedStateOnly: true)
-}
-
 if CommandLine.arguments.contains("--prepare-codex-overlay-notifications") {
     prepareCodexOverlayNotifications()
 }
@@ -76,10 +68,6 @@ if CommandLine.arguments.contains("--check-accessibility") {
 
 if CommandLine.arguments.contains("--suppress-native-activity-once") {
     suppressNativeActivityOnce()
-}
-
-if CommandLine.arguments.contains("--self-test-placement") {
-    runPlacementSelfTest()
 }
 
 if CommandLine.arguments.contains("--self-test-lifecycle") {
@@ -215,27 +203,6 @@ if CommandLine.arguments.contains("--print-panel-config") {
 
 if CommandLine.arguments.contains("--print-task-progress") {
     printTaskProgressOnce()
-}
-
-if let previewFlag = CommandLine.arguments.firstIndex(of: "--render-claude-hook-preview"),
-   CommandLine.arguments.indices.contains(previewFlag + 2)
-{
-    let kind = CommandLine.arguments[previewFlag + 1]
-    let outputURL = URL(fileURLWithPath: CommandLine.arguments[previewFlag + 2])
-    do {
-        try renderClaudePermissionPreview(kind: kind, to: outputURL)
-        print(outputURL.path)
-        exit(0)
-    } catch {
-        fputs("写入 Claude Hook 预览失败：\(error.localizedDescription)\n", stderr)
-        exit(1)
-    }
-}
-
-if let previewFlag = CommandLine.arguments.firstIndex(of: "--render-preview"),
-   CommandLine.arguments.indices.contains(previewFlag + 1)
-{
-    renderPreviewOnce(to: CommandLine.arguments[previewFlag + 1])
 }
 
 let application = NSApplication.shared

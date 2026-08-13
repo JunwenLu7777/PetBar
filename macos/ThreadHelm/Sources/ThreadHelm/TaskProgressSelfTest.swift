@@ -28,7 +28,7 @@ func runTaskProgressSelfTest() -> Never {
     }
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
-    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; click-hit=pass; scroll-hit=pass; refresh-hit=pass; hover-live=pass; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; personal-sessions=explicit+fixture-isolated+count-only+cross-process-safe+0600; personal-readiness=owner-confirmed+ten-session-gated+revocable+bool-only+cross-process-safe+fail-closed+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-agents-timeout=bounded; runtime-health-failure=logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
+    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; personal-sessions=explicit+fixture-isolated+count-only+cross-process-safe+0600; personal-readiness=owner-confirmed+ten-session-gated+revocable+bool-only+cross-process-safe+fail-closed+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-agents-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
     exit(0)
 }
 
@@ -162,14 +162,26 @@ private func runRuntimeHealthWriterFailureSelfTest() {
     channelWriter.write(
         status: "started",
         panelVisible: false,
-        locationSource: nil,
         agentEventChannelAvailable: false,
         force: true
     )
     let channelObject = healthPayload.flatMap {
         try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
     }
-    guard channelObject?["agentEventChannel"] as? String == "degraded" else {
+    let removedHealthKeys = [
+        "petID",
+        "petGapPoints",
+        "pointerCenterErrorPoints",
+        "panelBaseHeightPoints",
+        "panelWidthPoints",
+        "panelHeightPoints",
+        "panelScale",
+        "locationSource",
+    ]
+    guard channelObject?["agentEventChannel"] as? String == "degraded",
+          channelObject?["panelVisible"] as? Bool == false,
+          removedHealthKeys.allSatisfy({ channelObject?[$0] == nil })
+    else {
         fputs("runtime health event-channel status missing\n", stderr)
         exit(1)
     }
@@ -189,15 +201,13 @@ private func runRuntimeHealthWriterFailureSelfTest() {
         }
     )
     writer.write(
-        status: "following-pet",
+        status: "dynamic-island-visible",
         panelVisible: true,
-        locationSource: "self-test",
         force: true
     )
     writer.write(
-        status: "following-pet",
+        status: "dynamic-island-visible",
         panelVisible: true,
-        locationSource: "self-test",
         force: true
     )
     guard messages.count == 1,
@@ -636,287 +646,11 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         exit(1)
     }
 
-    guard panelSizeForTaskRows(1) == NSSize(width: 388, height: 226),
-          panelSizeForTaskRows(maximumVisibleTaskRows).width
-            > panelSizeForTaskRows(maximumVisibleTaskRows).height,
-          abs(presentedPanelScale(243 / 356) - 0.95) <= 0.001,
-          abs(
-              scaledPanelSize(
-                  panelSizeForTaskRows(1),
-                  scale: presentedPanelScale(243 / 356)
-              ).width - 368.6
-          ) <= 0.1,
-          codexThreadURL(threadID: indexedThreadID)?.absoluteString
+    guard codexThreadURL(threadID: indexedThreadID)?.absoluteString
             == "codex://threads/\(indexedThreadID)",
           codexThreadURL(threadID: "not-a-thread") == nil
     else {
-        fputs("wide-panel or Codex thread deep-link validation failed\n", stderr)
-        exit(1)
-    }
-
-    _ = NSApplication.shared
-    let clickView = QuotaPanelView(
-        frame: NSRect(origin: .zero, size: panelSizeForTaskRows(1))
-    )
-    let clickWindow = NSWindow(
-        contentRect: clickView.frame,
-        styleMask: .borderless,
-        backing: .buffered,
-        defer: false
-    )
-    clickWindow.contentView = clickView
-    clickView.pointerSide = .bottom
-    clickView.taskProgress = TaskProgressSnapshot(items: [
-        TaskProgressItem(
-            title: "可点击任务",
-            kind: .running,
-            startedAt: now,
-            threadID: indexedThreadID
-        ),
-    ])
-    var openedThreadID: String?
-    clickView.onOpenTask = { openedThreadID = $0.threadID }
-    let rowPointInWindow = clickView.convert(NSPoint(x: 200, y: 66), to: nil)
-    guard let clickEvent = NSEvent.mouseEvent(
-        with: .leftMouseDown,
-        location: rowPointInWindow,
-        modifierFlags: [],
-        timestamp: 0,
-        windowNumber: clickWindow.windowNumber,
-        context: nil,
-        eventNumber: 1,
-        clickCount: 1,
-        pressure: 1
-    ) else {
-        fputs("task click event creation failed\n", stderr)
-        exit(1)
-    }
-    clickView.mouseDown(with: clickEvent)
-    guard openedThreadID == indexedThreadID else {
-        fputs("task row click hit testing failed\n", stderr)
-        exit(1)
-    }
-
-    let scrollingView = QuotaPanelView(
-        frame: NSRect(origin: .zero, size: panelSizeForTaskRows(maximumVisibleTaskRows))
-    )
-    let scrollingWindow = NSWindow(
-        contentRect: scrollingView.frame,
-        styleMask: .borderless,
-        backing: .buffered,
-        defer: false
-    )
-    scrollingWindow.contentView = scrollingView
-    scrollingView.pointerSide = .bottom
-    scrollingView.taskProgress = TaskProgressSnapshot.displaying((0..<7).map { index in
-        let threadID = String(
-            format: "12345678-1234-4abc-8def-%012d",
-            index + 1
-        )
-        return TaskProgressItem(
-            title: "滚动任务 \(index + 1)",
-            kind: index == 1 ? .waitingForInput : .running,
-            startedAt: now,
-            updatedAt: now.addingTimeInterval(Double(index)),
-            threadID: threadID
-        )
-    })
-    var scrolledThreadID: String?
-    scrollingView.onOpenTask = { scrolledThreadID = $0.threadID }
-    let scrollingPointInWindow = scrollingView.convert(NSPoint(x: 200, y: 66), to: nil)
-    guard let scrolledClickEvent = NSEvent.mouseEvent(
-        with: .leftMouseDown,
-        location: scrollingPointInWindow,
-        modifierFlags: [],
-        timestamp: 0,
-        windowNumber: scrollingWindow.windowNumber,
-        context: nil,
-        eventNumber: 2,
-        clickCount: 1,
-        pressure: 1
-    ) else {
-        fputs("task scroll event creation failed\n", stderr)
-        exit(1)
-    }
-    scrollingView.scrollTaskList(by: 1)
-    scrollingView.mouseDown(with: scrolledClickEvent)
-    guard scrolledThreadID == "12345678-1234-4abc-8def-000000000006" else {
-        fputs("task scrolled click hit testing failed\n", stderr)
-        exit(1)
-    }
-
-    let refreshView = QuotaPanelView(
-        frame: NSRect(origin: .zero, size: panelSizeForTaskRows(1))
-    )
-    let refreshWindow = NSWindow(
-        contentRect: refreshView.frame,
-        styleMask: .borderless,
-        backing: .buffered,
-        defer: false
-    )
-    refreshWindow.contentView = refreshView
-    refreshView.pointerSide = .bottom
-    var refreshRequestCount = 0
-    refreshView.onRequestQuotaRefresh = { refreshRequestCount += 1 }
-    let refreshPointInWindow = refreshView.convert(NSPoint(x: 148, y: 194), to: nil)
-    guard let refreshClickEvent = NSEvent.mouseEvent(
-        with: .leftMouseDown,
-        location: refreshPointInWindow,
-        modifierFlags: [],
-        timestamp: 0,
-        windowNumber: refreshWindow.windowNumber,
-        context: nil,
-        eventNumber: 3,
-        clickCount: 1,
-        pressure: 1
-    ) else {
-        fputs("quota refresh click event creation failed\n", stderr)
-        exit(1)
-    }
-    refreshView.mouseDown(with: refreshClickEvent)
-    guard refreshRequestCount == 1 else {
-        fputs("quota refresh click hit testing failed\n", stderr)
-        exit(1)
-    }
-
-    let runningPreviewItem = TaskProgressItem(
-        title: "运行任务",
-        kind: .running,
-        startedAt: now,
-        updatedAt: now,
-        activityText: "正在编辑文件",
-        threadID: indexedThreadID
-    )
-    let completedPreviewItem = TaskProgressItem(
-        title: "完成任务",
-        kind: .completed,
-        startedAt: now,
-        updatedAt: now,
-        activityText: "这段内容不应显示",
-        threadID: indexedThreadID
-    )
-    guard taskActivityPreviewPayload(for: runningPreviewItem)?.body == "正在编辑文件",
-          taskActivityPreviewPayload(for: completedPreviewItem) == nil
-    else {
-        fputs("task activity preview eligibility failed\n", stderr)
-        exit(1)
-    }
-
-    let tailWindowFont = NSFont.monospacedSystemFont(
-        ofSize: 10,
-        weight: .regular
-    )
-    let sevenCharacterWidth = ("abcdefg" as NSString).size(
-        withAttributes: [.font: tailWindowFont]
-    ).width + 0.5
-    let firstTailWindow = taskActivityVisibleTailText(
-        from: "abcdefghijklmnopqrstuv",
-        width: sevenCharacterWidth,
-        font: tailWindowFont,
-        lineSpacing: 0,
-        maximumLineCount: 3
-    )
-    let nextTailWindow = taskActivityVisibleTailText(
-        from: "abcdefghijklmnopqrstuvw",
-        width: sevenCharacterWidth,
-        font: tailWindowFont,
-        lineSpacing: 0,
-        maximumLineCount: 3
-    )
-    guard firstTailWindow == "bcdefghijklmnopqrstuv",
-          nextTailWindow == "cdefghijklmnopqrstuvw"
-    else {
-        fputs("task activity character tail window failed\n", stderr)
-        exit(1)
-    }
-
-    let previewController = TaskActivityPreviewController()
-    previewController.show(
-        item: runningPreviewItem,
-        anchorRect: NSRect(x: 100, y: 100, width: 180, height: 26),
-        visibleFrame: NSRect(x: 0, y: 0, width: 800, height: 600)
-    )
-    let compactPreviewHeight = previewController.currentPanelHeight
-    guard previewController.isVisible,
-          previewController.currentBody == "正在编辑文件"
-    else {
-        fputs("task activity preview presentation failed\n", stderr)
-        exit(1)
-    }
-    previewController.update(item: TaskProgressItem(
-        title: "运行任务",
-        kind: .running,
-        startedAt: now,
-        updatedAt: now.addingTimeInterval(2),
-        activityText: "正在运行命令",
-        threadID: indexedThreadID
-    ))
-    guard previewController.isVisible,
-          previewController.currentBody == "正在运行命令"
-    else {
-        fputs("task activity preview live update failed\n", stderr)
-        exit(1)
-    }
-    previewController.update(item: TaskProgressItem(
-        title: "运行任务",
-        kind: .running,
-        startedAt: now,
-        updatedAt: now.addingTimeInterval(3),
-        activityText: "第一句。 第二句。 第三句。 第四句。 继续检查最终状态。",
-        threadID: indexedThreadID
-    ))
-    guard previewController.isVisible,
-          previewController.currentBody
-            == "第一句。 第二句。 第三句。 第四句。 继续检查最终状态。",
-          previewController.currentPanelHeight == compactPreviewHeight
-    else {
-        fputs("task activity preview single-paragraph window failed\n", stderr)
-        exit(1)
-    }
-    previewController.update(item: completedPreviewItem)
-    guard !previewController.isVisible else {
-        fputs("task activity preview terminal dismissal failed\n", stderr)
-        exit(1)
-    }
-
-    let hoverView = QuotaPanelView(
-        frame: NSRect(origin: .zero, size: panelSizeForTaskRows(1))
-    )
-    let hoverWindow = NSWindow(
-        contentRect: hoverView.frame,
-        styleMask: .borderless,
-        backing: .buffered,
-        defer: false
-    )
-    hoverWindow.contentView = hoverView
-    hoverView.pointerSide = .bottom
-    hoverView.taskProgress = TaskProgressSnapshot(items: [runningPreviewItem])
-    var hoveredActivity: String?
-    var hoveredAnchor: NSRect?
-    hoverView.onHoverRunningTask = { item, anchor in
-        hoveredActivity = item?.activityText
-        hoveredAnchor = anchor
-    }
-    hoverView.updateTaskHover(index: 0)
-    guard hoveredActivity == "正在编辑文件", hoveredAnchor != nil else {
-        fputs("task hover callback presentation failed\n", stderr)
-        exit(1)
-    }
-    hoverView.taskProgress = TaskProgressSnapshot(items: [TaskProgressItem(
-        title: "运行任务",
-        kind: .running,
-        startedAt: now,
-        updatedAt: now.addingTimeInterval(2),
-        activityText: "正在搜索或检查网页",
-        threadID: indexedThreadID
-    )])
-    guard hoveredActivity == "正在搜索或检查网页" else {
-        fputs("task hover callback segmented update failed\n", stderr)
-        exit(1)
-    }
-    hoverView.taskProgress = TaskProgressSnapshot(items: [completedPreviewItem])
-    guard hoveredActivity == nil, hoveredAnchor == nil else {
-        fputs("task hover callback terminal dismissal failed\n", stderr)
+        fputs("Codex thread deep-link validation failed\n", stderr)
         exit(1)
     }
 
