@@ -29,7 +29,7 @@
 
 安装后会把 App 安装到 `~/Applications/ThreadHelm.app`，注册当前用户的 `dev.threadhelm.app` LaunchAgent，并从安装路径启动。用户主动退出后会保持关闭，不会被自动重新拉起。
 
-安装器会统一处理版本为 `validated` 的 Claude Code、Cursor、ZCode 和 Pi 受管本机集成；其他版本会跳过，Codex 集成明确为 `notManaged`，不会由该入口改写配置。更新前会备份旧 App、LaunchAgent 和受管配置，启动或健康检查失败会自动回滚。具体文件和恢复方法见[本机运维说明](../../docs/threadhelm-local-operations.md)。
+安装器会统一处理版本为 `validated` 的 Claude Code、Cursor、ZCode 和 Pi 受管本机集成；其他版本会跳过，Codex 集成明确为 `notManaged`，不会由该入口改写配置。ZCode 配置原本不存在时会直接创建并启用受管 Hook，已有配置的 `hooks.enabled` 仍原样保留。更新前会备份旧 App、LaunchAgent 和受管配置，启动或健康检查失败会自动回滚。具体文件和恢复方法见[本机运维说明](../../docs/threadhelm-local-operations.md)。
 
 ThreadHelm 不包含桌面宠物素材，也不再复制或选择 Codex Pet，不写入 `selected-avatar-id`；如果旧配置仍选择已停用的 Codex Pet，安装器会先备份再移除该选择。
 

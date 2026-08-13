@@ -9,6 +9,7 @@ import Foundation
 
 func runPiAgentAdapterSelfTest() {
     do {
+        try runPiDelayedVersionDiscoverySelfTest()
         try runPiIntegrationLifecycleSelfTest()
         try runPiStateOnlyContractSelfTest()
         try runPiGeneratedExtensionLoadSelfTest()
@@ -22,6 +23,49 @@ func runPiAgentAdapterSelfTest() {
     } catch {
         fputs("pi-agent-adapter-self-test failed: \(error)\n", stderr)
         exit(1)
+    }
+}
+
+private func runPiDelayedVersionDiscoverySelfTest() throws {
+    let manager = FileManager.default
+    let temporaryRoot = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-pi-version-self-test-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let executableURL = temporaryRoot.appendingPathComponent("pi")
+    defer { try? manager.removeItem(at: temporaryRoot) }
+
+    try manager.createDirectory(
+        at: temporaryRoot,
+        withIntermediateDirectories: true
+    )
+    let attemptURL = temporaryRoot.appendingPathComponent("attempt")
+    try Data(
+        """
+        #!/bin/sh
+        if [ ! -f "\(attemptURL.path)" ]; then
+          /usr/bin/touch "\(attemptURL.path)"
+          /bin/sleep 3
+        fi
+        /bin/echo 0.84.1
+        """.appending("\n").utf8
+    ).write(to: executableURL)
+    try manager.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: executableURL.path
+    )
+
+    let discovery = discoverLocalPiAgent(environment: [
+        "THREADHELM_PI_EXECUTABLE": executableURL.path,
+        "PATH": "/usr/bin:/bin",
+    ])
+    guard discovery.isInstalled,
+          discovery.version == "0.84.1",
+          discovery.compatibility == .validated
+    else {
+        throw PiAgentAdapterSelfTestError.failed(
+            "Pi CLI transient cold-start timeout was not retried"
+        )
     }
 }
 

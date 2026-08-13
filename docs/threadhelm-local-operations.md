@@ -9,7 +9,7 @@ ThreadHelm 只供这台 Mac 的当前用户使用。集成管理没有云端、�
 | Codex | 集成状态固定为 `notManaged`，集成安装/修复/卸载绝不写 Codex 配置。原生任务气泡静音是另一项已有功能，有自己的增量恢复文件。 | 不存在 Agent Hook 配置；气泡恢复文件为 `~/.codex/threadhelm-native-notification-backup.json` |
 | Claude Code | 只管理自己拥有的 `PermissionRequest` HTTP Hook；其他 Hook、环境变量和设置保留。 | `~/.claude/settings.json` |
 | Cursor | 只管理带 `threadhelmOwner` / `threadhelmAgent` 标记的生命周期 Hook；其他 Hook 和禁用选择保留。 | `~/.cursor/hooks.json` |
-| ZCode | 只管理状态观察事件中的 ThreadHelm process Hook；不注册 `PermissionRequest`，并保留其他键、事件顺序和 `hooks.enabled`。变更只对新启动的 ZCode 会话生效。 | `~/.zcode/cli/config.json` |
+| ZCode | 只管理状态观察事件中的 ThreadHelm process Hook；不注册 `PermissionRequest`，并保留已有配置的其他键、事件顺序和 `hooks.enabled`。配置文件原本不存在时会新建并启用 Hook，同时写入独立所有权标记，卸载时据此恢复到“文件不存在”；旧版 ThreadHelm 单独创建且尚未启用的纯受管配置会安全迁移。变更只对新启动的 ZCode 会话生效。 | `~/.zcode/cli/config.json`、`~/.zcode/cli/.threadhelm-config-owner` |
 | Pi | 只管理一个带所有权文件的 state-only 扩展；不做审批、发消息、取消、导航或会话修改。 | `~/.pi/agent/extensions/threadhelm-state-observer/` |
 
 App 本身安装到 `~/Applications/ThreadHelm.app`，登录启动项是 `~/Library/LaunchAgents/dev.threadhelm.app.plist`。运行日志在 `~/Library/Logs/ThreadHelm.log`，健康文件在 `~/Library/Caches/dev.threadhelm.app/`。
@@ -74,6 +74,8 @@ BIN="$HOME/Applications/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 ```
 
 每次有写操作时，输出里的 `backupID` 都对应一个本机恢复点。Codex 应显示 `notManaged`；Agent 没安装或版本为 `unvalidated` 时，安装和修复不会为它创建或改写配置。卸载不受版本门禁影响，但仍只删除 ThreadHelm 自己拥有的受管条目。
+
+ZCode 的“完整安装”不会要求额外确认：如果 `~/.zcode/cli/config.json` 原本不存在，ThreadHelm 会创建可直接工作的启用配置；如果文件已经存在，则显式的 `hooks.enabled=false` 和缺省状态都保持不变。只有内容完全由旧版 ThreadHelm Hook 组成的缺省配置会被识别为可迁移并启用。
 
 ## 备份和恢复
 

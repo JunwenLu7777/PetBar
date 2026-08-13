@@ -38,7 +38,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 6. 安装完成后会复制到 `~/Applications/ThreadHelm.app`，并启动 `dev.threadhelm.app`。
 7. 若希望当前 Codex 运行中新建任务的原生气泡也自动静音，可在“系统设置 → 隐私与安全 → 辅助功能”中为“ThreadHelm”开启权限；未开启不影响核心功能。
 
-安装会处理版本为 `validated` 的 Claude Code、Cursor、ZCode 和 Pi 受管本机集成；其他版本会跳过，Codex 集成保持 `notManaged`。新版本启动失败时会恢复旧 App、LaunchAgent 和受管配置。恢复点及手工处理方式见[本机运维说明](docs/threadhelm-local-operations.md)。
+安装会处理版本为 `validated` 的 Claude Code、Cursor、ZCode 和 Pi 受管本机集成；其他版本会跳过，Codex 集成保持 `notManaged`。ZCode 配置原本不存在时会直接创建并启用受管 Hook，已有配置的 `hooks.enabled` 仍原样保留。新版本启动失败时会恢复旧 App、LaunchAgent 和受管配置。恢复点及手工处理方式见[本机运维说明](docs/threadhelm-local-operations.md)。
 
 检查安装状态：
 

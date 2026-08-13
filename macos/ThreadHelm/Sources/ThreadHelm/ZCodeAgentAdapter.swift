@@ -42,8 +42,51 @@ enum ZCodeHookConfigurationError: Error, Equatable {
     case invalidConfig
 }
 
+extension ZCodeHookConfigurationError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .invalidConfig:
+            return "ZCode Hook 配置格式无效"
+        }
+    }
+}
+
 enum ZCodeHookConfiguration {
+    private enum ConfigOwnership: String {
+        case created
+        case existing
+    }
+
+    private enum ConfigOwnershipMarker: Equatable {
+        case missing
+        case current(ConfigOwnership)
+        case legacyCreated
+        case invalid
+
+        var exists: Bool {
+            self != .missing
+        }
+
+        var ownership: ConfigOwnership? {
+            switch self {
+            case .current(let ownership):
+                return ownership
+            case .legacyCreated:
+                return .created
+            case .missing, .invalid:
+                return nil
+            }
+        }
+    }
+
     static let managedStatusMessage = "ThreadHelm state observer"
+    private static let configOwnershipFilename =
+        ".threadhelm-config-owner"
+    private static let configOwnershipPrefix =
+        "threadhelm-managed-zcode-config-v2:"
+    private static let legacyConfigOwnershipContent = Data(
+        "threadhelm-managed-zcode-config-v1\n".utf8
+    )
     static let managedEvents = [
         "SessionStart",
         "UserPromptSubmit",
@@ -57,12 +100,20 @@ enum ZCodeHookConfiguration {
         at configURL: URL,
         executablePath: String
     ) throws -> AgentIntegrationStatus {
-        guard FileManager.default.fileExists(atPath: configURL.path) else {
-            return .notInstalled
+        let manager = FileManager.default
+        let ownershipURL = configOwnershipURL(for: configURL)
+        let marker = configOwnershipMarker(at: ownershipURL)
+        if marker == .legacyCreated || marker == .invalid {
+            return .needsRepair
+        }
+        let markerExists = marker.exists
+        let ownership = marker.ownership
+        guard manager.fileExists(atPath: configURL.path) else {
+            return markerExists ? .needsRepair : .notInstalled
         }
         let config = try loadConfig(at: configURL)
         guard let rawHooks = config["hooks"] else {
-            return .notInstalled
+            return markerExists ? .needsRepair : .notInstalled
         }
         guard let hooks = rawHooks as? [String: Any] else {
             throw ZCodeHookConfigurationError.invalidConfig
@@ -103,7 +154,7 @@ enum ZCodeHookConfiguration {
             if hooks["enabled"] as? Bool == false {
                 return .disabled
             }
-            return .notInstalled
+            return markerExists ? .needsRepair : .notInstalled
         }
         guard installedEvents == managedEvents,
               ownedEventNames.isSubset(of: Set(managedEvents)),
@@ -111,6 +162,7 @@ enum ZCodeHookConfiguration {
         else {
             return .needsRepair
         }
+        guard ownership != nil else { return .needsRepair }
         return hooks["enabled"] as? Bool == true ? .installed : .disabled
     }
 
@@ -121,7 +173,30 @@ enum ZCodeHookConfiguration {
         isZCodeAvailable: () -> Bool
     ) throws -> Bool {
         guard isZCodeAvailable() else { return false }
+        let manager = FileManager.default
+        let configurationExisted = manager.fileExists(
+            atPath: configURL.path
+        )
+        let originalConfigData = configurationExisted
+            ? try Data(contentsOf: configURL)
+            : nil
+        let ownershipURL = configOwnershipURL(for: configURL)
+        let marker = configOwnershipMarker(at: ownershipURL)
         var config = try loadConfig(at: configURL)
+        let legacyOwnedConfiguration = configurationExisted
+            && isLegacyFullyOwnedConfiguration(config)
+        let desiredOwnership: ConfigOwnership
+        switch marker {
+        case .current(let ownership):
+            desiredOwnership = ownership
+        case .legacyCreated:
+            desiredOwnership = .created
+        case .missing:
+            desiredOwnership = (!configurationExisted
+                || legacyOwnedConfiguration) ? .created : .existing
+        case .invalid:
+            desiredOwnership = configurationExisted ? .existing : .created
+        }
         var hooks: [String: Any]
         if let rawHooks = config["hooks"] {
             guard let parsedHooks = rawHooks as? [String: Any] else {
@@ -131,17 +206,31 @@ enum ZCodeHookConfiguration {
         } else {
             hooks = [:]
         }
-        if hooks["enabled"] as? Bool == false {
-            return false
-        }
         if hooks["events"] != nil,
            hooks["events"] as? [String: Any] == nil
         {
             throw ZCodeHookConfigurationError.invalidConfig
         }
         var events = hooks["events"] as? [String: Any] ?? [:]
+        let hasAnyOwnedHook = events.values.contains { value in
+            guard let matchers = value as? [[String: Any]] else {
+                return false
+            }
+            return !ownedHooks(in: matchers).isEmpty
+        } || hasLegacyOwnedHook(in: hooks)
 
-        var changed = false
+        if hooks["enabled"] as? Bool == false, !hasAnyOwnedHook {
+            guard marker == .legacyCreated || marker == .invalid else {
+                return false
+            }
+            try AgentIntegrationAtomicFileWriter.write(
+                configOwnershipContent(for: desiredOwnership),
+                to: ownershipURL
+            )
+            return true
+        }
+
+        var configChanged = false
         for eventName in managedEvents {
             let hook = managedHook(
                 eventName: eventName,
@@ -153,31 +242,86 @@ enum ZCodeHookConfiguration {
             }
             var matchers = matchersValue as? [[String: Any]] ?? []
             if replaceOwnedHook(hook, in: &matchers) {
-                changed = true
+                configChanged = true
             }
             events[eventName] = matchers
         }
         for eventName in Array(events.keys) where !managedEvents.contains(eventName) {
             if removeOwnedHooks(from: &events, eventName: eventName) {
-                changed = true
+                configChanged = true
             }
         }
-        if removeLegacyOwnedHooks(from: &hooks) { changed = true }
-        guard changed else { return false }
-        hooks["events"] = events
-        config["hooks"] = hooks
-        try writeConfig(config, to: configURL)
+        if removeLegacyOwnedHooks(from: &hooks) { configChanged = true }
+        if legacyOwnedConfiguration {
+            hooks["enabled"] = true
+            configChanged = true
+        }
+        if desiredOwnership == .created, hooks["enabled"] == nil {
+            hooks["enabled"] = true
+            configChanged = true
+        }
+        if !configurationExisted {
+            hooks["enabled"] = true
+        }
+        let markerChanged = marker != .current(desiredOwnership)
+        guard configChanged || markerChanged else { return false }
+        if configChanged {
+            hooks["events"] = events
+            config["hooks"] = hooks
+            try writeConfig(config, to: configURL)
+        }
+        if markerChanged {
+            do {
+                try AgentIntegrationAtomicFileWriter.write(
+                    configOwnershipContent(for: desiredOwnership),
+                    to: ownershipURL
+                )
+            } catch {
+                if configChanged {
+                    if let originalConfigData {
+                        try? AgentIntegrationAtomicFileWriter.write(
+                            originalConfigData,
+                            to: configURL
+                        )
+                    } else {
+                        try? manager.removeItem(at: configURL)
+                    }
+                }
+                throw error
+            }
+        }
         return true
     }
 
     @discardableResult
     static func uninstall(at configURL: URL) throws -> Bool {
-        guard FileManager.default.fileExists(atPath: configURL.path) else {
-            return false
+        let manager = FileManager.default
+        let ownershipURL = configOwnershipURL(for: configURL)
+        let marker = configOwnershipMarker(at: ownershipURL)
+        let markerExists = marker.exists
+        let ownership = marker.ownership
+        let ownsConfig = ownership == .created
+        guard manager.fileExists(atPath: configURL.path) else {
+            guard markerExists else { return false }
+            try manager.removeItem(at: ownershipURL)
+            return true
         }
         var config = try loadConfig(at: configURL)
         guard var hooks = config["hooks"] as? [String: Any] else {
-            return false
+            if markerExists, config["hooks"] != nil {
+                throw ZCodeHookConfigurationError.invalidConfig
+            }
+            guard markerExists else { return false }
+            if ownsConfig, config.isEmpty {
+                try manager.removeItem(at: configURL)
+            }
+            try manager.removeItem(at: ownershipURL)
+            return true
+        }
+        var configChanged = false
+        if ownsConfig, hooks["enabled"] as? Bool == true {
+            hooks.removeValue(forKey: "enabled")
+            configChanged = true
         }
         if hooks["events"] != nil,
            hooks["events"] as? [String: Any] == nil
@@ -185,26 +329,108 @@ enum ZCodeHookConfiguration {
             throw ZCodeHookConfigurationError.invalidConfig
         }
         var events = hooks["events"] as? [String: Any] ?? [:]
-        var changed = false
         for eventName in Array(events.keys) {
             if removeOwnedHooks(from: &events, eventName: eventName) {
-                changed = true
+                configChanged = true
             }
         }
-        if removeLegacyOwnedHooks(from: &hooks) { changed = true }
-        guard changed else { return false }
-        if events.isEmpty {
-            hooks.removeValue(forKey: "events")
-        } else {
-            hooks["events"] = events
+        if removeLegacyOwnedHooks(from: &hooks) { configChanged = true }
+        guard configChanged || markerExists else {
+            return false
         }
-        if hooks.isEmpty {
-            config.removeValue(forKey: "hooks")
-        } else {
-            config["hooks"] = hooks
+        if configChanged {
+            if events.isEmpty {
+                hooks.removeValue(forKey: "events")
+            } else {
+                hooks["events"] = events
+            }
+            if hooks.isEmpty {
+                config.removeValue(forKey: "hooks")
+            } else {
+                config["hooks"] = hooks
+            }
+            if ownsConfig, config.isEmpty {
+                try manager.removeItem(at: configURL)
+            } else {
+                try writeConfig(config, to: configURL)
+            }
         }
-        try writeConfig(config, to: configURL)
+        if markerExists {
+            try manager.removeItem(at: ownershipURL)
+        }
         return true
+    }
+
+    private static func configOwnershipURL(for configURL: URL) -> URL {
+        configURL.deletingLastPathComponent().appendingPathComponent(
+            configOwnershipFilename
+        )
+    }
+
+    private static func configOwnershipMarker(
+        at ownershipURL: URL
+    ) -> ConfigOwnershipMarker {
+        guard FileManager.default.fileExists(atPath: ownershipURL.path) else {
+            return .missing
+        }
+        guard let data = try? Data(contentsOf: ownershipURL) else {
+            return .invalid
+        }
+        if data == legacyConfigOwnershipContent {
+            return .legacyCreated
+        }
+        guard
+              let text = String(data: data, encoding: .utf8),
+              text.hasPrefix(configOwnershipPrefix),
+              text.hasSuffix("\n")
+        else { return .invalid }
+        let rawValue = String(
+            text.dropFirst(configOwnershipPrefix.count).dropLast()
+        )
+        guard let ownership = ConfigOwnership(rawValue: rawValue) else {
+            return .invalid
+        }
+        return .current(ownership)
+    }
+
+    private static func configOwnershipContent(
+        for ownership: ConfigOwnership
+    ) -> Data {
+        Data("\(configOwnershipPrefix)\(ownership.rawValue)\n".utf8)
+    }
+
+    private static func isLegacyFullyOwnedConfiguration(
+        _ config: [String: Any]
+    ) -> Bool {
+        guard Set(config.keys) == ["hooks"],
+              let hooks = config["hooks"] as? [String: Any],
+              Set(hooks.keys) == ["events"],
+              let events = hooks["events"] as? [String: Any],
+              Set(events.keys) == Set(managedEvents)
+        else { return false }
+
+        return managedEvents.allSatisfy { eventName in
+            guard let matchers = events[eventName] as? [[String: Any]],
+                  matchers.count == 1,
+                  Set(matchers[0].keys) == ["hooks"],
+                  let eventHooks = matchers[0]["hooks"] as? [[String: Any]],
+                  eventHooks.count == 1,
+                  let hook = eventHooks.first,
+                  Set(hook.keys) == Set([
+                      "type",
+                      "command",
+                      "args",
+                      "timeoutMs",
+                      "statusMessage",
+                  ]),
+                  isOwnedHook(hook),
+                  hook["command"] is String,
+                  hook["args"] as? [String]
+                    == ["--agent-hook", "zcode", eventName],
+                  hook["timeoutMs"] as? Int == 250
+            else { return false }
+            return true
+        }
     }
 
     private static func loadConfig(at url: URL) throws -> [String: Any] {
@@ -430,7 +656,10 @@ struct ZCodeAgentAdapter: AgentAdapter {
     private let openWorkingDirectory: (String) -> Bool
 
     var managedIntegrationRelativePaths: [String] {
-        [".zcode/cli/config.json"]
+        [
+            ".zcode/cli/config.json",
+            ".zcode/cli/.threadhelm-config-owner",
+        ]
     }
 
     init(

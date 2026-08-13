@@ -26,12 +26,379 @@ func runZCodeAgentAdapterSelfTest() {
         try runZCodeKeyOrderPreservationSelfTest(at: temporaryRoot)
         try runZCodeMalformedConfigPreservationSelfTest(at: temporaryRoot)
         try runZCodeDisabledHooksSelfTest(at: temporaryRoot)
+        try runZCodeFreshConfigurationEnabledSelfTest(at: temporaryRoot)
+        try runZCodeFreshConfigurationUninstallSelfTest(at: temporaryRoot)
+        try runZCodeMissingOwnershipMarkerRepairSelfTest(at: temporaryRoot)
+        try runZCodeResidualOwnershipMarkerRepairSelfTest(at: temporaryRoot)
+        try runZCodeDisabledMissingMarkerRepairSelfTest(at: temporaryRoot)
+        try runZCodeCorruptOwnershipMarkerRepairSelfTest(at: temporaryRoot)
+        try runZCodeCorruptOrphanMarkerRepairSelfTest(at: temporaryRoot)
+        try runZCodeV1OwnershipMarkerMigrationSelfTest(at: temporaryRoot)
+        try runZCodeLegacyOwnedConfigurationMigrationSelfTest(
+            at: temporaryRoot
+        )
+        try runZCodeExistingEnabledOnlyConfigPreservationSelfTest(
+            at: temporaryRoot
+        )
         try runZCodeDefaultDisabledSelfTest(at: temporaryRoot)
         try runZCodeObservationSelfTest()
         try runZCodeOpenSelfTest()
     } catch {
         fputs("zcode-adapter-self-test failed: \(error)\n", stderr)
         exit(1)
+    }
+}
+
+private func runZCodeFreshConfigurationEnabledSelfTest(at root: URL) throws {
+    let scopeRoot = root.appendingPathComponent(
+        "fresh-enabled",
+        isDirectory: true
+    )
+    let configURL = zcodeSelfTestConfigURL(root: scopeRoot)
+    let adapter = zcodeSelfTestAdapter()
+    let scope = AgentIntegrationScope.isolated(at: scopeRoot)
+
+    guard !FileManager.default.fileExists(atPath: configURL.path),
+          adapter.integrationStatus(in: scope) == .notInstalled,
+          try adapter.installIntegration(in: scope) == .installed,
+          adapter.integrationStatus(in: scope) == .installed,
+          try adapter.installIntegration(in: scope) == .unchanged
+    else {
+        throw ZCodeSelfTestError.failure(
+            "fresh ThreadHelm-owned config must enable ZCode hooks"
+        )
+    }
+    let installed = try zcodeSelfTestJSON(at: configURL)
+    let hooks = installed["hooks"] as? [String: Any]
+    guard hooks?["enabled"] as? Bool == true,
+          hooks?["events"] is [String: Any]
+    else {
+        throw ZCodeSelfTestError.failure(
+            "fresh ThreadHelm-owned config did not persist enabled hooks"
+        )
+    }
+}
+
+private func runZCodeFreshConfigurationUninstallSelfTest(at root: URL) throws {
+    let scopeRoot = root.appendingPathComponent(
+        "fresh-uninstall",
+        isDirectory: true
+    )
+    let configURL = zcodeSelfTestConfigURL(root: scopeRoot)
+    let adapter = zcodeSelfTestAdapter()
+    let scope = AgentIntegrationScope.isolated(at: scopeRoot)
+
+    guard try adapter.installIntegration(in: scope) == .installed,
+          try adapter.uninstallIntegration(in: scope) == .uninstalled,
+          !FileManager.default.fileExists(atPath: configURL.path),
+          adapter.integrationStatus(in: scope) == .notInstalled
+    else {
+        throw ZCodeSelfTestError.failure(
+            "uninstall must remove a fully ThreadHelm-owned fresh config"
+        )
+    }
+}
+
+private func runZCodeMissingOwnershipMarkerRepairSelfTest(
+    at root: URL
+) throws {
+    let scopeRoot = root.appendingPathComponent(
+        "missing-ownership-marker",
+        isDirectory: true
+    )
+    let configURL = zcodeSelfTestConfigURL(root: scopeRoot)
+    let ownershipURL = configURL.deletingLastPathComponent()
+        .appendingPathComponent(".threadhelm-config-owner")
+    let adapter = zcodeSelfTestAdapter()
+    let scope = AgentIntegrationScope.isolated(at: scopeRoot)
+
+    guard try adapter.installIntegration(in: scope) == .installed else {
+        throw ZCodeSelfTestError.failure(
+            "missing-marker setup did not install"
+        )
+    }
+    try FileManager.default.removeItem(at: ownershipURL)
+    guard adapter.integrationStatus(in: scope) == .needsRepair,
+          try adapter.repairIntegration(in: scope) == .repaired,
+          adapter.integrationStatus(in: scope) == .installed,
+          try adapter.uninstallIntegration(in: scope) == .uninstalled,
+          FileManager.default.fileExists(atPath: configURL.path),
+          !FileManager.default.fileExists(atPath: ownershipURL.path),
+          let hooks = try zcodeSelfTestJSON(at: configURL)["hooks"]
+            as? [String: Any],
+          hooks["enabled"] as? Bool == true,
+          hooks["events"] == nil
+    else {
+        throw ZCodeSelfTestError.failure(
+            "missing ZCode ownership marker was not safely repaired"
+        )
+    }
+}
+
+private func runZCodeResidualOwnershipMarkerRepairSelfTest(
+    at root: URL
+) throws {
+    let scopeRoot = root.appendingPathComponent(
+        "residual-ownership-marker",
+        isDirectory: true
+    )
+    let configURL = zcodeSelfTestConfigURL(root: scopeRoot)
+    let ownershipURL = configURL.deletingLastPathComponent()
+        .appendingPathComponent(".threadhelm-config-owner")
+    let adapter = zcodeSelfTestAdapter()
+    let scope = AgentIntegrationScope.isolated(at: scopeRoot)
+
+    guard try adapter.installIntegration(in: scope) == .installed else {
+        throw ZCodeSelfTestError.failure(
+            "residual-marker setup did not install"
+        )
+    }
+    try zcodeSelfTestWriteJSON(["theme": "keep"], to: configURL)
+    guard adapter.integrationStatus(in: scope) == .needsRepair,
+          try adapter.repairIntegration(in: scope) == .repaired,
+          adapter.integrationStatus(in: scope) == .installed,
+          try adapter.uninstallIntegration(in: scope) == .uninstalled,
+          FileManager.default.fileExists(atPath: configURL.path),
+          !FileManager.default.fileExists(atPath: ownershipURL.path),
+          try zcodeSelfTestJSON(at: configURL)["theme"] as? String == "keep",
+          (try zcodeSelfTestJSON(at: configURL))["hooks"] == nil
+    else {
+        throw ZCodeSelfTestError.failure(
+            "residual ZCode ownership marker was not safely repaired"
+        )
+    }
+}
+
+private func runZCodeDisabledMissingMarkerRepairSelfTest(
+    at root: URL
+) throws {
+    let scopeRoot = root.appendingPathComponent(
+        "disabled-missing-marker",
+        isDirectory: true
+    )
+    let configURL = zcodeSelfTestConfigURL(root: scopeRoot)
+    let ownershipURL = configURL.deletingLastPathComponent()
+        .appendingPathComponent(".threadhelm-config-owner")
+    let adapter = zcodeSelfTestAdapter()
+    let scope = AgentIntegrationScope.isolated(at: scopeRoot)
+
+    guard try adapter.installIntegration(in: scope) == .installed else {
+        throw ZCodeSelfTestError.failure(
+            "disabled missing-marker setup did not install"
+        )
+    }
+    var config = try zcodeSelfTestJSON(at: configURL)
+    var hooks = config["hooks"] as? [String: Any] ?? [:]
+    hooks["enabled"] = false
+    config["hooks"] = hooks
+    try zcodeSelfTestWriteJSON(config, to: configURL)
+    try FileManager.default.removeItem(at: ownershipURL)
+
+    guard adapter.integrationStatus(in: scope) == .needsRepair,
+          try adapter.repairIntegration(in: scope) == .repaired,
+          adapter.integrationStatus(in: scope) == .disabled,
+          FileManager.default.fileExists(atPath: ownershipURL.path),
+          try adapter.uninstallIntegration(in: scope) == .uninstalled,
+          FileManager.default.fileExists(atPath: configURL.path),
+          !FileManager.default.fileExists(atPath: ownershipURL.path),
+          let remainingHooks = try zcodeSelfTestJSON(at: configURL)["hooks"]
+            as? [String: Any],
+          remainingHooks["enabled"] as? Bool == false,
+          remainingHooks["events"] == nil
+    else {
+        throw ZCodeSelfTestError.failure(
+            "disabled ZCode config did not repair its missing marker safely"
+        )
+    }
+}
+
+private func runZCodeCorruptOwnershipMarkerRepairSelfTest(
+    at root: URL
+) throws {
+    let scopeRoot = root.appendingPathComponent(
+        "corrupt-ownership-marker",
+        isDirectory: true
+    )
+    let configURL = zcodeSelfTestConfigURL(root: scopeRoot)
+    let ownershipURL = configURL.deletingLastPathComponent()
+        .appendingPathComponent(".threadhelm-config-owner")
+    try FileManager.default.createDirectory(
+        at: configURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try zcodeSelfTestWriteJSON([
+        "theme": "keep",
+        "hooks": ["enabled": true],
+    ], to: configURL)
+
+    let adapter = zcodeSelfTestAdapter()
+    let scope = AgentIntegrationScope.isolated(at: scopeRoot)
+    guard try adapter.installIntegration(in: scope) == .installed else {
+        throw ZCodeSelfTestError.failure(
+            "corrupt-marker setup did not install"
+        )
+    }
+    try Data("corrupt-owner\n".utf8).write(to: ownershipURL)
+
+    guard adapter.integrationStatus(in: scope) == .needsRepair,
+          try adapter.repairIntegration(in: scope) == .repaired,
+          adapter.integrationStatus(in: scope) == .installed,
+          try adapter.uninstallIntegration(in: scope) == .uninstalled,
+          FileManager.default.fileExists(atPath: configURL.path),
+          !FileManager.default.fileExists(atPath: ownershipURL.path),
+          try zcodeSelfTestJSON(at: configURL)["theme"] as? String == "keep",
+          let remainingHooks = try zcodeSelfTestJSON(at: configURL)["hooks"]
+            as? [String: Any],
+          remainingHooks["enabled"] as? Bool == true,
+          remainingHooks["events"] == nil
+    else {
+        throw ZCodeSelfTestError.failure(
+            "corrupt ZCode ownership marker was not safely repaired"
+        )
+    }
+}
+
+private func runZCodeCorruptOrphanMarkerRepairSelfTest(
+    at root: URL
+) throws {
+    let scopeRoot = root.appendingPathComponent(
+        "corrupt-orphan-marker",
+        isDirectory: true
+    )
+    let configURL = zcodeSelfTestConfigURL(root: scopeRoot)
+    let ownershipURL = configURL.deletingLastPathComponent()
+        .appendingPathComponent(".threadhelm-config-owner")
+    try FileManager.default.createDirectory(
+        at: configURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data("corrupt-owner\n".utf8).write(to: ownershipURL)
+
+    let adapter = zcodeSelfTestAdapter()
+    let scope = AgentIntegrationScope.isolated(at: scopeRoot)
+    guard adapter.integrationStatus(in: scope) == .needsRepair,
+          try adapter.repairIntegration(in: scope) == .repaired,
+          adapter.integrationStatus(in: scope) == .installed,
+          try adapter.uninstallIntegration(in: scope) == .uninstalled,
+          !FileManager.default.fileExists(atPath: configURL.path),
+          !FileManager.default.fileExists(atPath: ownershipURL.path)
+    else {
+        throw ZCodeSelfTestError.failure(
+            "orphaned corrupt ZCode marker was not safely repaired"
+        )
+    }
+}
+
+private func runZCodeV1OwnershipMarkerMigrationSelfTest(
+    at root: URL
+) throws {
+    let scopeRoot = root.appendingPathComponent(
+        "v1-ownership-marker",
+        isDirectory: true
+    )
+    let configURL = zcodeSelfTestConfigURL(root: scopeRoot)
+    let ownershipURL = configURL.deletingLastPathComponent()
+        .appendingPathComponent(".threadhelm-config-owner")
+    let adapter = zcodeSelfTestAdapter()
+    let scope = AgentIntegrationScope.isolated(at: scopeRoot)
+
+    guard try adapter.installIntegration(in: scope) == .installed else {
+        throw ZCodeSelfTestError.failure(
+            "v1 ownership-marker setup did not install"
+        )
+    }
+    try Data("threadhelm-managed-zcode-config-v1\n".utf8)
+        .write(to: ownershipURL)
+
+    guard adapter.integrationStatus(in: scope) == .needsRepair,
+          try adapter.repairIntegration(in: scope) == .repaired,
+          adapter.integrationStatus(in: scope) == .installed,
+          try adapter.uninstallIntegration(in: scope) == .uninstalled,
+          !FileManager.default.fileExists(atPath: configURL.path),
+          !FileManager.default.fileExists(atPath: ownershipURL.path)
+    else {
+        throw ZCodeSelfTestError.failure(
+            "v1 ZCode ownership marker was not migrated as created"
+        )
+    }
+}
+
+private func runZCodeExistingEnabledOnlyConfigPreservationSelfTest(
+    at root: URL
+) throws {
+    let scopeRoot = root.appendingPathComponent(
+        "existing-enabled-only",
+        isDirectory: true
+    )
+    let configURL = zcodeSelfTestConfigURL(root: scopeRoot)
+    try FileManager.default.createDirectory(
+        at: configURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try zcodeSelfTestWriteJSON([
+        "hooks": ["enabled": true],
+    ], to: configURL)
+
+    let adapter = zcodeSelfTestAdapter()
+    let scope = AgentIntegrationScope.isolated(at: scopeRoot)
+    guard try adapter.installIntegration(in: scope) == .installed,
+          try adapter.uninstallIntegration(in: scope) == .uninstalled,
+          FileManager.default.fileExists(atPath: configURL.path),
+          let hooks = try zcodeSelfTestJSON(at: configURL)["hooks"]
+            as? [String: Any],
+          hooks["enabled"] as? Bool == true,
+          hooks["events"] == nil
+    else {
+        throw ZCodeSelfTestError.failure(
+            "uninstall removed an existing enabled-only ZCode config"
+        )
+    }
+}
+
+private func runZCodeLegacyOwnedConfigurationMigrationSelfTest(
+    at root: URL
+) throws {
+    let scopeRoot = root.appendingPathComponent(
+        "legacy-owned-migration",
+        isDirectory: true
+    )
+    let configURL = zcodeSelfTestConfigURL(root: scopeRoot)
+    try FileManager.default.createDirectory(
+        at: configURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    let eventNames = [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "Stop",
+    ]
+    var events: [String: Any] = [:]
+    for eventName in eventNames {
+        events[eventName] = [[
+            "hooks": [zcodeSelfTestOwnedHook(
+                eventName: eventName,
+                executablePath: "/tmp/threadhelm-zcode-adapter"
+            )],
+        ]]
+    }
+    try zcodeSelfTestWriteJSON([
+        "hooks": ["events": events],
+    ], to: configURL)
+
+    let adapter = zcodeSelfTestAdapter()
+    let scope = AgentIntegrationScope.isolated(at: scopeRoot)
+    guard adapter.integrationStatus(in: scope) == .needsRepair,
+          try adapter.installIntegration(in: scope) == .installed,
+          adapter.integrationStatus(in: scope) == .installed,
+          try adapter.uninstallIntegration(in: scope) == .uninstalled,
+          !FileManager.default.fileExists(atPath: configURL.path)
+    else {
+        throw ZCodeSelfTestError.failure(
+            "legacy ThreadHelm-only ZCode config was not migrated"
+        )
     }
 }
 

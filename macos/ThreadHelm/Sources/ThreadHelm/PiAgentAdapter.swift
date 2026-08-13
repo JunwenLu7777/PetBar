@@ -472,6 +472,15 @@ func locatePiExecutable(
 }
 
 private func piVersion(executableURL: URL) -> String? {
+    for _ in 0..<2 {
+        if let version = probePiVersion(executableURL: executableURL) {
+            return version
+        }
+    }
+    return nil
+}
+
+private func probePiVersion(executableURL: URL) -> String? {
     let process = Process()
     process.executableURL = executableURL
     process.arguments = ["--version"]
@@ -486,7 +495,7 @@ private func piVersion(executableURL: URL) -> String? {
     let capture = captureProcessOutput(
         process: process,
         output: output.fileHandleForReading,
-        timeout: 0.75,
+        timeout: 2,
         maximumOutputBytes: 4_096
     )
     guard capture.termination == .exited || capture.termination == .outputClosed,
