@@ -1,10 +1,5 @@
 import Foundation
 
-enum PresentationMode: String, CaseIterable {
-    case petPanel = "pet-panel"
-    case dynamicIsland = "dynamic-island"
-}
-
 enum DynamicIslandTab: String, CaseIterable {
     case tasks
     case agents
@@ -304,7 +299,6 @@ struct ActivityDashboardSnapshot: Equatable {
     var acknowledgedTerminalTaskKeys = Set<String>()
     var isTaskRefreshing = false
     var codexDesktopRunning = false
-    var petEnabled = true
 }
 
 func terminalTaskAcknowledgementKey(

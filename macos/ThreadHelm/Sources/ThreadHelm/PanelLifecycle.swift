@@ -2,8 +2,8 @@
 //  PanelLifecycle.swift
 //  ThreadHelm
 //
-//  模块职责：面板显隐决策（运行状态/用户隐藏/宠物定位）、宠物点击行为
-//  判定，以及运行时健康状态文件（panel-health.json）的节流写入。
+//  模块职责：动态岛显隐决策，以及运行时健康状态文件
+//  （panel-health.json）的节流写入。
 //
 
 import AppKit
@@ -11,21 +11,6 @@ import ApplicationServices
 import CoreGraphics
 import Darwin
 import Foundation
-
-func shouldPresentPanel(
-    codexDesktopRunning: Bool,
-    hiddenByUser: Bool,
-    hasPetLocation: Bool
-) -> Bool {
-    codexDesktopRunning && !hiddenByUser && hasPetLocation
-}
-
-func shouldPresentDetachedPetPanel(
-    codexDesktopRunning: Bool,
-    hiddenByUser: Bool
-) -> Bool {
-    codexDesktopRunning && !hiddenByUser
-}
 
 func shouldPresentClaudePermissionPanel(
     cachedCodexDesktopRunning: Bool,
@@ -41,17 +26,8 @@ func shouldPresentClaudePermissionPanel(
 
 enum PresentationCommand: Equatable {
     case toggleVisibility
-    case togglePet
-    case selectMode(PresentationMode)
     case moveToCurrentDisplay
     case quit
-}
-
-struct PresentationRuntimeDecision: Equatable {
-    let showPetPanel: Bool
-    let showDynamicIsland: Bool
-    let bindLegacyPermissionPresenter: Bool
-    let bindDynamicPermissionPresenter: Bool
 }
 
 enum DynamicIslandVisibilityAction: Equatable {
@@ -61,75 +37,11 @@ enum DynamicIslandVisibilityAction: Equatable {
 }
 
 func dynamicIslandVisibilityAction(
-    decision: PresentationRuntimeDecision,
+    hiddenByUser: Bool,
     hasCurrentPermissionRequest: Bool
 ) -> DynamicIslandVisibilityAction {
-    guard decision.showDynamicIsland else { return .hidden }
+    guard !hiddenByUser else { return .hidden }
     return hasCurrentPermissionRequest ? .confirmation : .capsule
-}
-
-func presentationRuntimeDecision(
-    mode: PresentationMode,
-    hiddenByUser: Bool,
-    petEnabled: Bool = true
-) -> PresentationRuntimeDecision {
-    PresentationRuntimeDecision(
-        showPetPanel: !hiddenByUser && petEnabled && mode == .petPanel,
-        showDynamicIsland: !hiddenByUser && mode == .dynamicIsland,
-        bindLegacyPermissionPresenter: mode == .petPanel,
-        bindDynamicPermissionPresenter: mode == .dynamicIsland
-    )
-}
-
-func codexExitPresentationDecision(
-    mode: PresentationMode,
-    hiddenByUser: Bool,
-    petEnabled: Bool = true
-) -> PresentationRuntimeDecision {
-    presentationRuntimeDecision(
-        mode: mode,
-        hiddenByUser: hiddenByUser,
-        petEnabled: petEnabled
-    )
-}
-
-func codexLifecyclePresentationDecision(
-    mode: PresentationMode,
-    hiddenByUser: Bool,
-    codexDesktopRunning: Bool,
-    petEnabled: Bool = true
-) -> PresentationRuntimeDecision {
-    if codexDesktopRunning {
-        return presentationRuntimeDecision(
-            mode: mode,
-            hiddenByUser: hiddenByUser,
-            petEnabled: petEnabled
-        )
-    }
-    return codexExitPresentationDecision(
-        mode: mode,
-        hiddenByUser: hiddenByUser,
-        petEnabled: petEnabled
-    )
-}
-
-func shouldHandlePetClick(mode: PresentationMode) -> Bool {
-    mode == .petPanel
-}
-
-func isPresentationCommandEnabled(
-    _ command: PresentationCommand,
-    mode: PresentationMode,
-    petEnabled: Bool = true
-) -> Bool {
-    switch command {
-    case .moveToCurrentDisplay:
-        return mode == .dynamicIsland
-    case .selectMode(.petPanel):
-        return petEnabled
-    case .toggleVisibility, .togglePet, .selectMode(.dynamicIsland), .quit:
-        return true
-    }
 }
 
 func acknowledgeTerminalTask(
@@ -138,38 +50,6 @@ func acknowledgeTerminalTask(
 ) {
     guard let key = terminalTaskAcknowledgementKey(for: item) else { return }
     keys.insert(key)
-}
-
-func dashboardSnapshotPreservedAcrossPresentationSwitch(
-    before: ActivityDashboardSnapshot,
-    after: ActivityDashboardSnapshot
-) -> Bool {
-    before == after
-}
-
-enum PetPanelClickAction: Equatable {
-    case none
-    case show
-    case hide
-}
-
-func petPanelClickAction(
-    clickCount: Int,
-    clickLocation: NSPoint,
-    petVisibleRect: NSRect,
-    panelHidden: Bool,
-    suppressVisibleDoubleClick: Bool
-) -> PetPanelClickAction {
-    guard petVisibleRect.contains(clickLocation) else {
-        return .none
-    }
-    if panelHidden {
-        return .show
-    }
-    guard !suppressVisibleDoubleClick, clickCount == 2 else {
-        return .none
-    }
-    return .hide
 }
 
 final class RuntimeHealthWriter {

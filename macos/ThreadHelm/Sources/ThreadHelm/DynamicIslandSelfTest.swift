@@ -2241,155 +2241,6 @@ private func assertDynamicIslandConfirmationWorkspace() {
         exit(1)
     }
 
-    func applyRoundTripPresentationMode(
-        _ mode: PresentationMode,
-        controller: DynamicIslandWindowController,
-        dynamicPresenter: DynamicIslandConfirmationPresenter,
-        legacyPresenter: ClaudePermissionPresenting,
-        coordinator: ClaudePermissionCoordinator,
-        hasCurrentPermissionRequest: Bool
-    ) {
-        controller.hide()
-        let runtimeDecision = presentationRuntimeDecision(
-            mode: mode,
-            hiddenByUser: false
-        )
-        dynamicPresenter.setPresentationActive(
-            runtimeDecision.bindDynamicPermissionPresenter
-        )
-        if runtimeDecision.bindDynamicPermissionPresenter {
-            coordinator.setPresenter(dynamicPresenter)
-        } else if runtimeDecision.bindLegacyPermissionPresenter {
-            coordinator.setPresenter(legacyPresenter)
-        }
-        switch dynamicIslandVisibilityAction(
-            decision: runtimeDecision,
-            hasCurrentPermissionRequest: hasCurrentPermissionRequest
-        ) {
-        case .hidden:
-            controller.hide()
-        case .capsule:
-            controller.showCapsule()
-        case .confirmation:
-            controller.expand(.confirmation)
-        }
-        controller.completeAnimationForSelfTest()
-    }
-
-    var queuedRoundTripSnapshot = ClaudePermissionQueueSnapshot.empty
-    let queuedRoundTripController = DynamicIslandWindowController()
-    let queuedRoundTripViewController = DynamicIslandConfirmationViewController()
-    let queuedRoundTripPresenter = queuedRoundTripController
-        .makeConfirmationPresenter(viewController: queuedRoundTripViewController)
-    let queuedRoundTripLegacyPresenter = ClaudePermissionPresenterSpy()
-    var queuedRoundTripDecisions: [ClaudePermissionUserDecision] = []
-    let queuedRoundTripCoordinator = ClaudePermissionCoordinator(
-        now: { now },
-        openTerminal: { _ in },
-        onQueueChange: { queuedRoundTripSnapshot = $0 }
-    )
-    applyRoundTripPresentationMode(
-        .dynamicIsland,
-        controller: queuedRoundTripController,
-        dynamicPresenter: queuedRoundTripPresenter,
-        legacyPresenter: queuedRoundTripLegacyPresenter,
-        coordinator: queuedRoundTripCoordinator,
-        hasCurrentPermissionRequest: false
-    )
-    queuedRoundTripCoordinator.enqueue(prompt: toolPrompt) {
-        queuedRoundTripDecisions.append($0)
-    }
-    queuedRoundTripController.completeAnimationForSelfTest()
-    guard queuedRoundTripSnapshot.current?.requestID == toolPrompt.requestID,
-          queuedRoundTripController.state == .expanded(.confirmation)
-    else {
-        fputs("dynamic island queued round-trip setup self-test failed\n", stderr)
-        exit(1)
-    }
-    applyRoundTripPresentationMode(
-        .petPanel,
-        controller: queuedRoundTripController,
-        dynamicPresenter: queuedRoundTripPresenter,
-        legacyPresenter: queuedRoundTripLegacyPresenter,
-        coordinator: queuedRoundTripCoordinator,
-        hasCurrentPermissionRequest: queuedRoundTripSnapshot.current != nil
-    )
-    guard queuedRoundTripController.state == .hidden,
-          queuedRoundTripSnapshot.current?.requestID == toolPrompt.requestID,
-          queuedRoundTripDecisions.isEmpty
-    else {
-        fputs("dynamic island queued round-trip pet phase self-test failed\n", stderr)
-        exit(1)
-    }
-    applyRoundTripPresentationMode(
-        .dynamicIsland,
-        controller: queuedRoundTripController,
-        dynamicPresenter: queuedRoundTripPresenter,
-        legacyPresenter: queuedRoundTripLegacyPresenter,
-        coordinator: queuedRoundTripCoordinator,
-        hasCurrentPermissionRequest: queuedRoundTripSnapshot.current != nil
-    )
-    RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
-    queuedRoundTripController.completeAnimationForSelfTest()
-    guard queuedRoundTripController.state == .expanded(.confirmation),
-          queuedRoundTripSnapshot.current?.requestID == toolPrompt.requestID,
-          queuedRoundTripDecisions.isEmpty
-    else {
-        fputs("dynamic island queued mode round-trip self-test failed\n", stderr)
-        exit(1)
-    }
-
-    var emptyRoundTripSnapshot = ClaudePermissionQueueSnapshot.empty
-    let emptyRoundTripController = DynamicIslandWindowController()
-    let emptyRoundTripViewController = DynamicIslandConfirmationViewController()
-    let emptyRoundTripPresenter = emptyRoundTripController
-        .makeConfirmationPresenter(viewController: emptyRoundTripViewController)
-    let emptyRoundTripLegacyPresenter = ClaudePermissionPresenterSpy()
-    let emptyRoundTripCoordinator = ClaudePermissionCoordinator(
-        now: { now },
-        openTerminal: { _ in },
-        onQueueChange: { emptyRoundTripSnapshot = $0 }
-    )
-    applyRoundTripPresentationMode(
-        .dynamicIsland,
-        controller: emptyRoundTripController,
-        dynamicPresenter: emptyRoundTripPresenter,
-        legacyPresenter: emptyRoundTripLegacyPresenter,
-        coordinator: emptyRoundTripCoordinator,
-        hasCurrentPermissionRequest: false
-    )
-    guard emptyRoundTripController.state == .capsule else {
-        fputs("dynamic island empty round-trip setup self-test failed\n", stderr)
-        exit(1)
-    }
-    applyRoundTripPresentationMode(
-        .petPanel,
-        controller: emptyRoundTripController,
-        dynamicPresenter: emptyRoundTripPresenter,
-        legacyPresenter: emptyRoundTripLegacyPresenter,
-        coordinator: emptyRoundTripCoordinator,
-        hasCurrentPermissionRequest: emptyRoundTripSnapshot.current != nil
-    )
-    guard emptyRoundTripController.state == .hidden else {
-        fputs("dynamic island empty round-trip pet phase self-test failed\n", stderr)
-        exit(1)
-    }
-    applyRoundTripPresentationMode(
-        .dynamicIsland,
-        controller: emptyRoundTripController,
-        dynamicPresenter: emptyRoundTripPresenter,
-        legacyPresenter: emptyRoundTripLegacyPresenter,
-        coordinator: emptyRoundTripCoordinator,
-        hasCurrentPermissionRequest: emptyRoundTripSnapshot.current != nil
-    )
-    RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
-    emptyRoundTripController.completeAnimationForSelfTest()
-    guard emptyRoundTripController.state == .capsule,
-          emptyRoundTripSnapshot.current == nil
-    else {
-        fputs("dynamic island empty mode round-trip self-test failed\n", stderr)
-        exit(1)
-    }
     let terminalFallbackController = DynamicIslandConfirmationViewController()
     var terminalFallbackCount = 0
     var terminalFallbackDecisions: [ClaudePermissionUserDecision] = []
@@ -2681,13 +2532,6 @@ func runDynamicIslandSelfTest() -> Never {
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
 
-    let preference = PresentationModePreference(defaults: defaults)
-    guard preference.mode == .petPanel else { exit(1) }
-    preference.mode = .dynamicIsland
-    guard PresentationModePreference(defaults: defaults).mode == .dynamicIsland else {
-        exit(1)
-    }
-
     let now = Date()
     let active = (0..<7).map {
         TaskProgressItem(
@@ -2727,74 +2571,6 @@ func runDynamicIslandSelfTest() -> Never {
     assertDynamicIslandQuotaWorkspace()
     assertDynamicIslandConfirmationWorkspace()
     assertDynamicIslandPreviewRendering()
-
-    _ = NSApplication.shared
-    let resetCredits = CodexResetCreditsSnapshot(
-        credits: [],
-        reportedAvailableCount: 2,
-        updatedAt: now
-    )
-    let quotaView = QuotaPanelView(
-        frame: NSRect(origin: .zero, size: panelSizeForTaskRows(1))
-    )
-    quotaView.rows = [QuotaRow(name: "old", remainingPercent: 1, resetsAt: nil)]
-    quotaView.applyDashboardSnapshot(ActivityDashboardSnapshot(
-        taskCollection: TaskProgressCollectionSnapshot.displaying([active[0]]),
-        quotaStates: [
-            .codex: QuotaProviderState(
-                rows: [QuotaRow(
-                    name: "周额度",
-                    remainingPercent: 64,
-                    resetsAt: now
-                )],
-                resetCredits: resetCredits,
-                statusText: "Codex ok",
-                errorText: nil,
-                updatedAt: now,
-                isRefreshing: false,
-                isStale: false
-            ),
-            .claudeCode: QuotaProviderState(
-                rows: [QuotaRow(
-                    name: "5 小时",
-                    remainingPercent: 91,
-                    resetsAt: nil
-                )],
-                resetCredits: nil,
-                statusText: "Claude ok",
-                errorText: nil,
-                updatedAt: now,
-                isRefreshing: true,
-                isStale: false
-            ),
-        ],
-        availableProviders: QuotaProvider.allCases,
-        selectedQuotaProvider: .claudeCode
-    ))
-    var requestedDynamicIslandCount = 0
-    quotaView.onRequestDynamicIsland = { requestedDynamicIslandCount += 1 }
-    let petPanelModeSwitch = quotaView.modeSwitchSnapshotForSelfTest()
-    quotaView.performModeSwitchForSelfTest()
-    guard quotaView.selectedQuotaProvider == .claudeCode,
-          quotaView.rows.map(\.name) == ["5 小时"],
-          quotaView.codexResetCredits == resetCredits,
-          quotaView.statusText == "Claude ok",
-          quotaView.isQuotaRefreshing,
-          quotaView.taskProgress.items.count == 1,
-          quotaView.providerRemainingPercents == [.codex: 64, .claudeCode: 91],
-          petPanelModeSwitch.buttonFrame.width == 60,
-          petPanelModeSwitch.buttonFrame.height == 18,
-          petPanelModeSwitch.buttonFrame.maxX + 8
-            == petPanelModeSwitch.hideButtonFrame.minX,
-          !petPanelModeSwitch.buttonFrame.intersects(
-              petPanelModeSwitch.hideButtonFrame
-          ),
-          petPanelModeSwitch.title == "灵动岛",
-          petPanelModeSwitch.toolTip == "切换到灵动岛",
-          petPanelModeSwitch.accessibilityLabel == "切换到灵动岛",
-          petPanelModeSwitch.accessibilityHelp?.contains("显示灵动岛胶囊") == true,
-          requestedDynamicIslandCount == 1
-    else { exit(1) }
 
     let firstPromptID = UUID()
     let secondPromptID = UUID()
@@ -2954,7 +2730,7 @@ func runDynamicIslandSelfTest() -> Never {
     else { exit(1) }
 
     print(
-        "dynamic-island: mode-default=pet mode-persistence=pass "
+        "dynamic-island: presentation=dynamic-island-only "
             + "placement=notch-safe+negative-screen+small-screen "
             + "capsule-drag=threshold+cross-screen-snap "
             + "state-machine=pass "
@@ -2974,8 +2750,6 @@ func runDynamicIslandSelfTest() -> Never {
             + "source-action=immediate open-callback=forwarded "
             + "hover=no-selection-change+collapse-hide "
             + "terminal-time=stable "
-            + "mode-switch=capsule-to-pet+pet-to-dynamic "
-            + "mode-roundtrip=queued+empty "
             + "permission-coordinator=dedupe+fifo presenter-switch=no-completion "
             + "decision=exactly-once expire=no-completion "
             + "stale-presentation=releases-completion "

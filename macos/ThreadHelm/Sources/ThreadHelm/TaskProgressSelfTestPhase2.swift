@@ -23,8 +23,8 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
     let migratedKeys = migrateLegacyThreadHelmPreferences(
         from: [
             [
-                "presentation-mode": PresentationMode.dynamicIsland.rawValue,
-                "pet-enabled": false,
+                "presentation-mode": "pet-panel",
+                "pet-enabled": true,
                 "selected-quota-provider": QuotaProvider.claudeCode.rawValue,
                 "chatbird-pet-origin": [32.0, 64.0],
                 "selected-avatar-id": "custom:legacy-chatbird",

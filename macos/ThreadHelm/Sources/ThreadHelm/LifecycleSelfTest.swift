@@ -2,9 +2,9 @@
 //  LifecycleSelfTest.swift
 //  ThreadHelm
 //
-//  模块职责：--self-test-lifecycle 自测——Codex 桌面应用识别、面板可见性
-//  决策、宠物点击恢复面板、原生活动窗口/无障碍标签匹配、屏外摆放、
-//  活动开关点击目标与抑制策略。
+//  模块职责：--self-test-lifecycle 自测——Codex 桌面应用识别、动态岛显隐
+//  决策、原生活动窗口/无障碍标签匹配、屏外摆放、活动开关点击目标
+//  与抑制策略。
 //
 
 import AppKit
@@ -87,131 +87,30 @@ func runLifecycleSelfTest() -> Never {
         }
     }
 
-    let visibilityCases = [
-        (true, false, true, true),
-        (false, false, true, false),
-        (true, true, true, false),
-        (true, false, false, false),
-    ]
-    for (index, test) in visibilityCases.enumerated() {
-        let actual = shouldPresentPanel(
-            codexDesktopRunning: test.0,
-            hiddenByUser: test.1,
-            hasPetLocation: test.2
-        )
-        guard actual == test.3 else {
-            fputs("panel visibility case \(index + 1) failed\n", stderr)
-            exit(1)
-        }
-    }
-
-    guard shouldPresentDetachedPetPanel(
-        codexDesktopRunning: true,
-        hiddenByUser: false
-    ),
-          !shouldPresentDetachedPetPanel(
-              codexDesktopRunning: false,
-              hiddenByUser: false
-          ),
-          !shouldPresentDetachedPetPanel(
-              codexDesktopRunning: true,
-              hiddenByUser: true
-          )
-    else {
-        fputs("detached pet panel visibility decision failed\n", stderr)
-        exit(1)
-    }
-
-    let petDecision = presentationRuntimeDecision(
-        mode: .petPanel,
-        hiddenByUser: false
-    )
-    guard petDecision == PresentationRuntimeDecision(
-        showPetPanel: true,
-        showDynamicIsland: false,
-        bindLegacyPermissionPresenter: true,
-        bindDynamicPermissionPresenter: false
-    ) else {
-        fputs("pet presentation runtime decision failed\n", stderr)
-        exit(1)
-    }
-
-    let dynamicDecision = presentationRuntimeDecision(
-        mode: .dynamicIsland,
-        hiddenByUser: false
-    )
-    guard dynamicDecision == PresentationRuntimeDecision(
-        showPetPanel: false,
-        showDynamicIsland: true,
-        bindLegacyPermissionPresenter: false,
-        bindDynamicPermissionPresenter: true
-    ) else {
-        fputs("dynamic presentation runtime decision failed\n", stderr)
-        exit(1)
-    }
-
-    let hiddenDynamicDecision = presentationRuntimeDecision(
-        mode: .dynamicIsland,
-        hiddenByUser: true
-    )
-    guard hiddenDynamicDecision == PresentationRuntimeDecision(
-        showPetPanel: false,
-        showDynamicIsland: false,
-        bindLegacyPermissionPresenter: false,
-        bindDynamicPermissionPresenter: true
-    ) else {
-        fputs("hidden dynamic presentation runtime decision failed\n", stderr)
-        exit(1)
-    }
-
     guard dynamicIslandVisibilityAction(
-        decision: dynamicDecision,
+        hiddenByUser: false,
         hasCurrentPermissionRequest: false
     ) == .capsule,
           dynamicIslandVisibilityAction(
-              decision: dynamicDecision,
+              hiddenByUser: false,
               hasCurrentPermissionRequest: true
           ) == .confirmation,
           dynamicIslandVisibilityAction(
-              decision: hiddenDynamicDecision,
-              hasCurrentPermissionRequest: true
-          ) == .hidden,
-          dynamicIslandVisibilityAction(
-              decision: petDecision,
+              hiddenByUser: true,
               hasCurrentPermissionRequest: true
           ) == .hidden
     else {
-        fputs("prompt-aware dynamic island visibility decision failed\n", stderr)
+        fputs("dynamic-island-only visibility decision failed\n", stderr)
         exit(1)
     }
 
-    guard isPresentationCommandEnabled(
+    let presentationCommands: [PresentationCommand] = [
+        .toggleVisibility,
         .moveToCurrentDisplay,
-        mode: .dynamicIsland
-    ),
-          !isPresentationCommandEnabled(
-              .moveToCurrentDisplay,
-              mode: .petPanel
-          ),
-          isPresentationCommandEnabled(
-              .selectMode(.petPanel),
-              mode: .dynamicIsland,
-              petEnabled: true
-          ),
-          !isPresentationCommandEnabled(
-              .selectMode(.petPanel),
-              mode: .dynamicIsland,
-              petEnabled: false
-          ),
-          isPresentationCommandEnabled(
-              .selectMode(.dynamicIsland),
-              mode: .dynamicIsland,
-              petEnabled: false
-          ),
-          isPresentationCommandEnabled(.toggleVisibility, mode: .petPanel),
-          isPresentationCommandEnabled(.quit, mode: .dynamicIsland)
-    else {
-        fputs("presentation command enabled state failed\n", stderr)
+        .quit,
+    ]
+    guard presentationCommands.count == 3 else {
+        fputs("dynamic-island-only command coverage failed\n", stderr)
         exit(1)
     }
 
@@ -249,8 +148,8 @@ func runLifecycleSelfTest() -> Never {
     let migratedKeys = migrateLegacyThreadHelmPreferences(
         from: [
             [
-                "presentation-mode": PresentationMode.dynamicIsland.rawValue,
-                "pet-enabled": false,
+                "presentation-mode": "pet-panel",
+                "pet-enabled": true,
                 "selected-quota-provider": QuotaProvider.claudeCode.rawValue,
                 "chatbird-pet-origin": [120.0, 240.0],
                 "unrelated-value": "must-not-migrate",
@@ -312,90 +211,6 @@ func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
-    let preservedSnapshot = ActivityDashboardSnapshot(
-        taskCollection: TaskProgressCollectionSnapshot.displaying([
-            activeTask,
-            completedTask,
-        ]),
-        quotaStates: [
-            .codex: QuotaProviderState(
-                rows: [QuotaRow(name: "周额度", remainingPercent: 73, resetsAt: nil)],
-                statusText: "Codex ok"
-            )
-        ],
-        availableProviders: [.codex],
-        selectedQuotaProvider: .codex,
-        permissionQueue: ClaudePermissionQueueSnapshot(
-            current: ClaudePermissionQueueItem(
-                requestID: UUID(),
-                interactionKind: .toolApproval,
-                title: "Allow tool",
-                sessionID: nil,
-                arrivedAt: now
-            )
-        ),
-        acknowledgedTerminalTaskKeys: acknowledgementKeys,
-        isTaskRefreshing: true,
-        codexDesktopRunning: true
-    )
-    guard dashboardSnapshotPreservedAcrossPresentationSwitch(
-        before: preservedSnapshot,
-        after: preservedSnapshot
-    ) else {
-        fputs("dashboard snapshot presentation switch preservation failed\n", stderr)
-        exit(1)
-    }
-
-    guard codexExitPresentationDecision(
-        mode: .petPanel,
-        hiddenByUser: false
-    ) == PresentationRuntimeDecision(
-        showPetPanel: true,
-        showDynamicIsland: false,
-        bindLegacyPermissionPresenter: true,
-        bindDynamicPermissionPresenter: false
-    ),
-          codexExitPresentationDecision(
-              mode: .petPanel,
-              hiddenByUser: false,
-              petEnabled: false
-          ) == PresentationRuntimeDecision(
-              showPetPanel: false,
-              showDynamicIsland: false,
-              bindLegacyPermissionPresenter: true,
-              bindDynamicPermissionPresenter: false
-          ),
-          codexExitPresentationDecision(
-              mode: .dynamicIsland,
-              hiddenByUser: false
-          )
-            == PresentationRuntimeDecision(
-                showPetPanel: false,
-                showDynamicIsland: true,
-                bindLegacyPermissionPresenter: false,
-                bindDynamicPermissionPresenter: true
-            )
-    else {
-        fputs("codex exit presentation decision failed\n", stderr)
-        exit(1)
-    }
-
-    guard codexExitPresentationDecision(
-        mode: .dynamicIsland,
-        hiddenByUser: true
-    ) == hiddenDynamicDecision,
-          codexLifecyclePresentationDecision(
-              mode: .dynamicIsland,
-              hiddenByUser: true,
-              codexDesktopRunning: true
-          ) == hiddenDynamicDecision,
-          shouldHandlePetClick(mode: .petPanel),
-          !shouldHandlePetClick(mode: .dynamicIsland)
-    else {
-        fputs("hidden lifecycle or pet click mode gate failed\n", stderr)
-        exit(1)
-    }
-
     let claudePermissionVisibilityCases = [
         (cached: true, live: true, expected: true),
         (cached: false, live: true, expected: true),
@@ -411,50 +226,6 @@ func runLifecycleSelfTest() -> Never {
             fputs("Claude permission visibility case \(index + 1) failed\n", stderr)
             exit(1)
         }
-    }
-
-    let petRect = NSRect(x: 400, y: 260, width: 163, height: 177)
-    let petClickCases: [PetPanelClickAction] = [
-        petPanelClickAction(
-            clickCount: 1,
-            clickLocation: NSPoint(x: petRect.midX, y: petRect.midY),
-            petVisibleRect: petRect,
-            panelHidden: true,
-            suppressVisibleDoubleClick: false
-        ),
-        petPanelClickAction(
-            clickCount: 2,
-            clickLocation: NSPoint(x: petRect.midX, y: petRect.midY),
-            petVisibleRect: petRect,
-            panelHidden: false,
-            suppressVisibleDoubleClick: false
-        ),
-        petPanelClickAction(
-            clickCount: 2,
-            clickLocation: NSPoint(x: petRect.midX, y: petRect.midY),
-            petVisibleRect: petRect,
-            panelHidden: false,
-            suppressVisibleDoubleClick: true
-        ),
-        petPanelClickAction(
-            clickCount: 1,
-            clickLocation: NSPoint(x: petRect.midX, y: petRect.midY),
-            petVisibleRect: petRect,
-            panelHidden: false,
-            suppressVisibleDoubleClick: false
-        ),
-        petPanelClickAction(
-            clickCount: 1,
-            clickLocation: NSPoint(x: petRect.maxX + 1, y: petRect.midY),
-            petVisibleRect: petRect,
-            panelHidden: true,
-            suppressVisibleDoubleClick: false
-        ),
-    ]
-    let expectedPetClickActions: [PetPanelClickAction] = [.show, .hide, .none, .none, .none]
-    guard petClickCases == expectedPetClickActions else {
-        fputs("pet click restore behavior failed\n", stderr)
-        exit(1)
     }
 
     let activityWindowTitles: [(String?, Bool)] = [
@@ -594,6 +365,6 @@ func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
-    print("lifecycle-self-test: desktop-app=6/6 standalone-identity=pass legacy-preferences=migrated-without-overwrite standalone-pet=resource+cross-display presentation-mode=pet-gated status-item=restore dock-icon=resource activation=regular codex-exit=pet-independent+dynamic-capsule visibility=4/4 presentation-runtime=5/5 mode-switch-preserves-dashboard=pass terminal-ack=active-skipped+terminal-memory hidden-lifecycle=preserved pet-click-mode-gate=pass claude-permission-visibility=4/4 live-state-wins=2/2 pet-click-restore=5/5 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut")
+    print("lifecycle-self-test: desktop-app=6/6 standalone-identity=pass legacy-preferences=pet-keys-ignored dynamic-island-only=visibility+commands status-item=restore dock-icon=resource activation=regular terminal-ack=active-skipped+terminal-memory claude-permission-visibility=4/4 live-state-wins=2/2 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut")
     exit(0)
 }

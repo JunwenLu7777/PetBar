@@ -318,12 +318,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.title = isPanelHiddenByUser ? "显示 ThreadHelm" : "隐藏 ThreadHelm"
             item.keyEquivalent = threadHelmVisibilityHotKeyKeyEquivalent
             item.keyEquivalentModifierMask = threadHelmVisibilityHotKeyModifierMask
-        case .togglePet:
-            item.title = ""
-            item.isEnabled = false
-        case .selectMode:
-            item.title = ""
-            item.isEnabled = false
         case .moveToCurrentDisplay:
             item.title = "移到当前显示器"
         case .quit:
@@ -345,8 +339,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } else {
                 hidePanelByUser()
             }
-        case .togglePet, .selectMode:
-            return
         case .moveToCurrentDisplay:
             dynamicIslandController?.moveToScreenContainingMouse()
         case .quit:
@@ -618,13 +610,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showCurrentPresentation() {
-        let decision = presentationRuntimeDecision(
-            mode: .dynamicIsland,
-            hiddenByUser: isPanelHiddenByUser,
-            petEnabled: false
-        )
         switch dynamicIslandVisibilityAction(
-            decision: decision,
+            hiddenByUser: isPanelHiddenByUser,
             hasCurrentPermissionRequest:
                 dashboardStore.snapshot.permissionQueue.current != nil
         ) {

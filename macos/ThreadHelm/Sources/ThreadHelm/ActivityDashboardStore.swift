@@ -34,39 +34,3 @@ final class ActivityDashboardStore {
         }
     }
 }
-
-final class PresentationModePreference {
-    private let defaults: UserDefaults
-    private let key = "presentation-mode"
-
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-    }
-
-    var mode: PresentationMode {
-        get {
-            guard let raw = defaults.string(forKey: key),
-                  let mode = PresentationMode(rawValue: raw)
-            else { return .petPanel }
-            return mode
-        }
-        set { defaults.set(newValue.rawValue, forKey: key) }
-    }
-}
-
-final class PetEnabledPreference {
-    private let defaults: UserDefaults
-    private let key = "pet-enabled"
-
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-    }
-
-    var isEnabled: Bool {
-        get {
-            guard defaults.object(forKey: key) != nil else { return true }
-            return defaults.bool(forKey: key)
-        }
-        set { defaults.set(newValue, forKey: key) }
-    }
-}
