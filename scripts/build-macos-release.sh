@@ -79,7 +79,7 @@ verify_agent_truth_replay() {
   [[ -x "$binary" ]] || fail "ThreadHelm binary is not executable: $binary"
   output="$("$binary" --verify-agent-truth "$AGENT_TRUTH_ROOT")" \
     || fail "five-agent truth replay failed: $binary"
-  [[ "$output" == *"agent-truth-replay: agents=5 scenarios=81 personal-sessions=unchanged"* ]] \
+  [[ "$output" == *"agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged"* ]] \
     || fail "five-agent truth replay summary is incomplete"
   for agent_id in codex claudeCode cursor zcode pi; do
     [[ "$output" == *"agent-truth-metric: agent=$agent_id "* ]] \

@@ -102,7 +102,7 @@ run_replay "$valid_root" || {
   fail "valid truth fixture failed production replay"
 }
 /usr/bin/grep -q \
-  'agent-truth-replay: agents=5 scenarios=81 personal-sessions=unchanged' \
+  'agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged' \
   "$STDOUT_PATH" || fail "valid truth replay summary is incomplete"
 
 for mutation in \

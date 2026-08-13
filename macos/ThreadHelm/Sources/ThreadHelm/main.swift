@@ -28,24 +28,6 @@ if let attentionFeedbackExitCode = runAgentAttentionFeedbackCLIIfRequested() {
     exit(Int32(attentionFeedbackExitCode))
 }
 
-if let personalSessionWriterSelfTestExitCode =
-    runAgentPersonalSessionEvidenceWriterSelfTestIfRequested()
-{
-    exit(Int32(personalSessionWriterSelfTestExitCode))
-}
-
-if let personalReadinessReviewWriterSelfTestExitCode =
-    runAgentPersonalReadinessReviewWriterSelfTestIfRequested()
-{
-    exit(Int32(personalReadinessReviewWriterSelfTestExitCode))
-}
-
-if let personalSessionExitCode =
-    runAgentPersonalSessionEvidenceCLIIfRequested()
-{
-    exit(Int32(personalSessionExitCode))
-}
-
 if let agentTruthReplayExitCode = runAgentTruthReplayCLIIfRequested() {
     exit(Int32(agentTruthReplayExitCode))
 }

@@ -18,8 +18,6 @@
 - Claude 任务只提取公开的 assistant `text` 作为悬停预览；不读取或展示 thinking、工具参数和原始工具输出，也会排除 subagent 与 ThreadHelm 额度探针 transcript。
 - 任务名称、任务文字、已读状态、额度百分比和重置时间不写入 ThreadHelm 日志，也不上传。
 - 用户主动打开任务时，ThreadHelm 会在 `~/Library/Application Support/ThreadHelm/open-measurements-v1.json` 记录仅由 Agent 类型、打开结果类型和数字组成的本地汇总计数，用于区分精确返回、应用聚焦、目录 fallback、未知和不可用。该文件权限为当前用户只读写（`0600`），不含标题、提示词、命令、路径、session/thread ID、时间线或时间戳，也不上传。
-- 个人真实会话证据只在用户显式执行 `--record-personal-session` 后增加。`~/Library/Application Support/ThreadHelm/personal-session-evidence-v1.json` 的顶层只含五个固定 Agent ID，值为非负整数；目录权限为 `0700`，JSON 文件权限为 `0600`。相邻的零字节 `.lock` 文件同为 `0600`，只用于避免多个本机命令同时记录时互相覆盖，不含个人数据。启动、轮询、Hook、自动化自测和真值夹具不会写入该计数；文件不含时间戳、session/thread ID、标题、路径、评分、延迟或任务内容，也不上传。达到 10 次不会仅凭计数自动标记为 `personal-ready`。
-- 主人复核只在用户对已满 10 次真实会话的单个 Agent 显式执行 `--confirm-personal-readiness` 或 `--revoke-personal-readiness` 时改变。`~/Library/Application Support/ThreadHelm/personal-readiness-review-v1.json` 恰好只保存 Codex、Claude Code、Cursor、ZCode 和 Pi 对应的五个布尔值；不保存时间、备注、任务、路径、session/thread ID 或其他元数据，也不上传。目录权限为 `0700`，JSON 与相邻零字节 `.lock` 文件为 `0600`；损坏、缺键、多键、非布尔值或符号链接输入一律按五项均未复核处理。
 - 安装、修复、卸载或手工恢复受管集成前，ThreadHelm 会在 `~/Library/Application Support/ThreadHelm/Integration Backups/` 保存本机恢复点。更新期间还会在 `~/Library/Application Support/ThreadHelm/Install Transactions/` 临时保存旧 App、LaunchAgent、健康文件和 Codex 本机状态；成功或完整回滚后删除，回滚不完整时保留并打印路径供手工恢复。备份和事务目录权限为 `0700`，清单为 `0600`；其中可能包含原厂商配置或 Codex 本机状态中已有的私密值，只留在本机，不写日志、不上传。
 - 为关闭原生气泡，ThreadHelm 只把不含内容的本地任务 ID 写入 Codex 已有的 `avatar-overlay-muted-notification-ids-v1` 状态，并把 ThreadHelm 新增值记录到 `~/.codex/threadhelm-native-notification-backup.json`。检测到 Codex 正在运行时不会改写该状态；完全退出且文件稳定后才会同步，写入失败会回滚本次备份变更，卸载时只移除已经记录的新增值。
 - 卸载器检测到 Codex 仍在运行时会停止，不会移除 ThreadHelm 或恢复文件；完全退出 Codex 后才会恢复原生气泡设置。

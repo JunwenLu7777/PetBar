@@ -20,7 +20,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 - 灵动岛是唯一展示方式：胶囊可点击展开，展开态包含任务、确认与额度工作区。
 - 检测到 Claude Code CLI 时，可显示 Claude Code 的 5h、周额度与 Fable 周额度；未安装时只显示 Codex 来源。已安装但未登录或读取失败时保留 Claude Code 状态提示；不显示 Token、Credits 或行情模块。
 - 任务控制台统一显示本机 Codex、Claude Code、Cursor、ZCode 和 Pi；每个来源只展示已有证据支持的状态和打开能力，不把应用聚焦或目录 fallback 冒充为精确会话返回。
-- Agents 页面同时显示本机检测版本、真值夹具测试版本、支持能力、已知限制，以及只由主人显式记录的个人真实会话计数；自动化场景不计入个人证据。单个 Agent 满 10 次后仍须由主人单独显式复核才会显示 `personal-ready`，复核可撤销且只在本机保存五个布尔值。
+- Agents 页面同时显示本机检测版本、真值夹具测试版本、支持能力和已知限制。
 - 只有本机发现到的所有固定版本分量完全匹配时才显示 `validated`：Codex `0.145.0`、Claude Code `2.1.226`、Cursor Desktop `3.15.6` + Agent CLI `2026.04.14-ee4b43a`、ZCode `3.7.6` + build `3.7.6.4691`、Pi `0.84.1`。缺版本、只匹配一部分或版本漂移都会显示 `unvalidated`，不会沿用旧版本的能力结论。
 - 运行中任务会显示开始时间与持续时间；已完成/失败任务的持续时间会固定，不继续增长。
 - 运行中任务预览只显示公开助手输出，新内容会及时替换，同时保留可滚动的完整输出；不展示 thinking、工具参数或原始工具输出。
@@ -75,7 +75,7 @@ BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 "$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents
 ```
 
-输出里的 miss、false alert、duplicate 和 exact return 只描述这 81 条固定夹具窗口，不是个人真实使用指标，也不会增加任何 Agent 的真实会话计数。Pi 的精确返回能力在该基线中是 `unsupported`，实际打开结果只能是 `unavailable`。发布校验会执行同一回放；夹具比旧 ZIP 更新时，旧 ZIP 会被判为 stale。
+输出里的 miss、false alert、duplicate 和 exact return 只描述这 81 条固定夹具窗口，不代表实际使用指标。Pi 的精确返回能力在该基线中是 `unsupported`，实际打开结果只能是 `unavailable`。发布校验会执行同一回放；夹具比旧 ZIP 更新时，旧 ZIP 会被判为 stale。
 
 构建成功后会生成 `dist/ThreadHelm-macOS-arm64-1.1.0.zip`，并在 staging 目录内生成 `CHECKSUMS-SHA256.txt`。
 

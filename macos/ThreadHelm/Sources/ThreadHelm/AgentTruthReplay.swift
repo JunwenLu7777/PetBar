@@ -3,7 +3,7 @@
 //  ThreadHelm
 //
 //  模块职责：只读回放五 Agent 的脱敏固定版本真值夹具。夹具信号进入
-//  Swift 生产归一化与 AgentEventReducer；结果只用于发布验证，不写个人会话证据。
+//  Swift 生产归一化与 AgentEventReducer；结果只用于发布验证，不写持久化用户状态。
 //
 
 import Foundation
@@ -85,7 +85,7 @@ func runAgentTruthReplayCLIIfRequested(
         print(
             "agent-truth-replay: agents=\(report.metrics.count) "
                 + "scenarios=\(report.scenarioCount) "
-                + "personal-sessions=unchanged"
+                + "persistent-state=unchanged"
         )
         report.metrics.forEach { print("agent-truth-metric: \($0.line)") }
         return 0

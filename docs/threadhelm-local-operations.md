@@ -56,50 +56,9 @@ BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 "$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents
 ```
 
-这会读取 81 条脱敏场景，经生产 Swift 归一化和真实 `AgentEventReducer` 比较 7 个 expected 字段。duplicate 和 out-of-order 场景也走真实 reducer。输出的 miss、false alert、duplicate、exact return 分子分母只说明这 81 条固定夹具，没有测量你的实际使用、延迟或主观体验；夹具回放也不会增加个人真实会话计数。
+这会读取 81 条脱敏场景，经生产 Swift 归一化和真实 `AgentEventReducer` 比较 7 个 expected 字段。duplicate 和 out-of-order 场景也走真实 reducer。输出的 miss、false alert、duplicate、exact return 分子分母只说明这 81 条固定夹具，没有测量实际使用、延迟或主观体验；回放过程不写持久化用户状态。
 
 该基线里 Codex 精确返回仍是 `unknown`；Claude Code 只有同时匹配会话、活进程和 process-start identity 才可能是 exact，否则降为 `unknown`；Cursor 与 ZCode 不宣称 exact；Pi 的精确返回能力是 `unsupported`，打开结果只能是 `unavailable`。发布脚本会执行同一回放，并把真值夹具纳入 release 输入时间；夹具更新后旧 ZIP 会被判为 stale。
-
-## 个人真实会话与主人复核
-
-Agents 页面会分别展示本机检测版本、当前真值夹具的测试版本、已支持能力、已知限制，以及个人真实会话计数。当前五个 Agent 一律从：
-
-```text
-experimental · 真实会话 0/10
-```
-
-开始。81 条自动化真值场景、App 启动、轮询、Hook 事件和自测都不会增加这个数字。只有你确实用 ThreadHelm 陪跑完一条真实本机会话，并手工确认这次端到端体验有效后，才执行一次对应命令：
-
-```bash
-BIN="$HOME/Applications/ThreadHelm.app/Contents/MacOS/ThreadHelm"
-
-"$BIN" --record-personal-session codex
-"$BIN" --record-personal-session claudeCode
-"$BIN" --record-personal-session cursor
-"$BIN" --record-personal-session zcode
-"$BIN" --record-personal-session pi
-"$BIN" --print-personal-session-evidence
-```
-
-一条命令只增加对应 Agent 的一个整数，不接收备注、路径或 session ID。计数保存在 `~/Library/Application Support/ThreadHelm/personal-session-evidence-v1.json`；目录权限为 `0700`，JSON 顶层只有五个固定 Agent ID，值只能是非负整数。JSON 和相邻的零字节 `.lock` 文件权限都为 `0600`；锁文件只负责串行化多个本机命令，不保存任何会话信息。App 运行时会重新读取这个小文件，因此不需要为了刷新计数而重启。
-
-10 次只是允许主人复核的最低样本量，不会仅凭数字自动显示 `personal-ready`。达到 10 次但尚未复核时仍显示 `experimental · 真实会话 10/10 · 待主人复核`。你逐个确认该 Agent 的 10 次实际体验后，再显式执行：
-
-```bash
-"$BIN" --confirm-personal-readiness codex
-"$BIN" --confirm-personal-readiness claudeCode
-"$BIN" --confirm-personal-readiness cursor
-"$BIN" --confirm-personal-readiness zcode
-"$BIN" --confirm-personal-readiness pi
-```
-
-未满 10 次的 Agent 会被拒绝。误确认时可单独撤销，例如：
-
-```bash
-"$BIN" --revoke-personal-readiness cursor
-```
-
-`--print-personal-session-evidence` 会同时显示计数和主人复核结果。复核状态保存在 `~/Library/Application Support/ThreadHelm/personal-readiness-review-v1.json`，文件恰好只有五个固定 Agent ID 及五个布尔值；不保存时间、备注、任务、路径或 session ID。JSON 与相邻空锁文件权限为 `0600`，目录为 `0700`；损坏、不完整、多余键、非布尔值或符号链接状态会整体按“未复核”处理。App 运行时会重新读取计数和复核文件，无需重启。ThreadHelm 不会伪造个人会话、评分、延迟、miss rate 或精确返回成功率。
 
 ## 检查、安装、修复和卸载集成
 

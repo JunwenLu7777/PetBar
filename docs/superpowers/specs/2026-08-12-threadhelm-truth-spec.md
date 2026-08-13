@@ -19,7 +19,7 @@ The fixture package is the source of truth for normalizing Codex, Claude Code, C
 5. `capabilityStatus=unsupported` means no UI control or success claim may be exposed. `capabilityStatus=unknown` must remain visibly unknown and cannot be promoted by inference.
 6. An `openResult` is an expected classification, not proof that a launch occurred during fixture replay. Exact return requires a separate independent identity check.
 7. A fixture joins the accepted truth set only after its expected label is reviewed separately from capture. Synthetic policy cases are allowed for destructive or rare failures but must identify that evidence class.
-8. Fixture replay must not write personal session evidence or personal readiness review state. Its summary must state `personal-sessions=unchanged`.
+8. Fixture replay must not write persistent user state. Its summary must state `persistent-state=unchanged`.
 
 The production replay entry point is:
 
@@ -28,7 +28,7 @@ BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 "$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents
 ```
 
-The accepted baseline contains 81 redacted scenarios across five agents. Duplicate and out-of-order scenarios pass through the real reducer. The emitted miss, false-alert, duplicate, and exact-return numerators and denominators describe only this fixed fixture window; they are not personal live-use measurements, latency measurements, or readiness evidence.
+The accepted baseline contains 81 redacted scenarios across five agents. Duplicate and out-of-order scenarios pass through the real reducer. The emitted miss, false-alert, duplicate, and exact-return numerators and denominators describe only this fixed fixture window; they are not live-use or latency measurements.
 
 ## Redaction contract
 

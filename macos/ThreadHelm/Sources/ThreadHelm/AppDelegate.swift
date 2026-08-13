@@ -59,10 +59,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let agentRegistry = AgentRegistry.builtIn
     private let agentLiveEventStore = AgentLiveEventStore()
     private let agentOpenMeasurementStore = AgentOpenMeasurementStore()
-    private let agentPersonalSessionEvidenceStore =
-        AgentPersonalSessionEvidenceStore()
-    private let agentPersonalReadinessReviewStore =
-        AgentPersonalReadinessReviewStore()
     private let agentAttentionInterruptionGate =
         AgentAttentionInterruptionGate()
     private var agentLiveReductionGate = AgentLiveReductionGate()
@@ -151,10 +147,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             snapshot.agentStatuses = agentRuntimeStatusPlaceholders(
                 registry: agentRegistry
             )
-            snapshot.personalSessionEvidence =
-                agentPersonalSessionEvidenceStore.snapshot()
-            snapshot.personalReadinessReviews =
-                agentPersonalReadinessReviewStore.snapshot()
         }
         refreshAgentRuntimeStatuses()
         startScreenParameterMonitoring()
@@ -844,12 +836,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         snapshots: snapshot.agentSnapshots,
                         attentionItems: snapshot.attentionItems
                     )
-                    snapshot.personalSessionEvidence =
-                        self.agentPersonalSessionEvidenceStore
-                            .refreshedSnapshot()
-                    snapshot.personalReadinessReviews =
-                        self.agentPersonalReadinessReviewStore
-                            .refreshedSnapshot()
                     snapshot.agentEventChannelAvailable =
                         self.agentEventChannelAvailable
                 }
@@ -868,10 +854,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             snapshots: snapshot.agentSnapshots,
             attentionItems: snapshot.attentionItems
         )
-        snapshot.personalSessionEvidence =
-            agentPersonalSessionEvidenceStore.refreshedSnapshot()
-        snapshot.personalReadinessReviews =
-            agentPersonalReadinessReviewStore.refreshedSnapshot()
         snapshot.agentEventChannelAvailable = agentEventChannelAvailable
     }
 

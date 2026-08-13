@@ -1050,17 +1050,6 @@ private func assertDynamicIslandTaskWorkspace() {
         taskCollection: collection
     )
     agentHealthSnapshot.agentEventChannelAvailable = false
-    agentHealthSnapshot.personalSessionEvidence =
-        AgentPersonalSessionEvidenceSnapshot(counts: [
-            "claudeCode": 9,
-            "cursor": 10,
-            "zcode": 10,
-        ])
-    agentHealthSnapshot.personalReadinessReviews =
-        AgentPersonalReadinessReviewSnapshot(reviewed: [
-            "claudeCode": true,
-            "cursor": true,
-        ])
     agentHealthSnapshot.agentStatuses = builtInAgentMetadata().map { metadata in
         let components: [AgentVersionComponent]
         switch metadata.id {
@@ -1137,21 +1126,6 @@ private func assertDynamicIslandTaskWorkspace() {
               guard let profile = validationProfiles[agentID] else {
                   return false
               }
-              let expectedReadiness: String
-              switch agentID {
-              case .claudeCode:
-                  expectedReadiness =
-                      "experimental · 真实会话 9/10"
-              case .cursor:
-                  expectedReadiness =
-                      "personal-ready · 真实会话 10/10"
-              case .zcode:
-                  expectedReadiness =
-                      "experimental · 真实会话 10/10 · 待主人复核"
-              default:
-                  expectedReadiness =
-                      "experimental · 真实会话 0/10"
-              }
               let capabilityIsTruthful: Bool
               if agentID == .cursor {
                   capabilityIsTruthful = summary.contains("unvalidated")
@@ -1167,7 +1141,10 @@ private func assertDynamicIslandTaskWorkspace() {
               return summary.contains("测试 \(profile.testedVersion)")
                   && capabilityIsTruthful
                   && summary.contains(profile.knownLimitation)
-                  && summary.contains(expectedReadiness)
+                  && !summary.contains("真实会话")
+                  && !summary.contains("personal-ready")
+                  && !summary.contains("experimental")
+                  && !summary.contains("主人复核")
           }),
           agentHealthRows.first?.contains(
               "本机 0.145.0 · 已验证 · 测试 0.145.0"
