@@ -170,6 +170,16 @@ make_dist_from_stage
 expect_pass "refreshed source payload without local app build"
 
 /bin/sleep 1
+/usr/bin/touch \
+  "$FIXTURE/macos/ThreadHelm/Tests/Fixtures/Agents/index.json"
+expect_fail "stale archive relative to truth fixtures without local app build"
+
+make_stage
+make_dist_from_stage
+/bin/rm -rf "$FIXTURE/build/release"
+expect_pass "refreshed archive after truth fixture update without local app build"
+
+/bin/sleep 1
 mkdir -p "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS" \
   "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/Resources"
 write_file "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/Info.plist" '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.threadhelm.app</string><key>CFBundleExecutable</key><string>ThreadHelm</string><key>CFBundleIconFile</key><string>ThreadHelm.icns</string></dict></plist>'

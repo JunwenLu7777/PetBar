@@ -85,6 +85,28 @@ struct AgentValidationProfile: Equatable {
     }
 }
 
+func validationBoundedAgentMetadata(
+    _ metadata: AgentMetadata,
+    discovery: AgentDiscovery,
+    profiles: [AgentID: AgentValidationProfile] = builtInAgentValidationProfiles()
+) -> AgentMetadata {
+    guard let profile = profiles[metadata.id] else { return metadata }
+    return AgentMetadata(
+        id: metadata.id,
+        displayName: metadata.displayName,
+        shortName: metadata.shortName,
+        iconResourceName: metadata.iconResourceName,
+        fallbackSymbolName: metadata.fallbackSymbolName,
+        brandColor: metadata.brandColor,
+        versionSource: metadata.versionSource,
+        identityPolicy: metadata.identityPolicy,
+        capabilities: profile.effectiveCapabilities(
+            metadata: metadata,
+            discovery: discovery
+        )
+    )
+}
+
 func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
     let profiles = [
         AgentValidationProfile(

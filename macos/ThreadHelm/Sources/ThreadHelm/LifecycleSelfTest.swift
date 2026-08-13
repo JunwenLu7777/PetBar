@@ -212,15 +212,18 @@ func runLifecycleSelfTest() -> Never {
     }
 
     let claudePermissionVisibilityCases = [
-        (cached: true, live: true, expected: true),
-        (cached: false, live: true, expected: true),
-        (cached: true, live: false, expected: false),
-        (cached: false, live: false, expected: false),
+        (cached: true, live: true, compatibility: AgentCompatibility.validated, expected: true),
+        (cached: false, live: true, compatibility: AgentCompatibility.validated, expected: true),
+        (cached: true, live: false, compatibility: AgentCompatibility.validated, expected: false),
+        (cached: false, live: false, compatibility: AgentCompatibility.validated, expected: false),
+        (cached: true, live: true, compatibility: AgentCompatibility.unvalidated, expected: false),
+        (cached: true, live: true, compatibility: AgentCompatibility.unknown, expected: false),
     ]
     for (index, test) in claudePermissionVisibilityCases.enumerated() {
         let actual = shouldPresentClaudePermissionPanel(
             cachedCodexDesktopRunning: test.cached,
-            liveCodexDesktopRunning: test.live
+            liveCodexDesktopRunning: test.live,
+            claudeCompatibility: test.compatibility
         )
         guard actual == test.expected else {
             fputs("Claude permission visibility case \(index + 1) failed\n", stderr)
@@ -365,6 +368,6 @@ func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
-    print("lifecycle-self-test: desktop-app=6/6 standalone-identity=pass legacy-preferences=pet-keys-ignored dynamic-island-only=visibility+commands status-item=restore dock-icon=resource activation=regular terminal-ack=active-skipped+terminal-memory claude-permission-visibility=4/4 live-state-wins=2/2 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut")
+    print("lifecycle-self-test: desktop-app=6/6 standalone-identity=pass legacy-preferences=pet-keys-ignored dynamic-island-only=visibility+commands status-item=restore dock-icon=resource activation=regular terminal-ack=active-skipped+terminal-memory claude-permission-visibility=6/6 live-state-wins=2/2 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut")
     exit(0)
 }

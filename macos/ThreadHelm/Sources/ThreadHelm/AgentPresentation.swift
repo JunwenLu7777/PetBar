@@ -88,13 +88,12 @@ func agentIconImage(
 }
 
 func agentTaskOpenButtonTitle(for item: TaskProgressItem) -> String {
+    guard item.canOpen else { return "仅查看状态" }
     if item.source == .claudeCode {
         return "回到终端"
     }
     let presentation = agentPresentation(for: item.source)
-    return item.canOpen
-        ? "打开 \(presentation.shortName)"
-        : "仅查看状态"
+    return "打开 \(presentation.shortName)"
 }
 
 func taskSourceFilterName(_ filter: TaskSourceFilter) -> String {

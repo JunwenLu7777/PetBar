@@ -13,9 +13,9 @@ Only Codex and Claude Code are quota providers.
 
 Adapters expose discovery/version, managed-integration lifecycle, observation,
 capabilities, freshness, opening, and privacy-safe diagnostics. Unsupported and
-unknown are different states. In particular, Cursor, ZCode, and Pi exact return
-remain unknown; Pi navigation and all Pi mutation/action capabilities are
-unsupported.
+unknown are different states. In particular, Cursor and ZCode exact return
+remain unknown; Pi exact return, navigation, and all Pi mutation/action
+capabilities are unsupported.
 
 The reducer keys a session by agent plus native identity, scopes event IDs to a
 session, removes duplicates, and chooses sequence, same-host monotonic time, or

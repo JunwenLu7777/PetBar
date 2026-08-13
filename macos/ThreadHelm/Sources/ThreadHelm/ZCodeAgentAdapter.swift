@@ -533,7 +533,7 @@ struct ZCodeAgentAdapter: AgentAdapter {
         return snapshot.freshness
     }
 
-    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
+    func openValidated(session: AgentSessionSnapshot) -> AgentOpenReport {
         guard session.identity.agentID == .zcode else {
             return AgentOpenReport(
                 agentID: metadata.id,

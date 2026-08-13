@@ -187,6 +187,7 @@ func agentDashboardProjection(
     collection: TaskProgressCollectionSnapshot,
     permissionQueue: ClaudePermissionQueueSnapshot,
     liveReduction: AgentReductionResult,
+    agentCompatibilities: [AgentID: AgentCompatibility],
     registry: AgentRegistry = .builtIn
 ) -> AgentDashboardProjection {
     let polledCollection = collection
@@ -195,11 +196,22 @@ func agentDashboardProjection(
         permissionQueue: permissionQueue,
         registry: registry
     )
+    let polledSnapshots = polled.snapshots.map {
+        validationBoundedSnapshot(
+            $0,
+            compatibility: agentCompatibilities[$0.identity.agentID]
+        )
+    }
     let liveSnapshots = liveReduction.snapshots.filter {
         hookObservedAgentIDs.contains($0.identity.agentID)
+    }.map {
+        validationBoundedSnapshot(
+            $0,
+            compatibility: agentCompatibilities[$0.identity.agentID]
+        )
     }
     var snapshotsByKey = Dictionary(
-        uniqueKeysWithValues: polled.snapshots.map { ($0.identity.key, $0) }
+        uniqueKeysWithValues: polledSnapshots.map { ($0.identity.key, $0) }
     )
     var overlaidLiveKeys = Set<String>()
     for snapshot in liveSnapshots {
@@ -217,6 +229,11 @@ func agentDashboardProjection(
     let attentionItems = agentAttentionItems(from: snapshots)
     let fallbackItems = polledCollection.items.filter {
         !overlaidLiveKeys.contains($0.identityKey)
+    }.map {
+        validationBoundedTaskProgressItem(
+            $0,
+            compatibility: agentCompatibilities[$0.source]
+        )
     }
     let liveItems = liveSnapshots.filter {
         overlaidLiveKeys.contains($0.identity.key)
@@ -226,6 +243,88 @@ func agentDashboardProjection(
         snapshots: snapshots,
         attentionItems: attentionItems
     )
+}
+
+private func validationBoundedSnapshot(
+    _ snapshot: AgentSessionSnapshot,
+    compatibility: AgentCompatibility?
+) -> AgentSessionSnapshot {
+    guard compatibility == .validated else {
+        return AgentSessionSnapshot(
+            identity: snapshot.identity,
+            adapterVersion: snapshot.adapterVersion,
+            executionState: snapshot.executionState,
+            attentionReason: .none,
+            actionability: .viewOnly,
+            evidenceQuality: snapshot.evidenceQuality,
+            freshness: snapshot.freshness,
+            title: snapshot.title,
+            activitySummary: validationBoundedActivitySummary(
+                for: snapshot.executionState
+            ),
+            workingDirectory: snapshot.workingDirectory,
+            latestEventID: snapshot.latestEventID,
+            updatedAt: snapshot.updatedAt
+        )
+    }
+    return snapshot
+}
+
+private func validationBoundedTaskProgressItem(
+    _ item: TaskProgressItem,
+    compatibility: AgentCompatibility?
+) -> TaskProgressItem {
+    guard compatibility == .validated else {
+        let kind = item.kind == .waitingForInput
+            ? TaskProgressKind.running
+            : item.kind
+        return TaskProgressItem(
+            title: item.title,
+            kind: kind,
+            startedAt: item.startedAt,
+            updatedAt: item.updatedAt,
+            source: item.source,
+            activityText: validationBoundedTaskActivityText(for: kind),
+            statusOverride: item.kind == .waitingForInput
+                ? "版本未验证，仅显示状态"
+                : item.statusOverride,
+            threadID: item.threadID,
+            sessionID: item.sessionID,
+            workingDirectory: item.workingDirectory,
+            processID: item.processID,
+            processStartIdentity: item.processStartIdentity,
+            events: item.events,
+            allowsAgentOpen: false
+        )
+    }
+    return item
+}
+
+private func validationBoundedActivitySummary(
+    for state: ExecutionState
+) -> String? {
+    switch state {
+    case .discovering: return "正在发现会话"
+    case .idle: return "会话空闲"
+    case .running: return "正在执行"
+    case .completed: return "任务已结束"
+    case .failed: return "任务失败"
+    case .stale: return "状态已过期"
+    case .offline: return "会话已离线"
+    }
+}
+
+private func validationBoundedTaskActivityText(
+    for kind: TaskProgressKind
+) -> String? {
+    switch kind {
+    case .reading: return "正在读取状态"
+    case .running: return "正在执行"
+    case .completed: return "任务已结束"
+    case .failed: return "任务失败"
+    case .idle: return "会话空闲"
+    case .waitingForInput: return nil
+    }
 }
 
 struct AgentLiveReductionUpdate {
@@ -291,7 +390,8 @@ func taskProgressItem(from snapshot: AgentSessionSnapshot) -> TaskProgressItem {
         sessionID: snapshot.identity.nativeID,
         workingDirectory: snapshot.workingDirectory,
         processID: snapshot.identity.processID,
-        processStartIdentity: snapshot.identity.processStartIdentity
+        processStartIdentity: snapshot.identity.processStartIdentity,
+        allowsAgentOpen: snapshot.actionability != .viewOnly
     )
 }
 

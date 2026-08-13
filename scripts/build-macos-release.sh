@@ -250,8 +250,6 @@ verify_dist_checksum() {
 }
 
 verify_dist_is_fresh_against_local_build() {
-  [[ -d "$APP_BUILD" ]] || return 0
-
   local newest archive_mtime
   newest="$(newest_release_input_mtime)"
   archive_mtime="$(/usr/bin/stat -f "%m" "$OUT")"

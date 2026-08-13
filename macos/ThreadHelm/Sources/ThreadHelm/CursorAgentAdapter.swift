@@ -164,7 +164,7 @@ struct CursorAgentAdapter: AgentAdapter {
         )
     }
 
-    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
+    func openValidated(session: AgentSessionSnapshot) -> AgentOpenReport {
         guard session.identity.agentID == .cursor else {
             return AgentOpenReport(
                 agentID: metadata.id,

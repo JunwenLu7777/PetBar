@@ -220,6 +220,11 @@ func runAgentLiveEventStoreSelfTest() {
         )
     }
 
+    let validatedCompatibilities = Dictionary(
+        uniqueKeysWithValues: AgentID.builtInOrder.map {
+            ($0, AgentCompatibility.validated)
+        }
+    )
     let projection = agentDashboardProjection(
         collection: .displaying([
             TaskProgressItem(
@@ -245,7 +250,8 @@ func runAgentLiveEventStoreSelfTest() {
             ),
         ]),
         permissionQueue: .empty,
-        liveReduction: reduced
+        liveReduction: reduced,
+        agentCompatibilities: validatedCompatibilities
     )
     let zcodeItem = projection.taskCollection.items.first {
         $0.identityKey == "zcode:session-one"
@@ -268,6 +274,65 @@ func runAgentLiveEventStoreSelfTest() {
     else {
         failAgentLiveEventStoreSelfTest(
             "dashboard live overlay must preserve polling fallback"
+        )
+    }
+
+    let unvalidatedProjection = agentDashboardProjection(
+        collection: .displaying([
+            TaskProgressItem(
+                title: "Codex waiting on drifted version",
+                kind: .waitingForInput,
+                startedAt: base,
+                source: .codex,
+                threadID: "codex-drifted"
+            ),
+            TaskProgressItem(
+                title: "Claude waiting on drifted version",
+                kind: .waitingForInput,
+                startedAt: base,
+                source: .claudeCode,
+                sessionID: "2d61280e-b4f1-4db7-a326-19f9f0dd804c",
+                workingDirectory: "/tmp/threadhelm-claude"
+            ),
+            TaskProgressItem(
+                title: "ZCode live overlay",
+                kind: .running,
+                startedAt: base,
+                source: .zcode,
+                sessionID: "session-one"
+            ),
+        ]),
+        permissionQueue: .empty,
+        liveReduction: reduced,
+        agentCompatibilities: [
+            .codex: .unvalidated,
+            .claudeCode: .unvalidated,
+            .zcode: .unvalidated,
+        ]
+    )
+    let driftedCodexItem = unvalidatedProjection.taskCollection.items.first {
+        $0.identityKey == "codex:codex-drifted"
+    }
+    let driftedZCodeItem = unvalidatedProjection.taskCollection.items.first {
+        $0.identityKey == "zcode:session-one"
+    }
+    let driftedClaudeItem = unvalidatedProjection.taskCollection.items.first {
+        $0.source == .claudeCode
+    }
+    guard driftedCodexItem?.kind == .running,
+          driftedCodexItem?.statusOverride == "版本未验证，仅显示状态",
+          driftedCodexItem?.canOpen == false,
+          driftedZCodeItem?.kind == .failed,
+          driftedZCodeItem?.canOpen == false,
+          driftedClaudeItem?.canOpen == false,
+          driftedClaudeItem?.openButtonTitle == "仅查看状态",
+          unvalidatedProjection.snapshots.allSatisfy({
+              $0.attentionReason == .none && $0.actionability == .viewOnly
+          }),
+          unvalidatedProjection.attentionItems.isEmpty
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "unvalidated versions must stay visible without actions or alerts"
         )
     }
 

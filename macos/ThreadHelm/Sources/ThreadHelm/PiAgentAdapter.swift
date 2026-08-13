@@ -105,7 +105,7 @@ struct PiAgentAdapter: AgentAdapter {
         )
     }
 
-    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
+    func openValidated(session: AgentSessionSnapshot) -> AgentOpenReport {
         AgentOpenReport(
             agentID: metadata.id,
             advertisedActionability: session.actionability,

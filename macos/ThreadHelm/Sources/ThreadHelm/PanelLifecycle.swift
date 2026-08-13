@@ -14,8 +14,10 @@ import Foundation
 
 func shouldPresentClaudePermissionPanel(
     cachedCodexDesktopRunning: Bool,
-    liveCodexDesktopRunning: Bool
+    liveCodexDesktopRunning: Bool,
+    claudeCompatibility: AgentCompatibility
 ) -> Bool {
+    guard claudeCompatibility == .validated else { return false }
     // Workspace lifecycle notifications can arrive after a Claude hook
     // request. A stale cached true must never activate UI after Codex exits.
     guard cachedCodexDesktopRunning == liveCodexDesktopRunning else {

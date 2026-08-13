@@ -166,6 +166,9 @@ private func taskProgressItemIsOrderedBefore(
     if lhs.title != rhs.title {
         return lhs.title < rhs.title
     }
+    if lhs.allowsAgentOpen != rhs.allowsAgentOpen {
+        return !lhs.allowsAgentOpen
+    }
     let lhsTieBreak = [
         lhs.statusOverride,
         lhs.activityText,

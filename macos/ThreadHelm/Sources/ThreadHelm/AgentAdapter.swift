@@ -208,17 +208,22 @@ func agentRuntimeStatusPlaceholders(
 ) -> [AgentRuntimeStatus] {
     registry.agentIDs.compactMap { agentID in
         guard let metadata = registry.metadata(for: agentID) else { return nil }
+        let discovery = AgentDiscovery(
+            isInstalled: false,
+            version: nil,
+            compatibility: .unknown
+        )
+        let boundedMetadata = validationBoundedAgentMetadata(
+            metadata,
+            discovery: discovery
+        )
         let integrationStatus: AgentIntegrationStatus? = metadata.capabilities
             .status(for: .managedIntegration) == .unsupported
             ? .notManaged
             : nil
         return AgentRuntimeStatus(
-            metadata: metadata,
-            discovery: AgentDiscovery(
-                isInstalled: false,
-                version: nil,
-                compatibility: .unknown
-            ),
+            metadata: boundedMetadata,
+            discovery: discovery,
             integrationStatus: integrationStatus,
             diagnostics: AgentDiagnostics(
                 health: .unknown,
@@ -241,8 +246,13 @@ func probedAgentRuntimeStatuses(
     return registry.agentIDs.compactMap { agentID in
         guard let adapter = registry.adapter(for: agentID) else { return nil }
         let previous = previousByID[agentID]
+        let discovery = adapter.discover()
+        let metadata = validationBoundedAgentMetadata(
+            adapter.metadata,
+            discovery: discovery
+        )
         let integrationStatus: AgentIntegrationStatus?
-        if adapter.metadata.capabilities.status(for: .managedIntegration)
+        if metadata.capabilities.status(for: .managedIntegration)
             == .unsupported
         {
             integrationStatus = .notManaged
@@ -253,8 +263,8 @@ func probedAgentRuntimeStatuses(
             integrationStatus = previous?.integrationStatus
         }
         return AgentRuntimeStatus(
-            metadata: adapter.metadata,
-            discovery: adapter.discover(),
+            metadata: metadata,
+            discovery: discovery,
             integrationStatus: integrationStatus,
             diagnostics: adapter.diagnostics(),
             activeSessionCount: previous?.activeSessionCount ?? 0,
@@ -312,7 +322,7 @@ protocol AgentAdapter {
         for snapshot: AgentSessionSnapshot,
         now: Date
     ) -> Freshness
-    func open(session: AgentSessionSnapshot) -> AgentOpenReport
+    func openValidated(session: AgentSessionSnapshot) -> AgentOpenReport
     func diagnostics() -> AgentDiagnostics
 }
 
@@ -361,6 +371,38 @@ extension AgentAdapter {
     }
 
     func open(session: AgentSessionSnapshot) -> AgentOpenReport {
+        openSessionForValidatedVersion(session: session) {
+            openValidated(session: session)
+        }
+    }
+
+    func openSessionForValidatedVersion(
+        session: AgentSessionSnapshot,
+        perform: () -> AgentOpenReport
+    ) -> AgentOpenReport {
+        let discovery = discover()
+        guard discovery.isInstalled else {
+            return AgentOpenReport(
+                agentID: metadata.id,
+                advertisedActionability: session.actionability,
+                result: .unavailable,
+                invokedExactTarget: false,
+                independentlyConfirmedIdentity: false
+            )
+        }
+        guard discovery.compatibility == .validated else {
+            return AgentOpenReport(
+                agentID: metadata.id,
+                advertisedActionability: session.actionability,
+                result: .notAttempted,
+                invokedExactTarget: false,
+                independentlyConfirmedIdentity: false
+            )
+        }
+        return perform()
+    }
+
+    func openValidated(session: AgentSessionSnapshot) -> AgentOpenReport {
         AgentOpenReport(
             agentID: metadata.id,
             advertisedActionability: session.actionability,
@@ -464,7 +506,7 @@ struct CodexAgentAdapter: AgentAdapter {
         readCollection()
     }
 
-    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
+    func openValidated(session: AgentSessionSnapshot) -> AgentOpenReport {
         guard session.identity.agentID == .codex,
               let url = codexThreadURL(threadID: session.identity.nativeID)
         else {
@@ -618,7 +660,7 @@ struct ClaudeCodeAgentAdapter: AgentAdapter {
         readCollection()
     }
 
-    func open(session: AgentSessionSnapshot) -> AgentOpenReport {
+    func openValidated(session: AgentSessionSnapshot) -> AgentOpenReport {
         guard session.identity.agentID == .claudeCode else {
             return AgentOpenReport(
                 agentID: metadata.id,

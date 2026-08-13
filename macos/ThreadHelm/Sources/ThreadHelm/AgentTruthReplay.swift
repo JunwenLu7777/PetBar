@@ -8,6 +8,11 @@
 
 import Foundation
 
+private enum AgentTruthFixtureContract {
+    static let baselineCommit =
+        "f7cb4843eea3aa5aae9ee6045092c007f7cd9452"
+}
+
 struct AgentTruthReplayMetric: Equatable {
     let agentID: AgentID
     let misses: Int
@@ -105,15 +110,24 @@ func verifyAgentTruthFixtures(
     guard index.schemaVersion == 1,
           versions.schemaVersion == 1,
           index.agents == AgentID.builtInOrder.map(\.rawValue),
+          Set(index.scenarioFiles.keys) == Set(index.agents),
           Set(versions.agents.keys) == Set(index.agents)
     else {
         throw AgentTruthReplayError.invalidFixture(
             "schema、Agent 顺序或版本表不匹配"
         )
     }
+    guard index.baselineCommit == AgentTruthFixtureContract.baselineCommit,
+          versions.baselineCommit == index.baselineCommit
+    else {
+        throw AgentTruthReplayError.invalidFixture(
+            "index.json 或 versions.json 的 baselineCommit 不匹配"
+        )
+    }
 
     let profiles = builtInAgentValidationProfiles()
     var scenariosByAgent: [AgentID: [TruthScenario]] = [:]
+    var scenarioIDs = Set<String>()
     for agentID in AgentID.builtInOrder {
         guard let relativePath = index.scenarioFiles[agentID.rawValue],
               let scenarioURL = truthFixtureChildURL(
@@ -139,11 +153,48 @@ func verifyAgentTruthFixtures(
         guard document.schemaVersion == 1,
               document.agentId == agentID.rawValue,
               document.observedAgentVersion == version.version,
-              document.scenarios.allSatisfy({ $0.agentId == agentID.rawValue })
+              document.baselineCommit == index.baselineCommit,
+              document.scenarios.allSatisfy({
+                  $0.agentId == agentID.rawValue
+                      && $0.observedAgentVersion == version.version
+              })
         else {
             throw AgentTruthReplayError.invalidFixture(
-                "\(agentID.rawValue) 场景文档与版本表不一致"
+                "\(agentID.rawValue) 场景文档、baseline 或版本表不一致"
             )
+        }
+        for scenario in document.scenarios {
+            guard !scenario.id.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty,
+                  scenarioIDs.insert(scenario.id).inserted
+            else {
+                throw AgentTruthReplayError.invalidFixture(
+                    "场景 ID 为空或重复：\(scenario.id)"
+                )
+            }
+            guard !scenario.captureSource.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty,
+                  !scenario.evidence.isEmpty,
+                  scenario.evidence.allSatisfy({
+                      !$0.reference.trimmingCharacters(
+                          in: .whitespacesAndNewlines
+                      ).isEmpty
+                  })
+            else {
+                throw AgentTruthReplayError.invalidFixture(
+                    "\(scenario.id) 缺少 captureSource 或 evidence"
+                )
+            }
+            if scenario.evidence.allSatisfy({ $0.kind == .syntheticPolicy }),
+               scenario.expected.evidenceQuality != "inferred",
+               scenario.expected.evidenceQuality != "unknown"
+            {
+                throw AgentTruthReplayError.invalidFixture(
+                    "\(scenario.id) 的纯合成 evidence 夸大了证据质量"
+                )
+            }
         }
         scenariosByAgent[agentID] = document.scenarios
     }
@@ -213,6 +264,7 @@ func verifyAgentTruthFixtures(
 
 private struct TruthIndex: Decodable {
     let schemaVersion: Int
+    let baselineCommit: String
     let agents: [String]
     let scenarioFiles: [String: String]
     let counts: TruthCounts
@@ -225,6 +277,7 @@ private struct TruthCounts: Decodable {
 
 private struct TruthVersions: Decodable {
     let schemaVersion: Int
+    let baselineCommit: String
     let agents: [String: TruthVersion]
 }
 
@@ -238,16 +291,40 @@ private struct TruthScenarioDocument: Decodable {
     let schemaVersion: Int
     let agentId: String
     let observedAgentVersion: String
+    let baselineCommit: String
     let scenarios: [TruthScenario]
+}
+
+private enum TruthCapabilityStatus: String, Decodable {
+    case supported
+    case unsupported
+    case unknown
+}
+
+private enum TruthEvidenceKind: String, Decodable {
+    case localCode
+    case executableSelfTest
+    case officialDocumentation
+    case bundledDocumentation
+    case localObservation
+    case syntheticPolicy
+}
+
+private struct TruthEvidence: Decodable {
+    let kind: TruthEvidenceKind
+    let reference: String
 }
 
 private struct TruthScenario: Decodable {
     let id: String
     let agentId: String
-    let capabilityStatus: String
+    let capabilityStatus: TruthCapabilityStatus
+    let captureSource: String
     let capturedAt: String
+    let observedAgentVersion: String
     let input: TruthInput
     let expected: TruthExpected
+    let evidence: [TruthEvidence]
 }
 
 private struct TruthInput: Decodable {
@@ -310,7 +387,7 @@ private struct TruthMetricAccumulator {
     ) {
         let expectedInterrupt = scenario.expected.interruptDecision == "interrupt"
         let actualInterrupt = evaluation.fields.interruptDecision == "interrupt"
-        if scenario.capabilityStatus == "supported" && expectedInterrupt {
+        if scenario.capabilityStatus == .supported && expectedInterrupt {
             hardAttentionOpportunities += 1
             if !actualInterrupt { misses += 1 }
         }

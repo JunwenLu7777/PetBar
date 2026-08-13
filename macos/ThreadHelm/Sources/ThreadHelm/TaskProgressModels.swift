@@ -70,6 +70,7 @@ struct TaskProgressItem: Equatable {
     let processID: Int32?
     let processStartIdentity: String?
     let events: [TaskActivityEvent]
+    let allowsAgentOpen: Bool
 
     init(
         title: String,
@@ -84,7 +85,8 @@ struct TaskProgressItem: Equatable {
         workingDirectory: String? = nil,
         processID: Int32? = nil,
         processStartIdentity: String? = nil,
-        events: [TaskActivityEvent] = []
+        events: [TaskActivityEvent] = [],
+        allowsAgentOpen: Bool = true
     ) {
         self.title = title
         self.kind = kind
@@ -99,6 +101,7 @@ struct TaskProgressItem: Equatable {
         self.processID = processID
         self.processStartIdentity = processStartIdentity
         self.events = events
+        self.allowsAgentOpen = allowsAgentOpen
     }
 
     var statusText: String {
@@ -130,6 +133,7 @@ struct TaskProgressItem: Equatable {
     }
 
     var canOpen: Bool {
+        guard allowsAgentOpen else { return false }
         if source == .codex {
             return threadID != nil
         }

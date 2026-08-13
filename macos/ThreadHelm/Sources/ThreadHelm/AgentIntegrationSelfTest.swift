@@ -254,6 +254,26 @@ private func runAgentVersionTruthSelfTest() {
     )
     let codexMetadata = builtInAgentMetadata().first { $0.id == .codex }
     let piMetadata = builtInAgentMetadata().first { $0.id == .pi }
+    let driftedCodexAdapter = CodexAgentAdapter(
+        readCollection: { .displaying([]) },
+        discovery: {
+            versionValidatedAgentDiscovery(
+                agentID: .codex,
+                isInstalled: true,
+                components: [
+                    AgentVersionComponent(
+                        key: "version",
+                        label: "Version",
+                        value: "0.146.0"
+                    ),
+                ]
+            )
+        },
+        openURL: { _ in true }
+    )
+    let driftedCodexStatus = probedAgentRuntimeStatuses(
+        registry: AgentRegistry(adapters: [driftedCodexAdapter])
+    ).first
 
     guard Set(profiles.keys) == Set(AgentID.builtInOrder),
           cursorPinned.compatibility == .validated,
@@ -279,6 +299,16 @@ private func runAgentVersionTruthSelfTest() {
                   ]
               )
           ).status(for: .lifecycleObservation) == .unknown,
+          driftedCodexStatus?.discovery.compatibility == .unvalidated,
+          driftedCodexStatus?.metadata.capabilities.status(
+              for: .lifecycleObservation
+          ) == .unknown,
+          driftedCodexStatus?.metadata.capabilities.status(
+              for: .nativeNavigation
+          ) == .unknown,
+          driftedCodexStatus?.metadata.capabilities.status(
+              for: .managedIntegration
+          ) == .unsupported,
           codexMetadata?.capabilities.status(for: .exactReturn) == .unknown,
           piMetadata?.capabilities.status(for: .exactReturn) == .unsupported,
           normalizedAgentVersion(from: "codex-cli 0.145.0") == "0.145.0",
@@ -303,15 +333,16 @@ private func runCodexClaudeAdapterSelfTest() {
         workingDirectory: "/tmp/threadhelm-codex"
     )
     var openedCodexURL: URL?
+    let validatedCodexDiscovery: () -> AgentDiscovery = {
+        AgentDiscovery(
+            isInstalled: true,
+            version: "self-test",
+            compatibility: .validated
+        )
+    }
     let codex = CodexAgentAdapter(
         readCollection: { .displaying([codexTask]) },
-        discovery: {
-            AgentDiscovery(
-                isInstalled: true,
-                version: "self-test",
-                compatibility: .supported
-            )
-        },
+        discovery: validatedCodexDiscovery,
         openURL: {
             openedCodexURL = $0
             return true
@@ -323,8 +354,30 @@ private func runCodexClaudeAdapterSelfTest() {
         failAgentIntegrationSelfTest("Codex adapter observation")
     }
     let codexReport = codex.open(session: codexSnapshot)
+    var driftedCodexOpenCallCount = 0
+    let driftedCodexReport = CodexAgentAdapter(
+        readCollection: { .displaying([]) },
+        discovery: {
+            versionValidatedAgentDiscovery(
+                agentID: .codex,
+                isInstalled: true,
+                components: [
+                    AgentVersionComponent(
+                        key: "version",
+                        label: "Version",
+                        value: "0.146.0"
+                    ),
+                ]
+            )
+        },
+        openURL: { _ in
+            driftedCodexOpenCallCount += 1
+            return true
+        }
+    ).open(session: codexSnapshot)
     let failedCodexReport = CodexAgentAdapter(
         readCollection: { .displaying([]) },
+        discovery: validatedCodexDiscovery,
         openURL: { _ in false }
     ).open(session: codexSnapshot)
     guard codexSnapshot.identity.agentID == .codex,
@@ -337,6 +390,10 @@ private func runCodexClaudeAdapterSelfTest() {
           codexReport.result == .unknown,
           codexReport.exactAttempted,
           !codexReport.independentlyConfirmedIdentity,
+          driftedCodexReport.result == .notAttempted,
+          !driftedCodexReport.exactAttempted,
+          !driftedCodexReport.independentlyConfirmedIdentity,
+          driftedCodexOpenCallCount == 0,
           failedCodexReport.result == .failed,
           failedCodexReport.exactAttempted,
           !failedCodexReport.independentlyConfirmedIdentity,
@@ -363,16 +420,17 @@ private func runCodexClaudeAdapterSelfTest() {
         arrivedAt: now
     ))
     var openedClaudeRequest: ClaudeTerminalOpenRequest?
+    let validatedClaudeDiscovery: () -> AgentDiscovery = {
+        AgentDiscovery(
+            isInstalled: true,
+            version: "self-test",
+            compatibility: .validated
+        )
+    }
     let claude = ClaudeCodeAgentAdapter(
         readCollection: { .displaying([claudeTask]) },
         permissionQueue: { queue },
-        discovery: {
-            AgentDiscovery(
-                isInstalled: true,
-                version: "self-test",
-                compatibility: .supported
-            )
-        },
+        discovery: validatedClaudeDiscovery,
         openTerminal: {
             openedClaudeRequest = $0
             return .workingDirectoryFallback
@@ -384,6 +442,34 @@ private func runCodexClaudeAdapterSelfTest() {
         failAgentIntegrationSelfTest("Claude adapter observation")
     }
     let claudeReport = claude.open(session: claudeSnapshot)
+    var driftedClaudeGateBodyCallCount = 0
+    var driftedClaudeTerminalOpenCallCount = 0
+    let driftedClaude = ClaudeCodeAgentAdapter(
+        readCollection: { .displaying([]) },
+        discovery: {
+            versionValidatedAgentDiscovery(
+                agentID: .claudeCode,
+                isInstalled: true,
+                components: [
+                    AgentVersionComponent(
+                        key: "version",
+                        label: "Version",
+                        value: "2.1.227"
+                    ),
+                ]
+            )
+        },
+        openTerminal: { _ in
+            driftedClaudeTerminalOpenCallCount += 1
+            return .unknown
+        }
+    )
+    let driftedClaudeReport = driftedClaude.openSessionForValidatedVersion(
+        session: claudeSnapshot
+    ) {
+        driftedClaudeGateBodyCallCount += 1
+        return driftedClaude.openValidated(session: claudeSnapshot)
+    }
     let nativeOnlyClaudeSnapshot = try? ClaudeCodeAgentAdapter(
         readCollection: { .displaying([claudeTask]) },
         permissionQueue: { .empty },
@@ -397,6 +483,11 @@ private func runCodexClaudeAdapterSelfTest() {
           claudeReport.advertisedActionability == .inApp,
           !claudeReport.exactAttempted,
           !claudeReport.independentlyConfirmedIdentity,
+          driftedClaudeReport.result == .notAttempted,
+          !driftedClaudeReport.exactAttempted,
+          !driftedClaudeReport.independentlyConfirmedIdentity,
+          driftedClaudeGateBodyCallCount == 0,
+          driftedClaudeTerminalOpenCallCount == 0,
           nativeOnlyClaudeSnapshot?.attentionReason == .question,
           nativeOnlyClaudeSnapshot?.actionability
             == .openExactNativeSession,
@@ -554,6 +645,7 @@ private func runCodexClaudeAdapterSelfTest() {
     )
     let exactClaudeReport = ClaudeCodeAgentAdapter(
         readCollection: { .displaying([]) },
+        discovery: validatedClaudeDiscovery,
         openTerminal: { _ in .exactSession }
     ).open(session: exactClaudeSnapshot)
     let resumeClaudeSnapshot = AgentSessionSnapshot(
@@ -575,6 +667,7 @@ private func runCodexClaudeAdapterSelfTest() {
     )
     let resumeClaudeReport = ClaudeCodeAgentAdapter(
         readCollection: { .displaying([]) },
+        discovery: validatedClaudeDiscovery,
         openTerminal: { _ in .unknown }
     ).open(session: resumeClaudeSnapshot)
     let missingProcessStartSnapshot = AgentSessionSnapshot(
@@ -598,6 +691,7 @@ private func runCodexClaudeAdapterSelfTest() {
     )
     let missingProcessStartReport = ClaudeCodeAgentAdapter(
         readCollection: { .displaying([]) },
+        discovery: validatedClaudeDiscovery,
         openTerminal: { _ in .exactSession }
     ).open(session: missingProcessStartSnapshot)
     guard exactClaudeReport.result == .exactSession,
@@ -819,6 +913,40 @@ private func runAgentTaskProgressRegistrySelfTest(mockAgentID: AgentID) {
           forward.items.map(\.kind) == [.waitingForInput]
     else {
         failAgentIntegrationSelfTest("deterministic task snapshot deduplication")
+    }
+
+    let openAllowed = TaskProgressItem(
+        title: "Same open policy identity",
+        kind: .running,
+        startedAt: now,
+        updatedAt: now,
+        source: .codex,
+        threadID: "codex-open-policy",
+        allowsAgentOpen: true
+    )
+    let openDenied = TaskProgressItem(
+        title: "Same open policy identity",
+        kind: .running,
+        startedAt: now,
+        updatedAt: now,
+        source: .codex,
+        threadID: "codex-open-policy",
+        allowsAgentOpen: false
+    )
+    let allowedFirst = TaskProgressCollectionSnapshot.displaying([
+        openAllowed,
+        openDenied,
+    ])
+    let deniedFirst = TaskProgressCollectionSnapshot.displaying([
+        openDenied,
+        openAllowed,
+    ])
+    guard allowedFirst == deniedFirst,
+          allowedFirst.items.first?.canOpen == false
+    else {
+        failAgentIntegrationSelfTest(
+            "deterministic task open policy must prefer view-only"
+        )
     }
 }
 

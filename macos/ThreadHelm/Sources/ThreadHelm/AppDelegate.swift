@@ -441,7 +441,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let projected = self.makeAgentDashboardProjection(
                         collection: self.lastPolledTaskCollection,
                         permissionQueue: queue,
-                        liveReduction: liveUpdate.reduction
+                        liveReduction: liveUpdate.reduction,
+                        agentStatuses: snapshot.agentStatuses
                     )
                     snapshot.taskCollection = projected.taskCollection
                     snapshot.agentSnapshots = projected.snapshots
@@ -458,9 +459,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             let cachedCodexDesktopRunning = self.cachedCodexDesktopRunning
             let liveCodexDesktopRunning = isCodexDesktopRunning()
+            let claudeCompatibility = self.dashboardStore.snapshot.agentStatuses
+                .first { $0.metadata.id == .claudeCode }?
+                .discovery.compatibility ?? .unknown
             let shouldPresent = shouldPresentClaudePermissionPanel(
                 cachedCodexDesktopRunning: cachedCodexDesktopRunning,
-                liveCodexDesktopRunning: liveCodexDesktopRunning
+                liveCodexDesktopRunning: liveCodexDesktopRunning,
+                claudeCompatibility: claudeCompatibility
             )
             if liveCodexDesktopRunning != cachedCodexDesktopRunning {
                 self.updateCodexDesktopRunningState(liveCodexDesktopRunning)
@@ -739,29 +744,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                   permissionQueue: dashboardStore.snapshot.permissionQueue
               )
         else { return .unavailable }
-        if item.source == .claudeCode {
-            lastClaudePermissionOpenResult = nil
-            if claudePermissionCoordinator?
-                .handoffToTerminalIfPresenting(item) == true
-            {
-                let result = lastClaudePermissionOpenResult ?? .unknown
-                let request = claudeTerminalOpenRequest(for: item)
-                let hasVerifiedProcessTarget = request.processID != nil
-                    && request.processStartIdentity != nil
-                let hasResumeTarget = request.sessionID != nil
-                    && request.workingDirectory != nil
-                return recordOpenReport(AgentOpenReport(
-                    agentID: .claudeCode,
-                    advertisedActionability: snapshot.actionability,
-                    result: result,
-                    invokedExactTarget: hasVerifiedProcessTarget
-                        || hasResumeTarget,
-                    independentlyConfirmedIdentity: result == .exactSession
-                        && hasVerifiedProcessTarget
-                ))
+        let report = adapter.openSessionForValidatedVersion(session: snapshot) {
+            if item.source == .claudeCode {
+                lastClaudePermissionOpenResult = nil
+                if claudePermissionCoordinator?
+                    .handoffToTerminalIfPresenting(item) == true
+                {
+                    let result = lastClaudePermissionOpenResult ?? .unknown
+                    let request = claudeTerminalOpenRequest(for: item)
+                    let hasVerifiedProcessTarget = request.processID != nil
+                        && request.processStartIdentity != nil
+                    let hasResumeTarget = request.sessionID != nil
+                        && request.workingDirectory != nil
+                    return AgentOpenReport(
+                        agentID: .claudeCode,
+                        advertisedActionability: snapshot.actionability,
+                        result: result,
+                        invokedExactTarget: hasVerifiedProcessTarget
+                            || hasResumeTarget,
+                        independentlyConfirmedIdentity: result == .exactSession
+                            && hasVerifiedProcessTarget
+                    )
+                }
             }
+            return adapter.openValidated(session: snapshot)
         }
-        return recordOpenReport(adapter.open(session: snapshot))
+        return recordOpenReport(report)
     }
 
     private func recordOpenReport(_ report: AgentOpenReport) -> OpenResult {
@@ -870,12 +878,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func makeAgentDashboardProjection(
         collection: TaskProgressCollectionSnapshot,
         permissionQueue: ClaudePermissionQueueSnapshot,
-        liveReduction: AgentReductionResult
+        liveReduction: AgentReductionResult,
+        agentStatuses: [AgentRuntimeStatus]
     ) -> AgentDashboardProjection {
+        let compatibilities = Dictionary(
+            agentStatuses.map {
+                ($0.metadata.id, $0.discovery.compatibility)
+            },
+            uniquingKeysWith: { _, latest in latest }
+        )
         let projected = agentDashboardProjection(
             collection: collection,
             permissionQueue: permissionQueue,
             liveReduction: liveReduction,
+            agentCompatibilities: compatibilities,
             registry: agentRegistry
         )
         return AgentDashboardProjection(
@@ -921,7 +937,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let projected = self.makeAgentDashboardProjection(
                         collection: collection,
                         permissionQueue: snapshot.permissionQueue,
-                        liveReduction: liveUpdate.reduction
+                        liveReduction: liveUpdate.reduction,
+                        agentStatuses: snapshot.agentStatuses
                     )
                     snapshot.taskCollection = projected.taskCollection
                     snapshot.agentSnapshots = projected.snapshots
@@ -970,7 +987,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let projected = makeAgentDashboardProjection(
                 collection: lastPolledTaskCollection,
                 permissionQueue: snapshot.permissionQueue,
-                liveReduction: update.reduction
+                liveReduction: update.reduction,
+                agentStatuses: snapshot.agentStatuses
             )
             snapshot.taskCollection = projected.taskCollection
             snapshot.agentSnapshots = projected.snapshots
