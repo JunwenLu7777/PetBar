@@ -49,9 +49,9 @@ enum TaskQueueGroup: String, CaseIterable, Equatable {
 
     var title: String {
         switch self {
-        case .needsYou: return "Needs you"
-        case .running: return "Running"
-        case .review: return "Review"
+        case .needsYou: return "需要你"
+        case .running: return "进行中"
+        case .review: return "已完成"
         }
     }
 

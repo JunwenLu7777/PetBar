@@ -119,6 +119,29 @@ func runAgentIntegrationSelfTest() {
     else {
         failAgentIntegrationSelfTest("runtime health placeholders/activity")
     }
+    let mergedIntegrationStatuses = agentRuntimeStatusesMergingIntegration(
+        runtimePlaceholders,
+        report: AgentIntegrationRunReport(
+            operation: .status,
+            backupID: nil,
+            restoredBackupID: nil,
+            rolledBack: false,
+            agents: [
+                AgentIntegrationRunRecord(
+                    agentID: .cursor,
+                    statusBefore: .notInstalled,
+                    result: nil,
+                    statusAfter: .notInstalled
+                )
+            ]
+        )
+    )
+    guard mergedIntegrationStatuses.first(where: {
+        $0.metadata.id == .cursor
+    })?.integrationStatus == .notInstalled
+    else {
+        failAgentIntegrationSelfTest("runtime integration status merge")
+    }
 
     for id in expectedBuiltIns {
         guard let metadata = registry.metadata(for: id),

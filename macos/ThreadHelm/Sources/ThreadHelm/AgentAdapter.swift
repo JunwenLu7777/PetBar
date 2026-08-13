@@ -273,6 +273,30 @@ func probedAgentRuntimeStatuses(
     }
 }
 
+func agentRuntimeStatusesMergingIntegration(
+    _ statuses: [AgentRuntimeStatus],
+    report: AgentIntegrationRunReport
+) -> [AgentRuntimeStatus] {
+    let statusByID = Dictionary(
+        uniqueKeysWithValues: report.agents.map {
+            ($0.agentID, $0.statusAfter)
+        }
+    )
+    return statuses.map { status in
+        guard let after = statusByID[status.metadata.id] else {
+            return status
+        }
+        return AgentRuntimeStatus(
+            metadata: status.metadata,
+            discovery: status.discovery,
+            integrationStatus: after,
+            diagnostics: status.diagnostics,
+            activeSessionCount: status.activeSessionCount,
+            attentionCount: status.attentionCount
+        )
+    }
+}
+
 func agentRuntimeStatusesWithActivity(
     _ statuses: [AgentRuntimeStatus],
     snapshots: [AgentSessionSnapshot],

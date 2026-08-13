@@ -12,6 +12,9 @@ let dynamicIslandCapsuleSize = NSSize(width: 404, height: 58)
 let dynamicIslandTaskSize = NSSize(width: 820, height: 560)
 let dynamicIslandConfirmationSize = NSSize(width: 820, height: 600)
 let dynamicIslandQuotaSize = NSSize(width: 820, height: 470)
+let dynamicIslandExpandedMinSize = NSSize(width: 820, height: 560)
+let dynamicIslandExpandedComfortMaxSize = NSSize(width: 1_440, height: 960)
+let dynamicIslandExpandedMaxSize = NSSize(width: 2_400, height: 1_600)
 let dynamicIslandTopGap: CGFloat = 6
 let dynamicIslandHorizontalMargin: CGFloat = 8
 let dynamicIslandBottomMargin: CGFloat = 6
@@ -39,6 +42,43 @@ func dynamicIslandRequestedSize(
     case .expanded(.quota):
         return dynamicIslandQuotaSize
     }
+}
+
+func dynamicIslandPreferredExpandedSize(
+    visibleFrame: NSRect,
+    remembered: NSSize? = nil
+) -> NSSize {
+    let fallback = NSSize(
+        width: min(
+            dynamicIslandExpandedComfortMaxSize.width,
+            max(
+                dynamicIslandExpandedMinSize.width,
+                floor(visibleFrame.width * 0.72)
+            )
+        ),
+        height: min(
+            dynamicIslandExpandedComfortMaxSize.height,
+            max(
+                dynamicIslandExpandedMinSize.height,
+                floor(visibleFrame.height * 0.80)
+            )
+        )
+    )
+    let requested = remembered ?? fallback
+    let clamped = NSSize(
+        width: min(
+            max(requested.width, dynamicIslandExpandedMinSize.width),
+            dynamicIslandExpandedMaxSize.width
+        ),
+        height: min(
+            max(requested.height, dynamicIslandExpandedMinSize.height),
+            dynamicIslandExpandedMaxSize.height
+        )
+    )
+    return dynamicIslandFittedSize(
+        requested: clamped,
+        visibleFrame: visibleFrame
+    )
 }
 
 func dynamicIslandFittedSize(

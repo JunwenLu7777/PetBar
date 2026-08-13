@@ -885,11 +885,9 @@ private func assertDynamicIslandTaskWorkspace() {
           controller.eventsScrollerIsEnabledForSelfTest(),
           controller.visibleProviderIconsAreConcreteForSelfTest(),
           controller.visibleTaskGroupSummariesForSelfTest() == [
-              "Running 1",
-              "Review 1",
+              "进行中 1",
+              "已完成 1",
           ],
-          controller.accessibilitySnapshotForSelfTest().contains("Running 1"),
-          controller.accessibilitySnapshotForSelfTest().contains("Review 1"),
           controller.footerButtonGapForSelfTest() >= 14,
           controller.copyPathForSelfTest() == "/tmp/threadhelm",
           controller.openButtonTitleForSelfTest() == "打开 Codex"
@@ -961,6 +959,117 @@ private func assertDynamicIslandTaskWorkspace() {
     }
 
     controller.setStateFilterForSelfTest(.all)
+    guard let cursorMetadata = builtInAgentMetadata().first(where: {
+        $0.id == .cursor
+    }) else {
+        fputs("dynamic island cursor metadata self-test failed\n", stderr)
+        exit(1)
+    }
+    let cursorNotInstalled = AgentRuntimeStatus(
+        metadata: cursorMetadata,
+        discovery: AgentDiscovery(
+            isInstalled: true,
+            version: "3.15.19",
+            compatibility: .unvalidated,
+            versionComponents: [
+                AgentVersionComponent(
+                    key: "desktop",
+                    label: "Desktop",
+                    value: "3.15.19"
+                ),
+                AgentVersionComponent(
+                    key: "agentCLI",
+                    label: "Agent CLI",
+                    value: "2026.04.15-dccdccd"
+                ),
+            ]
+        ),
+        integrationStatus: .notInstalled,
+        diagnostics: AgentDiagnostics(
+            health: .degraded,
+            summary: "集成未安装",
+            counters: [:]
+        ),
+        activeSessionCount: 0,
+        attentionCount: 0
+    )
+    let emptyCopy = cursorListeningEmptyPresentation(
+        sourceFilter: .cursor,
+        sourceItemCount: 0,
+        cursorStatus: cursorNotInstalled
+    )
+    let cursorStatusUnknown = AgentRuntimeStatus(
+        metadata: cursorMetadata,
+        discovery: cursorNotInstalled.discovery,
+        integrationStatus: nil,
+        diagnostics: cursorNotInstalled.diagnostics,
+        activeSessionCount: 0,
+        attentionCount: 0
+    )
+    guard emptyCopy?.title == "还听不到 Cursor 的执行",
+          emptyCopy?.eyebrow == "Cursor · 监听未安装",
+          emptyCopy?.body.contains("3.15.19") == true,
+          emptyCopy?.body.contains("3.15.6") == true,
+          emptyCopy?.facts.contains(where: {
+              $0.label == "集成状态" && $0.value == "未安装"
+          }) == true,
+          emptyCopy?.facts.contains(where: {
+              $0.label == "钩子文件" && $0.value.contains("hooks.json")
+          }) == true,
+          cursorListeningEmptyPresentation(
+              sourceFilter: .cursor,
+              sourceItemCount: 1,
+              cursorStatus: cursorNotInstalled
+          ) == nil,
+          cursorListeningEmptyPresentation(
+              sourceFilter: .cursor,
+              sourceItemCount: 0,
+              cursorStatus: cursorStatusUnknown
+          )?.title == "还听不到 Cursor 的执行"
+    else {
+        fputs("dynamic island cursor listening copy self-test failed\n", stderr)
+        exit(1)
+    }
+    controller.apply(
+        collection: collection,
+        sourceFilter: .cursor,
+        preferredTaskKey: nil,
+        agentStatuses: [cursorNotInstalled]
+    )
+    var inspectAgentsCount = 0
+    controller.onInspectAgents = { inspectAgentsCount += 1 }
+    controller.performOpenSelectedTaskForSelfTest()
+    guard controller.visibleTaskKeysForSelfTest().isEmpty,
+          controller.accessibilitySnapshotForSelfTest()
+              .contains("还听不到 Cursor 的执行"),
+          controller.accessibilitySnapshotForSelfTest().contains("监听未安装"),
+          controller.accessibilitySnapshotForSelfTest()
+              .contains("查看 Agents 状态"),
+          controller.accessibilitySnapshotForSelfTest().contains("稍后再装"),
+          controller.accessibilitySnapshotForSelfTest().contains("集成状态"),
+          !controller.accessibilitySnapshotForSelfTest()
+              .contains("打开当前任务"),
+          controller.openButtonTitleForSelfTest() == "查看 Agents 状态",
+          inspectAgentsCount == 1
+    else {
+        fputs("dynamic island cursor listening empty self-test failed\n", stderr)
+        exit(1)
+    }
+    controller.setStateFilterForSelfTest(.failed)
+    guard controller.accessibilitySnapshotForSelfTest()
+              .contains("还听不到 Cursor 的执行"),
+          controller.openButtonTitleForSelfTest() == "查看 Agents 状态"
+    else {
+        fputs("dynamic island cursor listening filter persistence self-test failed\n", stderr)
+        exit(1)
+    }
+
+    controller.setStateFilterForSelfTest(.all)
+    controller.apply(
+        collection: collection,
+        sourceFilter: .codex,
+        preferredTaskKey: nil
+    )
     let selectedBeforeHover = controller.selectedTaskKeyForSelfTest()
     controller.showHoverForSelfTest(item: codexRunning)
     guard controller.hoverEventTextsForSelfTest()
@@ -1721,6 +1830,17 @@ private func assertDynamicIslandPlacement() {
         exit(1)
     }
 
+    let largeVisible = NSRect(x: 0, y: 0, width: 1_600, height: 1_000)
+    let preferred = dynamicIslandPreferredExpandedSize(visibleFrame: largeVisible)
+    guard preferred.width > dynamicIslandTaskSize.width,
+          preferred.height > dynamicIslandTaskSize.height,
+          preferred.width <= dynamicIslandExpandedComfortMaxSize.width,
+          preferred.height <= dynamicIslandExpandedComfortMaxSize.height
+    else {
+        fputs("dynamic island preferred expanded size self-test failed\n", stderr)
+        exit(1)
+    }
+
     let narrowVisible = NSRect(x: 0, y: 0, width: 700, height: 900)
     let narrowSize = dynamicIslandFittedSize(
         requested: dynamicIslandTaskSize,
@@ -1825,12 +1945,13 @@ private func assertDynamicIslandStateAndLevel() {
     controller.expand(.tasks)
     controller.completeAnimationForSelfTest()
     let visibleFrame = controller.visibleFrameForSelfTest()
+    let expectedExpandedSize = dynamicIslandPreferredExpandedSize(
+        visibleFrame: visibleFrame
+    )
     guard controller.state == .expanded(.tasks),
           controller.panel.allowsKeyWindow,
-          controller.panel.frame.size == dynamicIslandFittedSize(
-              requested: dynamicIslandTaskSize,
-              visibleFrame: visibleFrame
-          )
+          controller.panel.styleMask.contains(.resizable),
+          controller.panel.frame.size == expectedExpandedSize
     else {
         fputs("dynamic island expand tasks self-test failed\n", stderr)
         exit(1)
@@ -1847,10 +1968,7 @@ private func assertDynamicIslandStateAndLevel() {
     controller.expand(.quota)
     controller.completeAnimationForSelfTest()
     guard controller.state == .expanded(.quota),
-          controller.panel.frame.size == dynamicIslandFittedSize(
-              requested: dynamicIslandQuotaSize,
-              visibleFrame: visibleFrame
-          )
+          controller.panel.frame.size == expectedExpandedSize
     else {
         fputs("dynamic island tab switch self-test failed\n", stderr)
         exit(1)
@@ -1875,6 +1993,7 @@ private func assertDynamicIslandStateAndLevel() {
               requested: dynamicIslandCapsuleSize,
               visibleFrame: visibleFrame
           ),
+          !controller.panel.styleMask.contains(.resizable),
           !controller.panel.allowsKeyWindow,
           !controller.panel.isKeyWindow,
           collapseClearedFirstResponder

@@ -828,11 +828,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 registry: registry,
                 preserving: previousStatuses
             )
+            let integrationReport = AgentIntegrationManager(registry: registry)
+                .status(
+                    in: AgentIntegrationScope(
+                        rootDirectory: FileManager.default.homeDirectoryForCurrentUser,
+                        permitsLiveConfigurationChanges: false
+                    )
+                )
+            let withIntegration = agentRuntimeStatusesMergingIntegration(
+                probed,
+                report: integrationReport
+            )
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.dashboardStore.update { snapshot in
                     snapshot.agentStatuses = agentRuntimeStatusesWithActivity(
-                        probed,
+                        withIntegration,
                         snapshots: snapshot.agentSnapshots,
                         attentionItems: snapshot.attentionItems
                     )

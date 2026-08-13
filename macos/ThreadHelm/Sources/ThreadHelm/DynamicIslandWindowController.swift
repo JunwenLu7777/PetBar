@@ -32,6 +32,8 @@ final class DynamicIslandWindowController {
     private var globalMonitor: Any?
     private var animationGeneration = 0
     private var suppressSelectedTaskAcknowledgement = false
+    private var rememberedExpandedSize: NSSize?
+    private var resizeObserver: NSObjectProtocol?
 
     init(store: ActivityDashboardStore? = nil) {
         self.store = store
@@ -58,6 +60,8 @@ final class DynamicIslandWindowController {
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = true
+        panel.minSize = dynamicIslandCapsuleSize
+        panel.maxSize = dynamicIslandCapsuleSize
         panel.collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
@@ -110,9 +114,19 @@ final class DynamicIslandWindowController {
         }
         applySnapshotToRoot(state: .capsule)
         applyFrame(for: .capsule)
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            self?.expandedWindowDidResize()
+        }
     }
 
     deinit {
+        if let resizeObserver {
+            NotificationCenter.default.removeObserver(resizeObserver)
+        }
         removeInteractionMonitors()
         if let storeObserverToken {
             store?.removeObserver(storeObserverToken)
@@ -286,6 +300,10 @@ final class DynamicIslandWindowController {
         applyFrame(for: state == .hidden ? .capsule : state)
         isAnimating = false
         panel.alphaValue = 1
+        if case .expanded = state {
+            rememberedExpandedSize = panel.frame.size
+        }
+        panel.invalidateShadow()
     }
 
     func visibleFrameForSelfTest() -> NSRect {
@@ -334,11 +352,61 @@ final class DynamicIslandWindowController {
     }
 
     private func applyFrame(for targetState: DynamicIslandPresentationState) {
+        applyResizePolicy(for: targetState)
         let frame = dynamicIslandFrame(
-            size: dynamicIslandRequestedSize(for: targetState),
+            size: requestedWindowSize(for: targetState),
             visibleFrame: selectedVisibleFrame
         )
         panel.setFrame(frame, display: true)
+        lockCapsuleSizeIfNeeded(for: targetState)
+        panel.invalidateShadow()
+    }
+
+    private func requestedWindowSize(
+        for targetState: DynamicIslandPresentationState
+    ) -> NSSize {
+        switch targetState {
+        case .hidden, .capsule:
+            return dynamicIslandCapsuleSize
+        case .expanded:
+            return dynamicIslandPreferredExpandedSize(
+                visibleFrame: selectedVisibleFrame,
+                remembered: rememberedExpandedSize
+            )
+        }
+    }
+
+    private func applyResizePolicy(
+        for targetState: DynamicIslandPresentationState
+    ) {
+        switch targetState {
+        case .expanded:
+            panel.styleMask.insert(.resizable)
+            panel.minSize = dynamicIslandExpandedMinSize
+            panel.maxSize = dynamicIslandExpandedMaxSize
+        case .hidden, .capsule:
+            panel.styleMask.remove(.resizable)
+            panel.minSize = dynamicIslandCapsuleSize
+            panel.maxSize = dynamicIslandExpandedMaxSize
+        }
+    }
+
+    private func lockCapsuleSizeIfNeeded(
+        for targetState: DynamicIslandPresentationState
+    ) {
+        switch targetState {
+        case .hidden, .capsule:
+            panel.minSize = dynamicIslandCapsuleSize
+            panel.maxSize = dynamicIslandCapsuleSize
+        case .expanded:
+            break
+        }
+    }
+
+    private func expandedWindowDidResize() {
+        guard !isAnimating, case .expanded = state else { return }
+        rememberedExpandedSize = panel.frame.size
+        panel.invalidateShadow()
     }
 
     private func capsuleDragEnded(at globalPoint: NSPoint) {
@@ -362,9 +430,10 @@ final class DynamicIslandWindowController {
         duration: TimeInterval
     ) {
         let targetFrame = dynamicIslandFrame(
-            size: dynamicIslandRequestedSize(for: targetState),
+            size: requestedWindowSize(for: targetState),
             visibleFrame: selectedVisibleFrame
         )
+        applyResizePolicy(for: targetState)
         animationGeneration += 1
         let generation = animationGeneration
         let reduceMotion =
@@ -380,6 +449,8 @@ final class DynamicIslandWindowController {
         guard resolvedDuration > 0 else {
             panel.alphaValue = 1
             panel.setFrame(targetFrame, display: true)
+            lockCapsuleSizeIfNeeded(for: targetState)
+            panel.invalidateShadow()
             return
         }
 
@@ -406,6 +477,11 @@ final class DynamicIslandWindowController {
         guard generation == animationGeneration else { return }
         isAnimating = false
         panel.alphaValue = 1
+        if case .expanded = state {
+            rememberedExpandedSize = panel.frame.size
+        }
+        lockCapsuleSizeIfNeeded(for: state)
+        panel.invalidateShadow()
     }
 
     private func installInteractionMonitors() {

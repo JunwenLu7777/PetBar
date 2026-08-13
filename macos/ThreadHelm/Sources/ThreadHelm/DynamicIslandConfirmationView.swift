@@ -1693,6 +1693,10 @@ private final class DynamicIslandActionButton: NSButton {
             foreground = DynamicIslandPalette.primaryText
             background = DynamicIslandPalette.card
             border = DynamicIslandPalette.strongHairline
+        case .bare:
+            foreground = DynamicIslandPalette.secondaryText
+            background = NSColor.clear
+            border = NSColor.clear
         }
         let effectiveForeground = isEnabled
             ? foreground

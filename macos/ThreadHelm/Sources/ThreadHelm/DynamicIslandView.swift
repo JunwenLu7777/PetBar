@@ -72,22 +72,23 @@ struct DynamicIslandCapsuleQuotaSummaryLayoutSnapshot: Equatable {
 }
 
 enum DynamicIslandPalette {
-    static let background = NSColor(calibratedWhite: 0.055, alpha: 0.98)
-    static let surface = NSColor(calibratedWhite: 0.075, alpha: 0.98)
-    static let raised = NSColor(calibratedWhite: 0.105, alpha: 0.98)
-    static let card = NSColor(calibratedWhite: 0.135, alpha: 0.98)
-    static let cardHover = NSColor(calibratedWhite: 0.165, alpha: 0.98)
-    static let hairline = NSColor.white.withAlphaComponent(0.12)
-    static let strongHairline = NSColor.white.withAlphaComponent(0.20)
+    static let background = NSColor(calibratedWhite: 0.07, alpha: 0.58)
+    static let surface = NSColor(calibratedWhite: 0.10, alpha: 0.86)
+    static let raised = NSColor(calibratedWhite: 0.13, alpha: 0.90)
+    static let card = NSColor(calibratedWhite: 0.16, alpha: 0.92)
+    static let cardHover = NSColor(calibratedWhite: 0.20, alpha: 0.94)
+    static let hairline = NSColor.white.withAlphaComponent(0.16)
+    static let strongHairline = NSColor.white.withAlphaComponent(0.26)
     static let primaryText = NSColor.white.withAlphaComponent(0.94)
     static let secondaryText = NSColor.white.withAlphaComponent(0.62)
     static let tertiaryText = NSColor.white.withAlphaComponent(0.42)
     static let green = NSColor(
-        calibratedRed: 0.40,
-        green: 0.83,
-        blue: 0.08,
+        calibratedRed: 0.32,
+        green: 0.82,
+        blue: 0.50,
         alpha: 1
     )
+    static let selectedFill = NSColor.white.withAlphaComponent(0.10)
     static let amber = NSColor(
         calibratedRed: 1.00,
         green: 0.67,
@@ -138,6 +139,19 @@ enum DynamicIslandButtonStyle {
     case destructive
     case subtle
     case icon
+    case bare
+}
+
+enum DynamicIslandSelectionFill {
+    case accent
+    case neutral
+    case text
+    case inverted
+}
+
+enum DynamicIslandSegmentedChrome {
+    case grouped
+    case underline
 }
 
 final class DynamicIslandCardView: NSView {
@@ -207,6 +221,7 @@ final class DynamicIslandDividerView: NSView {
 final class DynamicIslandButton: NSButton {
     private(set) var visualStyle: DynamicIslandButtonStyle
     private var selectedAccent: NSColor?
+    private var selectionFill = DynamicIslandSelectionFill.accent
     private var isVisuallySelected = false
 
     init(
@@ -221,7 +236,7 @@ final class DynamicIslandButton: NSButton {
         focusRingType = .none
         setButtonType(.momentaryChange)
         wantsLayer = true
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = 12
         layer?.borderWidth = 1
         font = .systemFont(ofSize: 12.5, weight: .medium)
         if let imageName {
@@ -256,9 +271,14 @@ final class DynamicIslandButton: NSButton {
         applyAppearance()
     }
 
-    func setSelected(_ selected: Bool, accent: NSColor) {
+    func setSelected(
+        _ selected: Bool,
+        accent: NSColor,
+        fill: DynamicIslandSelectionFill = .accent
+    ) {
         isVisuallySelected = selected
         selectedAccent = accent
+        selectionFill = fill
         applyAppearance()
     }
 
@@ -266,43 +286,79 @@ final class DynamicIslandButton: NSButton {
         let foreground: NSColor
         let background: NSColor
         let border: NSColor
+        let borderWidth: CGFloat
         if isVisuallySelected, let selectedAccent {
-            foreground = DynamicIslandPalette.primaryText
-            background = selectedAccent.withAlphaComponent(0.22)
-            border = selectedAccent.withAlphaComponent(0.78)
+            switch selectionFill {
+            case .accent:
+                foreground = DynamicIslandPalette.primaryText
+                background = selectedAccent.withAlphaComponent(0.22)
+                border = selectedAccent.withAlphaComponent(0.78)
+                borderWidth = 1
+            case .neutral:
+                foreground = DynamicIslandPalette.primaryText
+                background = DynamicIslandPalette.selectedFill
+                border = DynamicIslandPalette.hairline
+                borderWidth = 1
+            case .text:
+                foreground = DynamicIslandPalette.primaryText
+                background = NSColor.clear
+                border = NSColor.clear
+                borderWidth = 0
+            case .inverted:
+                foreground = NSColor(calibratedWhite: 0.08, alpha: 1)
+                background = NSColor.white.withAlphaComponent(0.92)
+                border = NSColor.clear
+                borderWidth = 0
+            }
         } else {
             switch visualStyle {
             case .primary:
                 foreground = NSColor(calibratedWhite: 0.05, alpha: 1)
                 background = DynamicIslandPalette.amber
                 border = DynamicIslandPalette.amber
+                borderWidth = 1
             case .destructive:
                 foreground = DynamicIslandPalette.red
                 background = DynamicIslandPalette.red.withAlphaComponent(0.08)
                 border = DynamicIslandPalette.red.withAlphaComponent(0.78)
+                borderWidth = 1
             case .subtle:
                 foreground = DynamicIslandPalette.secondaryText
                 background = NSColor.white.withAlphaComponent(0.025)
                 border = DynamicIslandPalette.hairline
+                borderWidth = 1
             case .icon:
                 foreground = DynamicIslandPalette.primaryText
                 background = DynamicIslandPalette.raised
                 border = DynamicIslandPalette.strongHairline
+                borderWidth = 1
             case .secondary:
                 foreground = DynamicIslandPalette.primaryText
                 background = DynamicIslandPalette.card
                 border = DynamicIslandPalette.strongHairline
+                borderWidth = 1
+            case .bare:
+                foreground = DynamicIslandPalette.secondaryText
+                background = NSColor.clear
+                border = NSColor.clear
+                borderWidth = 0
             }
         }
         let effectiveForeground = isEnabled
             ? foreground
             : foreground.withAlphaComponent(0.34)
-        layer?.backgroundColor = background
-            .withAlphaComponent(isEnabled ? background.alphaComponent : 0.45)
-            .cgColor
-        layer?.borderColor = border
-            .withAlphaComponent(isEnabled ? border.alphaComponent : 0.35)
-            .cgColor
+        layer?.borderWidth = borderWidth
+        if background.alphaComponent == 0 {
+            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.borderColor = NSColor.clear.cgColor
+        } else {
+            layer?.backgroundColor = background
+                .withAlphaComponent(isEnabled ? background.alphaComponent : 0.45)
+                .cgColor
+            layer?.borderColor = border
+                .withAlphaComponent(isEnabled ? border.alphaComponent : 0.35)
+                .cgColor
+        }
         attributedTitle = NSAttributedString(
             string: title,
             attributes: [
@@ -319,6 +375,10 @@ final class DynamicIslandSegmentedControl: NSView {
     private var buttons: [DynamicIslandButton] = []
     private var labels: [String]
     private var accentColors: [NSColor]
+    private var dimmedSegments: Set<Int> = []
+    private var chromeStyle = DynamicIslandSegmentedChrome.grouped
+    private var selectionFill = DynamicIslandSelectionFill.accent
+    private let underlineView = NSView()
     private(set) var selectedSegment: Int = 0
 
     init(labels: [String]) {
@@ -326,10 +386,12 @@ final class DynamicIslandSegmentedControl: NSView {
         accentColors = Array(repeating: DynamicIslandPalette.green, count: labels.count)
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 11
-        layer?.backgroundColor = DynamicIslandPalette.raised.cgColor
-        layer?.borderColor = DynamicIslandPalette.hairline.cgColor
-        layer?.borderWidth = 1
+        underlineView.wantsLayer = true
+        underlineView.layer?.cornerRadius = 1
+        underlineView.layer?.backgroundColor = DynamicIslandPalette.green.cgColor
+        underlineView.isHidden = true
+        addSubview(underlineView)
+        applyChrome()
         rebuildButtons()
         setAccessibilityRole(.group)
     }
@@ -341,17 +403,48 @@ final class DynamicIslandSegmentedControl: NSView {
 
     override func layout() {
         super.layout()
-        guard !buttons.isEmpty else { return }
-        let spacing: CGFloat = 4
-        let width = max(1, (bounds.width - spacing * CGFloat(buttons.count + 1)) / CGFloat(buttons.count))
+        guard !buttons.isEmpty else {
+            underlineView.isHidden = true
+            return
+        }
+        let spacing: CGFloat = chromeStyle == .underline ? 2 : 4
+        let horizontalInset: CGFloat = chromeStyle == .underline ? 0 : spacing
+        let verticalInset: CGFloat = chromeStyle == .underline ? 2 : 3
+        let width = max(
+            1,
+            (bounds.width - horizontalInset * 2 - spacing * CGFloat(buttons.count - 1))
+                / CGFloat(buttons.count)
+        )
         for (index, button) in buttons.enumerated() {
             button.frame = NSRect(
-                x: spacing + CGFloat(index) * (width + spacing),
-                y: 3,
+                x: horizontalInset + CGFloat(index) * (width + spacing),
+                y: verticalInset,
                 width: width,
-                height: max(1, bounds.height - 6)
+                height: max(1, bounds.height - verticalInset * 2)
             )
         }
+        layoutUnderline()
+    }
+
+    func setChromeStyle(_ next: DynamicIslandSegmentedChrome) {
+        chromeStyle = next
+        applyChrome()
+        updateSelectionAppearance()
+        needsLayout = true
+    }
+
+    func setSelectionFill(_ fill: DynamicIslandSelectionFill) {
+        selectionFill = fill
+        updateSelectionAppearance()
+    }
+
+    func setDimmed(_ dimmed: Bool, forSegment index: Int) {
+        if dimmed {
+            dimmedSegments.insert(index)
+        } else {
+            dimmedSegments.remove(index)
+        }
+        updateSelectionAppearance()
     }
 
     func setLabel(_ label: String, forSegment index: Int) {
@@ -410,16 +503,56 @@ final class DynamicIslandSegmentedControl: NSView {
             addSubview(button)
             return button
         }
+        addSubview(underlineView)
         updateSelectionAppearance()
     }
 
+    private func applyChrome() {
+        switch chromeStyle {
+        case .grouped:
+            layer?.cornerRadius = 12
+            layer?.backgroundColor = DynamicIslandPalette.raised.cgColor
+            layer?.borderColor = DynamicIslandPalette.hairline.cgColor
+            layer?.borderWidth = 1
+        case .underline:
+            layer?.cornerRadius = 0
+            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.borderWidth = 0
+        }
+    }
+
+    private func layoutUnderline() {
+        guard chromeStyle == .underline,
+              selectedSegment >= 0,
+              buttons.indices.contains(selectedSegment)
+        else {
+            underlineView.isHidden = true
+            return
+        }
+        let button = buttons[selectedSegment]
+        underlineView.isHidden = false
+        underlineView.frame = NSRect(
+            x: button.frame.minX + 8,
+            y: 0,
+            width: max(12, button.frame.width - 16),
+            height: 2
+        )
+    }
+
     private func updateSelectionAppearance() {
+        let fill = chromeStyle == .underline ? DynamicIslandSelectionFill.text : selectionFill
         for (index, button) in buttons.enumerated() {
             let accent = accentColors.indices.contains(index)
                 ? accentColors[index]
                 : DynamicIslandPalette.green
-            button.setSelected(index == selectedSegment, accent: accent)
+            if chromeStyle == .underline {
+                button.setVisualStyle(.bare)
+            }
+            button.setSelected(index == selectedSegment, accent: accent, fill: fill)
+            let shouldDim = dimmedSegments.contains(index) && index != selectedSegment
+            button.alphaValue = shouldDim ? 0.55 : 1
         }
+        layoutUnderline()
     }
 
     @objc private func segmentClicked(_ sender: NSButton) {
@@ -796,8 +929,21 @@ final class DynamicIslandRootViewController: NSViewController {
         state: DynamicIslandPresentationState
     ) {
         _ = view
-        let targetSize = dynamicIslandRequestedSize(for: state)
+        let targetSize: NSSize
+        switch state {
+        case .hidden, .capsule:
+            targetSize = dynamicIslandCapsuleSize
+        case .expanded:
+            if let window = view.window {
+                targetSize = window.frame.size
+            } else if view.bounds.width >= dynamicIslandExpandedMinSize.width {
+                targetSize = view.bounds.size
+            } else {
+                targetSize = dynamicIslandTaskSize
+            }
+        }
         view.frame = NSRect(origin: .zero, size: targetSize)
+        view.autoresizingMask = [.width, .height]
 
         let model = dynamicIslandCapsulePresentation(
             snapshot: snapshot,
@@ -1327,9 +1473,10 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     var selectedTaskKey: String?
 
     private let backgroundView = DynamicIslandSurfaceView(
-        cornerRadius: 20,
+        cornerRadius: 24,
         showsHairline: true
     )
+    private let titleStatusDot = NSView()
     private let titleField = DynamicIslandLabel(size: 15, weight: .semibold)
     private let tabs = DynamicIslandSegmentedControl(
         labels: ["任务", "Agents", "额度"]
@@ -1374,6 +1521,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         view = NSView(frame: NSRect(origin: .zero, size: dynamicIslandTaskSize))
         view.addSubview(backgroundView)
         for subview in [
+            titleStatusDot,
             titleField,
             tabs,
             sourceFilter,
@@ -1392,22 +1540,26 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         childContainer.addSubview(statusField)
         childContainer.addSubview(placeholderField)
 
-        titleField.stringValue = "ThreadHelm 活动"
+        titleStatusDot.wantsLayer = true
+        titleStatusDot.layer?.cornerRadius = 4
+        titleStatusDot.layer?.backgroundColor = DynamicIslandPalette.green.cgColor
+        titleStatusDot.setAccessibilityElement(false)
+        titleField.stringValue = "ThreadHelm"
         titleField.setAccessibilityLabel("ThreadHelm 活动")
 
         tabs.onSelectionChange = { [weak self] index in
             self?.tabChanged(index: index)
         }
         tabs.setAccessibilityLabel("活动分页")
-        tabs.setAccentColor(DynamicIslandPalette.green, forSegment: 0)
-        tabs.setAccentColor(DynamicIslandPalette.green, forSegment: 1)
-        tabs.setAccentColor(DynamicIslandPalette.green, forSegment: 2)
+        tabs.setSelectionFill(.inverted)
 
         sourceFilter.onSelectionChange = { [weak self] index in
             self?.sourceChanged(index: index)
         }
         sourceFilter.selectSegment(0)
         sourceFilter.setAccessibilityLabel("任务来源筛选")
+        sourceFilter.setChromeStyle(.underline)
+        sourceFilter.setSelectionFill(.text)
 
         refreshButton.target = self
         refreshButton.action = #selector(refresh)
@@ -1436,6 +1588,12 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         taskController.onCopyWorkingDirectory = { [weak self] path in
             self?.onCopyWorkingDirectory?(path) ?? false
         }
+        taskController.onInspectAgents = { [weak self] in
+            self?.onTabChange?(.agents)
+        }
+        taskController.onDeferCursorSetup = { [weak self] in
+            self?.setSourceFilterForSelfTest(.all)
+        }
         taskController.onSelectedTaskKeyChange = { [weak self] key in
             self?.selectedTaskKey = key
             self?.onSelectedTaskKeyChange?(key)
@@ -1455,12 +1613,13 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         backgroundView.frame = view.bounds
         let width = view.bounds.width
         let height = view.bounds.height
-        titleField.frame = NSRect(x: 22, y: height - 39, width: 118, height: 22)
-        tabs.frame = NSRect(x: 146, y: height - 44, width: 234, height: 32)
+        titleStatusDot.frame = NSRect(x: 22, y: height - 33, width: 8, height: 8)
+        titleField.frame = NSRect(x: 36, y: height - 39, width: 108, height: 22)
+        tabs.frame = NSRect(x: 150, y: height - 44, width: 248, height: 32)
         sourceFilter.frame = NSRect(
-            x: 388,
+            x: 410,
             y: height - 44,
-            width: max(1, width - 542),
+            width: max(1, width - 564),
             height: 32
         )
         refreshButton.frame = NSRect(x: width - 134, y: height - 44, width: 32, height: 32)
@@ -1591,7 +1750,8 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             taskController.apply(
                 collection: snapshot.taskCollection,
                 sourceFilter: currentSourceFilter,
-                preferredTaskKey: selectedTaskKey
+                preferredTaskKey: selectedTaskKey,
+                agentStatuses: snapshot.agentStatuses
             )
             selectedTaskKey = taskController.selectedTaskKeyForSelfTest()
             statusSymbol.image = NSImage(
@@ -1748,7 +1908,8 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         taskController.apply(
             collection: latestSnapshot.taskCollection,
             sourceFilter: currentSourceFilter,
-            preferredTaskKey: preferredTaskKey ?? selectedTaskKey
+            preferredTaskKey: preferredTaskKey ?? selectedTaskKey,
+            agentStatuses: latestSnapshot.agentStatuses
         )
         selectedTaskKey = taskController.selectedTaskKeyForSelfTest()
     }
@@ -1876,6 +2037,7 @@ private final class DynamicIslandSurfaceView: NSView {
         effectView.material = .hudWindow
         effectView.blendingMode = .behindWindow
         effectView.state = .active
+        effectView.isEmphasized = true
         tintView.wantsLayer = true
     }
 
@@ -1896,7 +2058,9 @@ private final class DynamicIslandSurfaceView: NSView {
         layer?.borderColor = DynamicIslandPalette.hairline.cgColor
         layer?.borderWidth = showsHairline || reduceTransparency ? 1 : 0
         tintView.layer?.cornerRadius = cornerRadius
-        tintView.layer?.backgroundColor = DynamicIslandPalette.background.cgColor
+        tintView.layer?.backgroundColor = reduceTransparency
+            ? NSColor(calibratedWhite: 0.08, alpha: 1).cgColor
+            : DynamicIslandPalette.background.cgColor
     }
 }
 
