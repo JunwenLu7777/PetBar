@@ -9,15 +9,98 @@ import AppKit
 import Foundation
 
 enum AgentCompatibility: String, Equatable {
-    case supported
-    case unsupportedVersion
+    case validated
+    case unvalidated
     case unknown
+
+    // Source-compatible aliases for isolated mocks that predate the pinned
+    // truth-set wording. Production discovery uses validated/unvalidated.
+    static let supported = AgentCompatibility.validated
+    static let unsupportedVersion = AgentCompatibility.unvalidated
+}
+
+struct AgentVersionComponent: Equatable {
+    let key: String
+    let label: String
+    let value: String
 }
 
 struct AgentDiscovery: Equatable {
     let isInstalled: Bool
     let version: String?
+    let versionComponents: [AgentVersionComponent]
     let compatibility: AgentCompatibility
+
+    init(
+        isInstalled: Bool,
+        version: String?,
+        compatibility: AgentCompatibility,
+        versionComponents: [AgentVersionComponent] = []
+    ) {
+        self.isInstalled = isInstalled
+        self.version = version
+        self.versionComponents = versionComponents.isEmpty
+            ? version.map {
+                [AgentVersionComponent(key: "version", label: "Version", value: $0)]
+            } ?? []
+            : versionComponents
+        self.compatibility = compatibility
+    }
+}
+
+func versionValidatedAgentDiscovery(
+    agentID: AgentID,
+    isInstalled: Bool,
+    components: [AgentVersionComponent]
+) -> AgentDiscovery {
+    guard isInstalled else {
+        return AgentDiscovery(
+            isInstalled: false,
+            version: nil,
+            compatibility: .unknown,
+            versionComponents: components
+        )
+    }
+
+    let profiles = builtInAgentValidationProfiles()
+    guard let expected = profiles[agentID]?.testedVersionComponents else {
+        return AgentDiscovery(
+            isInstalled: true,
+            version: components.first?.value,
+            compatibility: .unknown,
+            versionComponents: components
+        )
+    }
+    let actualValues = Dictionary(
+        components.map { ($0.key, $0.value) },
+        uniquingKeysWith: { _, latest in latest }
+    )
+    let expectedValues = Dictionary(
+        uniqueKeysWithValues: expected.map { ($0.key, $0.value) }
+    )
+    let hasUniqueComponents = actualValues.count == components.count
+    let isValidated = hasUniqueComponents && actualValues == expectedValues
+    return AgentDiscovery(
+        isInstalled: true,
+        version: components.first?.value,
+        compatibility: isValidated ? .validated : .unvalidated,
+        versionComponents: components
+    )
+}
+
+func normalizedAgentVersion(from output: String) -> String? {
+    let bounded = String(output.prefix(512))
+    guard let expression = try? NSRegularExpression(
+        pattern: #"(?:^|[^A-Za-z0-9])v?([0-9]+(?:\.[0-9]+)+(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?)"#
+    ) else { return nil }
+    let fullRange = NSRange(bounded.startIndex..., in: bounded)
+    guard let match = expression.firstMatch(
+        in: bounded,
+        range: fullRange
+    ),
+    let versionRange = Range(match.range(at: 1), in: bounded)
+    else { return nil }
+    return String(bounded[versionRange])
 }
 
 enum AgentIntegrationStatus: String, Codable, Equatable {
@@ -333,7 +416,9 @@ struct CodexAgentAdapter: AgentAdapter {
             $0.id == .codex
         },
         reader: CodexTaskProgressReader = CodexTaskProgressReader(),
-        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider {
+        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider(
+            agentID: .codex
+        ) {
             locateCodexExecutable()
         },
         openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
@@ -351,7 +436,9 @@ struct CodexAgentAdapter: AgentAdapter {
             $0.id == .codex
         },
         readCollection: @escaping () -> TaskProgressCollectionSnapshot,
-        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider {
+        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider(
+            agentID: .codex
+        ) {
             locateCodexExecutable()
         },
         openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
@@ -429,7 +516,9 @@ struct ClaudeCodeAgentAdapter: AgentAdapter {
         permissionQueue: @escaping () -> ClaudePermissionQueueSnapshot = {
             .empty
         },
-        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider {
+        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider(
+            agentID: .claudeCode
+        ) {
             locateClaudeExecutable()
         },
         openTerminal: @escaping (ClaudeTerminalOpenRequest) -> OpenResult = {
@@ -453,7 +542,9 @@ struct ClaudeCodeAgentAdapter: AgentAdapter {
         permissionQueue: @escaping () -> ClaudePermissionQueueSnapshot = {
             .empty
         },
-        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider {
+        discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider(
+            agentID: .claudeCode
+        ) {
             locateClaudeExecutable()
         },
         openTerminal: @escaping (ClaudeTerminalOpenRequest) -> OpenResult = {
@@ -701,7 +792,10 @@ private func normalizedExecutionState(
     }
 }
 
-private func localAgentDiscovery(executableURL: URL?) -> AgentDiscovery {
+private func localAgentDiscovery(
+    agentID: AgentID,
+    executableURL: URL?
+) -> AgentDiscovery {
     guard let executableURL else {
         return AgentDiscovery(
             isInstalled: false,
@@ -709,19 +803,24 @@ private func localAgentDiscovery(executableURL: URL?) -> AgentDiscovery {
             compatibility: .unknown
         )
     }
-    return AgentDiscovery(
+    let version = localAgentVersion(executableURL: executableURL)
+    return versionValidatedAgentDiscovery(
+        agentID: agentID,
         isInstalled: true,
-        version: localAgentVersion(executableURL: executableURL),
-        compatibility: .supported
+        components: version.map {
+            [AgentVersionComponent(key: "version", label: "Version", value: $0)]
+        } ?? []
     )
 }
 
 private final class LocalAgentDiscoveryCache {
     private let lock = NSLock()
+    private let agentID: AgentID
     private let executableLocator: () -> URL?
     private var cached: AgentDiscovery?
 
-    init(executableLocator: @escaping () -> URL?) {
+    init(agentID: AgentID, executableLocator: @escaping () -> URL?) {
+        self.agentID = agentID
         self.executableLocator = executableLocator
     }
 
@@ -730,6 +829,7 @@ private final class LocalAgentDiscoveryCache {
         defer { lock.unlock() }
         if let cached { return cached }
         let discovery = localAgentDiscovery(
+            agentID: agentID,
             executableURL: executableLocator()
         )
         cached = discovery
@@ -738,9 +838,11 @@ private final class LocalAgentDiscoveryCache {
 }
 
 private func makeLocalAgentDiscoveryProvider(
+    agentID: AgentID,
     _ executableLocator: @escaping () -> URL?
 ) -> () -> AgentDiscovery {
     let cache = LocalAgentDiscoveryCache(
+        agentID: agentID,
         executableLocator: executableLocator
     )
     return { cache.read() }
@@ -771,7 +873,7 @@ private func localAgentVersion(executableURL: URL) -> String? {
             .trimmingCharacters(in: .whitespacesAndNewlines),
           !value.isEmpty
     else { return nil }
-    return String(value.prefix(128))
+    return normalizedAgentVersion(from: String(value.prefix(128)))
 }
 
 func normalizedBuiltInAgentState(
@@ -844,10 +946,10 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                 supported: [
                     .lifecycleObservation,
                     .stableIdentity,
-                    .exactReturn,
                     .nativeNavigation,
                     .quota,
-                ]
+                ],
+                unknown: [.exactReturn]
             )
         ),
         AgentMetadata(
@@ -924,7 +1026,7 @@ func builtInAgentMetadata() -> [AgentMetadata] {
             identityPolicy: "state-only; native session return unverified",
             capabilities: AgentCapabilitySet(
                 supported: [.lifecycleObservation, .managedIntegration],
-                unknown: [.stableIdentity, .exactReturn]
+                unknown: [.stableIdentity]
             )
         ),
     ]

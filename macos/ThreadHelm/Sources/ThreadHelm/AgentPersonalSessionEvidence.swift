@@ -44,8 +44,45 @@ struct AgentPersonalReadinessAssessment: Equatable {
 struct AgentValidationProfile: Equatable {
     let agentID: AgentID
     let testedVersion: String
+    let testedVersionComponents: [AgentVersionComponent]
     let supportedCapabilitiesSummary: String
     let knownLimitation: String
+
+    init(
+        agentID: AgentID,
+        testedVersion: String,
+        testedVersionComponents: [AgentVersionComponent]? = nil,
+        supportedCapabilitiesSummary: String,
+        knownLimitation: String
+    ) {
+        self.agentID = agentID
+        self.testedVersion = testedVersion
+        self.testedVersionComponents = testedVersionComponents ?? [
+            AgentVersionComponent(
+                key: "version",
+                label: "Version",
+                value: testedVersion
+            ),
+        ]
+        self.supportedCapabilitiesSummary = supportedCapabilitiesSummary
+        self.knownLimitation = knownLimitation
+    }
+
+    func effectiveCapabilities(
+        metadata: AgentMetadata,
+        discovery: AgentDiscovery
+    ) -> AgentCapabilitySet {
+        guard metadata.id == agentID,
+              discovery.compatibility == .validated
+        else {
+            return AgentCapabilitySet(
+                unknown: Set(AgentCapability.allCases.filter {
+                    metadata.capabilities.status(for: $0) != .unsupported
+                })
+            )
+        }
+        return metadata.capabilities
+    }
 }
 
 func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
@@ -69,6 +106,18 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
         AgentValidationProfile(
             agentID: .cursor,
             testedVersion: "Desktop 3.15.6 · Agent CLI 2026.04.14-ee4b43a",
+            testedVersionComponents: [
+                AgentVersionComponent(
+                    key: "desktop",
+                    label: "Desktop",
+                    value: "3.15.6"
+                ),
+                AgentVersionComponent(
+                    key: "agentCLI",
+                    label: "Agent CLI",
+                    value: "2026.04.14-ee4b43a"
+                ),
+            ],
             supportedCapabilitiesSummary:
                 "支持：状态、原生应用/项目打开、子 Agent 事件",
             knownLimitation:
@@ -77,6 +126,18 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
         AgentValidationProfile(
             agentID: .zcode,
             testedVersion: "3.7.6 · build 3.7.6.4691",
+            testedVersionComponents: [
+                AgentVersionComponent(
+                    key: "version",
+                    label: "Version",
+                    value: "3.7.6"
+                ),
+                AgentVersionComponent(
+                    key: "build",
+                    label: "build",
+                    value: "3.7.6.4691"
+                ),
+            ],
             supportedCapabilitiesSummary: "支持：状态、原生应用/项目打开",
             knownLimitation:
                 "限制：精确会话、问题/计划语义和 SessionEnd 尚未验证"
@@ -86,7 +147,7 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
             testedVersion: "0.84.1",
             supportedCapabilitiesSummary: "支持：只读状态",
             knownLimitation:
-                "限制：不支持审批、输入、取消或导航；精确返回尚未验证"
+                "限制：不支持审批、输入、取消、导航或精确返回"
         ),
     ]
     return Dictionary(uniqueKeysWithValues: profiles.map {

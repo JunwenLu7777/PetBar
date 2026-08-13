@@ -18,7 +18,7 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 | Claude Code | Exact only when a matching live process plus process-start identity is located at its exact terminal tab. Launching `claude --resume` remains Unknown until the destination identity is checked independently. |
 | Cursor | Unknown. `cursor agent --resume [chatId]` exists, but arbitrary desktop-session mapping is not proven. |
 | ZCode | Unknown. The `zcode` URL scheme and bundled CLI do not prove arbitrary-session return. |
-| Pi | Unknown. `--resume` and `--session` exist, but ThreadHelm must not call them as exact return until identity is independently confirmed. |
+| Pi | Unsupported by the state-only adapter. `--resume` and `--session` exist, but ThreadHelm does not call them. |
 
 ## Fallback return
 
@@ -95,7 +95,7 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 - Cursor cloud agents are out of scope; Cursor in-app approval and arbitrary IDE-session deep links are not claimed.
 - ZCode user CLI configuration was absent at capture time. Its absence does not mean ZCode is uninstalled, and discovery must not create the file.
 - ZCode exact return, already-running-session hook pickup, question/plan semantics, and SessionEnd are unknown or unavailable in the observed surface.
-- Pi approval, input injection, cancellation, navigation, and other session mutation are intentionally unsupported. Exact return remains unknown.
+- Pi approval, input injection, cancellation, navigation, exact return, and other session mutation are intentionally unsupported.
 - No adapter may turn a normal tool failure into a task failure, an app focus into exact success, or an inferred state into official evidence.
 
 This matrix must be revalidated whenever any listed installed version changes.

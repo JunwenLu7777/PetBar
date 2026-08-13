@@ -287,7 +287,10 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
             testedVersion: profile.testedVersion
         )
         versionField.textColor = DynamicIslandPalette.secondaryText
-        capabilityField.stringValue = profile.supportedCapabilitiesSummary
+        capabilityField.stringValue = agentRuntimeCapabilityText(
+            status,
+            profile: profile
+        )
         capabilityField.textColor = DynamicIslandPalette.secondaryText
         limitationField.stringValue = profile.knownLimitation
         limitationField.textColor = DynamicIslandPalette.tertiaryText
@@ -383,10 +386,37 @@ private func agentRuntimeVersionText(
     guard status.discovery.isInstalled else {
         return "本机未检测到 · 测试 \(testedVersion)"
     }
-    guard let version = status.discovery.version, !version.isEmpty else {
-        return "本机版本未知 · 测试 \(testedVersion)"
+    let validation: String
+    switch status.discovery.compatibility {
+    case .validated:
+        validation = "已验证"
+    case .unvalidated:
+        validation = "unvalidated"
+    case .unknown:
+        validation = "验证状态未知"
     }
-    return "本机 \(version) · 测试 \(testedVersion)"
+    let components = status.discovery.versionComponents
+    guard !components.isEmpty else {
+        return "本机版本未知 · \(validation) · 测试 \(testedVersion)"
+    }
+    let localVersion: String
+    if components.count == 1 {
+        localVersion = components[0].value
+    } else {
+        localVersion = components.map { "\($0.label) \($0.value)" }
+            .joined(separator: " · ")
+    }
+    return "本机 \(localVersion) · \(validation) · 测试 \(testedVersion)"
+}
+
+private func agentRuntimeCapabilityText(
+    _ status: AgentRuntimeStatus,
+    profile: AgentValidationProfile
+) -> String {
+    guard status.discovery.compatibility == .validated else {
+        return "能力：当前本机版本未经固定真值验证"
+    }
+    return profile.supportedCapabilitiesSummary
 }
 
 private func agentRuntimeIntegrationText(_ status: AgentRuntimeStatus) -> String {
@@ -421,7 +451,7 @@ private func agentRuntimeAccessibilitySummary(
     [
         status.metadata.displayName,
         agentRuntimeVersionText(status, testedVersion: profile.testedVersion),
-        profile.supportedCapabilitiesSummary,
+        agentRuntimeCapabilityText(status, profile: profile),
         profile.knownLimitation,
         status.diagnostics.summary,
         agentRuntimeIntegrationText(status),

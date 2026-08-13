@@ -12,6 +12,7 @@
 - 已授予辅助功能权限时，ThreadHelm 约每 2 秒把带有 `Show activity, N item(s)` / `显示活动，N 项` 按钮的 Codex 计数角标窗口移到所有活动显示器之外，并继续通过 Codex 自带的“静音任务”菜单关闭新任务气泡；同名的任务列表窗口不会移动。该过程不会移动鼠标或发送按键，只匹配固定辅助功能标签，其他字符串不保留、不记录、不上传。未授权时仍可手动静音，退出后会加入下次启动使用的静音列表。
 - 任务状态约每 2 秒读取本机 Codex 与 Claude Code 会话状态，显示执行中、等待确认、已完成和执行失败；点击任务行可打开 Codex 任务或在 Terminal 恢复 Claude 会话。
 - Agents 页面把本机检测版本和五 Agent 真值夹具的测试版本分开显示，同时列出已支持能力、已知限制和只由主人显式记录的真实会话计数；自动化夹具不会冒充个人使用证据。
+- `validated` 只表示本机发现到的全部版本分量与固定真值版本完全一致；缺失、部分匹配或漂移一律是 `unvalidated`，不会继承旧版本的支持结论。固定版本为 Codex `0.145.0`、Claude Code `2.1.226`、Cursor Desktop `3.15.6` + Agent CLI `2026.04.14-ee4b43a`、ZCode `3.7.6` + build `3.7.6.4691`、Pi `0.84.1`。
 - 运行中任务显示开始时间与持续时间；已完成/失败任务的持续时间固定，不继续增长。
 - 灵动岛任务详情只显示经过清洗的助手公开输出，并提供滚动查看；不展示 thinking、工具参数或原始工具输出。
 - 启动后写入不含个人数据的运行状态文件，供安装器确认进程确实已启动。
@@ -55,7 +56,11 @@ Codex 完全退出后，ThreadHelm 会短暂等待全局状态与任务索引稳
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-claude-quota
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-threadhelm-edition
 ./build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-dynamic-island
+./build/ThreadHelm.app/Contents/MacOS/ThreadHelm \
+  --verify-agent-truth Tests/Fixtures/Agents
 ```
+
+最后一条命令会让 81 条脱敏夹具经过生产 Swift 归一化和真实 `AgentEventReducer`，并比较每条场景的 7 个 expected 字段。输出的 miss、false alert、duplicate 和 exact return 只属于这个固定夹具窗口，不是个人真实使用数据；回放会明确保持 `personal-sessions=unchanged`。Pi 的精确返回能力为 `unsupported`，因此打开结果为 `unavailable`。
 
 注意力评价只接受五个固定 Agent ID（`codex`、`claudeCode`、`cursor`、
 `zcode`、`pi`）和四个固定分类，不接收标题、路径或 session ID：

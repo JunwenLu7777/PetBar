@@ -144,7 +144,7 @@ func runAgentIntegrationSelfTest() {
           ) == .unsupported,
           registry.metadata(for: .pi)?.capabilities.status(
               for: .exactReturn
-          ) == .unknown,
+          ) == .unsupported,
           registry.metadata(for: .cursor)?.capabilities.status(
               for: .exactReturn
           ) == .unknown,
@@ -187,12 +187,107 @@ func runAgentIntegrationSelfTest() {
     runZCodeAgentAdapterSelfTest()
     runPiAgentAdapterSelfTest()
     runCodexClaudeAdapterSelfTest()
+    runAgentVersionTruthSelfTest()
     runAgentOpenMeasurementSelfTest()
     runAgentAttentionFeedbackSelfTest()
     runAgentPersonalSessionEvidenceSelfTest()
     runAgentPersonalReadinessReviewSelfTest()
     runClaudeAdapterLifecycleSelfTest()
     runAgentIntegrationManagerSelfTest()
+}
+
+private func runAgentVersionTruthSelfTest() {
+    let profiles = builtInAgentValidationProfiles()
+    let cursorPinned = versionValidatedAgentDiscovery(
+        agentID: .cursor,
+        isInstalled: true,
+        components: [
+            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.6"),
+            AgentVersionComponent(
+                key: "agentCLI",
+                label: "Agent CLI",
+                value: "2026.04.14-ee4b43a"
+            ),
+        ]
+    )
+    let cursorDrifted = versionValidatedAgentDiscovery(
+        agentID: .cursor,
+        isInstalled: true,
+        components: [
+            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.19"),
+            AgentVersionComponent(
+                key: "agentCLI",
+                label: "Agent CLI",
+                value: "2026.04.14-ee4b43a"
+            ),
+        ]
+    )
+    let cursorMissingCLI = versionValidatedAgentDiscovery(
+        agentID: .cursor,
+        isInstalled: true,
+        components: [
+            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.6"),
+        ]
+    )
+    let zcodePinned = versionValidatedAgentDiscovery(
+        agentID: .zcode,
+        isInstalled: true,
+        components: [
+            AgentVersionComponent(key: "version", label: "Version", value: "3.7.6"),
+            AgentVersionComponent(key: "build", label: "build", value: "3.7.6.4691"),
+        ]
+    )
+    let zcodeDriftedBuild = versionValidatedAgentDiscovery(
+        agentID: .zcode,
+        isInstalled: true,
+        components: [
+            AgentVersionComponent(key: "version", label: "Version", value: "3.7.6"),
+            AgentVersionComponent(key: "build", label: "build", value: "3.7.6.5000"),
+        ]
+    )
+    let codexPinned = versionValidatedAgentDiscovery(
+        agentID: .codex,
+        isInstalled: true,
+        components: [
+            AgentVersionComponent(key: "version", label: "Version", value: "0.145.0"),
+        ]
+    )
+    let codexMetadata = builtInAgentMetadata().first { $0.id == .codex }
+    let piMetadata = builtInAgentMetadata().first { $0.id == .pi }
+
+    guard Set(profiles.keys) == Set(AgentID.builtInOrder),
+          cursorPinned.compatibility == .validated,
+          cursorPinned.version == "3.15.6",
+          cursorPinned.versionComponents.map(\.key) == ["desktop", "agentCLI"],
+          cursorDrifted.compatibility == .unvalidated,
+          cursorMissingCLI.compatibility == .unvalidated,
+          zcodePinned.compatibility == .validated,
+          zcodePinned.versionComponents.map(\.value) == ["3.7.6", "3.7.6.4691"],
+          zcodeDriftedBuild.compatibility == .unvalidated,
+          codexPinned.compatibility == .validated,
+          profiles[.codex]?.effectiveCapabilities(
+              metadata: codexMetadata!,
+              discovery: versionValidatedAgentDiscovery(
+                  agentID: .codex,
+                  isInstalled: true,
+                  components: [
+                      AgentVersionComponent(
+                          key: "version",
+                          label: "Version",
+                          value: "0.146.0"
+                      ),
+                  ]
+              )
+          ).status(for: .lifecycleObservation) == .unknown,
+          codexMetadata?.capabilities.status(for: .exactReturn) == .unknown,
+          piMetadata?.capabilities.status(for: .exactReturn) == .unsupported,
+          normalizedAgentVersion(from: "codex-cli 0.145.0") == "0.145.0",
+          normalizedAgentVersion(from: "2.1.226 (Claude Code)") == "2.1.226",
+          normalizedAgentVersion(from: "2026.04.14-ee4b43a")
+            == "2026.04.14-ee4b43a"
+    else {
+        failAgentIntegrationSelfTest("version-pinned validation and drift downgrade")
+    }
 }
 
 private func runCodexClaudeAdapterSelfTest() {
@@ -482,12 +577,38 @@ private func runCodexClaudeAdapterSelfTest() {
         readCollection: { .displaying([]) },
         openTerminal: { _ in .unknown }
     ).open(session: resumeClaudeSnapshot)
+    let missingProcessStartSnapshot = AgentSessionSnapshot(
+        identity: AgentSessionIdentity(
+            agentID: .claudeCode,
+            nativeID: claudeSessionID,
+            processID: 42,
+            processStartIdentity: nil
+        ),
+        adapterVersion: "self-test",
+        executionState: .running,
+        attentionReason: .none,
+        actionability: .openExactNativeSession,
+        evidenceQuality: .processObservation,
+        freshness: Freshness(observedAt: now, expiresAt: nil),
+        title: "Claude incomplete process identity",
+        activitySummary: nil,
+        workingDirectory: "/tmp/threadhelm-claude",
+        latestEventID: "claude-incomplete-process",
+        updatedAt: now
+    )
+    let missingProcessStartReport = ClaudeCodeAgentAdapter(
+        readCollection: { .displaying([]) },
+        openTerminal: { _ in .exactSession }
+    ).open(session: missingProcessStartSnapshot)
     guard exactClaudeReport.result == .exactSession,
           exactClaudeReport.exactAttempted,
           exactClaudeReport.independentlyConfirmedIdentity,
           resumeClaudeReport.result == .unknown,
           resumeClaudeReport.exactAttempted,
-          !resumeClaudeReport.independentlyConfirmedIdentity
+          !resumeClaudeReport.independentlyConfirmedIdentity,
+          missingProcessStartReport.result == .unknown,
+          missingProcessStartReport.exactAttempted,
+          !missingProcessStartReport.independentlyConfirmedIdentity
     else {
         failAgentIntegrationSelfTest("Claude exact identity confirmation")
     }

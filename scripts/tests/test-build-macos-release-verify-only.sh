@@ -48,6 +48,20 @@ write_command() {
   /bin/chmod +x "$1"
 }
 
+write_truth_replay_binary() {
+  local binary_path="$1"
+  local marker="$2"
+  write_file "$binary_path" "#!/bin/zsh
+# $marker
+echo 'agent-truth-replay: agents=5 scenarios=81 personal-sessions=unchanged'
+for agent_id in codex claudeCode cursor zcode pi; do
+  echo \"agent-truth-metric: agent=\$agent_id miss=0/1 falseAlert=0/1 duplicate=0/1 exactReturn=0/0 testedVersion=test collectionWindow=test..test source=redacted-truth-fixture\"
+done
+exit 0
+"
+  /bin/chmod +x "$binary_path"
+}
+
 make_stage() {
   local stage="$FIXTURE/build/release/ThreadHelm-macOS-arm64-1.1.0"
   local local_app="$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app"
@@ -62,9 +76,10 @@ make_stage() {
     /usr/bin/ditto "$local_app" "$stage/ThreadHelm.app"
   else
     write_file "$stage/ThreadHelm.app/Contents/Info.plist" '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.threadhelm.app</string><key>CFBundleExecutable</key><string>ThreadHelm</string><key>CFBundleIconFile</key><string>ThreadHelm.icns</string></dict></plist>'
-    write_file "$stage/ThreadHelm.app/Contents/MacOS/ThreadHelm" "fake binary"
+    write_truth_replay_binary \
+      "$stage/ThreadHelm.app/Contents/MacOS/ThreadHelm" \
+      "packaged truth replay stub"
     write_file "$stage/ThreadHelm.app/Contents/Resources/ThreadHelm.icns" "fake icon"
-    /bin/chmod +x "$stage/ThreadHelm.app/Contents/MacOS/ThreadHelm"
   fi
   /bin/cp "$FIXTURE/macos/package/安装ThreadHelm.command" "$stage/安装ThreadHelm.command"
   /bin/cp "$FIXTURE/macos/package/检查ThreadHelm.command" "$stage/检查ThreadHelm.command"
@@ -102,6 +117,10 @@ mkdir -p "$FIXTURE/scripts" "$FIXTURE/macos/package" \
   "$FIXTURE/macos/ThreadHelm/Resources" \
   "$FIXTURE/macos/ThreadHelm/Sources/ThreadHelm" \
   "$FIXTURE/macos/ThreadHelm/scripts"
+
+/usr/bin/ditto \
+  "$ROOT/macos/ThreadHelm/Tests/Fixtures/Agents" \
+  "$FIXTURE/macos/ThreadHelm/Tests/Fixtures/Agents"
 
 /bin/cp "$ROOT/scripts/build-macos-release.sh" "$FIXTURE/scripts/build-macos-release.sh"
 /bin/cp "$ROOT/scripts/privacy-audit.sh" "$FIXTURE/scripts/privacy-audit.sh"
@@ -154,16 +173,27 @@ expect_pass "refreshed source payload without local app build"
 mkdir -p "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS" \
   "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/Resources"
 write_file "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/Info.plist" '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.threadhelm.app</string><key>CFBundleExecutable</key><string>ThreadHelm</string><key>CFBundleIconFile</key><string>ThreadHelm.icns</string></dict></plist>'
-write_file "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm" "fake binary"
+write_truth_replay_binary \
+  "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm" \
+  "local truth replay stub"
 write_file "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/Resources/ThreadHelm.icns" "fake icon"
-/bin/chmod +x "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 expect_fail "archive older than matching local app build"
 
 make_stage
 make_dist_from_stage
 expect_pass "matching local app build"
 
-write_file "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm" "newer local binary"
+/bin/sleep 1
+/usr/bin/touch \
+  "$FIXTURE/macos/ThreadHelm/Tests/Fixtures/Agents/index.json"
+expect_fail "stale archive relative to five-agent truth fixtures"
+
+make_dist_from_stage
+expect_pass "refreshed archive after five-agent truth fixture update"
+
+write_truth_replay_binary \
+  "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm" \
+  "newer local truth replay stub"
 expect_fail "stale archive relative to local app build"
 
 make_stage
@@ -197,5 +227,15 @@ write_file \
 make_dist_from_stage
 git -C "$FIXTURE" add dist
 expect_fail "packaged vendor configuration"
+
+write_file \
+  "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm" \
+  "#!/bin/zsh\nexit 1\n"
+/bin/chmod +x \
+  "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
+make_stage
+make_dist_from_stage
+git -C "$FIXTURE" add dist
+expect_fail "packaged binary failing five-agent truth replay"
 
 /bin/echo "build macOS release verify-only tests passed"

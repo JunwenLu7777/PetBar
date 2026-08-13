@@ -34,6 +34,6 @@
     "Claude --resume dispatch is not independently confirmed as exact return.",
     "Cursor arbitrary IDE session return is not proven end to end.",
     "ZCode exact session return and already-running-session hook pickup are not proven.",
-    "Pi exact session return is not advertised until an end-to-end check exists."
+    "Pi exact session return is unsupported by the state-only adapter."
   ]
 }

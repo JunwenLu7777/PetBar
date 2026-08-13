@@ -46,6 +46,10 @@ if let personalSessionExitCode =
     exit(Int32(personalSessionExitCode))
 }
 
+if let agentTruthReplayExitCode = runAgentTruthReplayCLIIfRequested() {
+    exit(Int32(agentTruthReplayExitCode))
+}
+
 if CommandLine.arguments.contains("--print-quota") {
     printQuotaOnce()
 }

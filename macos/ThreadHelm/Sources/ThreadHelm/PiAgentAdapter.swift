@@ -437,10 +437,13 @@ func discoverLocalPiAgent(
             compatibility: .unknown
         )
     }
-    return AgentDiscovery(
+    let version = piVersion(executableURL: executable)
+    return versionValidatedAgentDiscovery(
+        agentID: .pi,
         isInstalled: true,
-        version: piVersion(executableURL: executable),
-        compatibility: .unknown
+        components: version.map {
+            [AgentVersionComponent(key: "version", label: "Version", value: $0)]
+        } ?? []
     )
 }
 
@@ -489,8 +492,9 @@ private func piVersion(executableURL: URL) -> String? {
     guard capture.termination == .exited || capture.termination == .outputClosed,
           let text = String(data: capture.data, encoding: .utf8)
     else { return nil }
-    return text
+    let firstLine = text
         .split(whereSeparator: \.isNewline)
         .first
         .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+    return firstLine.flatMap { normalizedAgentVersion(from: $0) }
 }

@@ -686,19 +686,80 @@ private func zcodeConfigURL(in scope: AgentIntegrationScope) throws -> URL {
     try scope.managedURL(relativePath: ".zcode/cli/config.json")
 }
 
-private func zcodeLocalDiscovery(executableURL: URL?) -> AgentDiscovery {
-    guard executableURL != nil else {
-        return AgentDiscovery(
-            isInstalled: false,
-            version: nil,
-            compatibility: .unknown
-        )
-    }
-    return AgentDiscovery(
-        isInstalled: true,
-        version: nil,
-        compatibility: .supported
+private func zcodeLocalDiscovery(
+    executableURL: URL?,
+    fileManager: FileManager = .default
+) -> AgentDiscovery {
+    let bundleURL = zcodeBundleURL(
+        executableURL: executableURL,
+        fileManager: fileManager
     )
+    let info = zcodeBundleVersions(
+        bundleURL: bundleURL,
+        fileManager: fileManager
+    )
+    let components = [
+        info.version.map {
+            AgentVersionComponent(
+                key: "version",
+                label: "Version",
+                value: $0
+            )
+        },
+        info.build.map {
+            AgentVersionComponent(
+                key: "build",
+                label: "build",
+                value: $0
+            )
+        },
+    ].compactMap { $0 }
+    return versionValidatedAgentDiscovery(
+        agentID: .zcode,
+        isInstalled: executableURL != nil || bundleURL != nil,
+        components: components
+    )
+}
+
+private func zcodeBundleURL(
+    executableURL: URL?,
+    fileManager: FileManager
+) -> URL? {
+    if var candidate = executableURL?.resolvingSymlinksInPath() {
+        while candidate.path != "/" {
+            if candidate.pathExtension.lowercased() == "app" {
+                return candidate
+            }
+            candidate.deleteLastPathComponent()
+        }
+    }
+    let candidates = [
+        URL(fileURLWithPath: "/Applications/ZCode.app"),
+        fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications/ZCode.app"),
+    ]
+    return candidates.first { fileManager.fileExists(atPath: $0.path) }
+}
+
+private func zcodeBundleVersions(
+    bundleURL: URL?,
+    fileManager: FileManager
+) -> (version: String?, build: String?) {
+    guard let bundleURL else { return (nil, nil) }
+    let infoURL = bundleURL.appendingPathComponent("Contents/Info.plist")
+    guard fileManager.fileExists(atPath: infoURL.path),
+          let data = try? Data(contentsOf: infoURL),
+          let plist = try? PropertyListSerialization.propertyList(
+              from: data,
+              options: [],
+              format: nil
+          ) as? [String: Any]
+    else { return (nil, nil) }
+    let version = (plist["CFBundleShortVersionString"] as? String)
+        .flatMap { normalizedAgentVersion(from: $0) }
+    let build = (plist["CFBundleVersion"] as? String)
+        .flatMap { normalizedAgentVersion(from: $0) }
+    return (version, build)
 }
 
 private func sanitizedIdentity(_ value: String?) -> String? {

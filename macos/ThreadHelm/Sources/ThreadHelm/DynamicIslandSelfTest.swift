@@ -1062,12 +1062,56 @@ private func assertDynamicIslandTaskWorkspace() {
             "cursor": true,
         ])
     agentHealthSnapshot.agentStatuses = builtInAgentMetadata().map { metadata in
-        AgentRuntimeStatus(
+        let components: [AgentVersionComponent]
+        switch metadata.id {
+        case .codex:
+            components = [
+                AgentVersionComponent(
+                    key: "version",
+                    label: "Version",
+                    value: "0.145.0"
+                ),
+            ]
+        case .claudeCode:
+            components = [
+                AgentVersionComponent(
+                    key: "version",
+                    label: "Version",
+                    value: "2.1.226"
+                ),
+            ]
+        case .cursor:
+            components = [
+                AgentVersionComponent(
+                    key: "desktop",
+                    label: "Desktop",
+                    value: "3.15.19"
+                ),
+                AgentVersionComponent(
+                    key: "agentCLI",
+                    label: "Agent CLI",
+                    value: "2026.04.14-ee4b43a"
+                ),
+            ]
+        case .zcode:
+            components = []
+        case .pi:
+            components = [
+                AgentVersionComponent(
+                    key: "version",
+                    label: "Version",
+                    value: "0.84.1"
+                ),
+            ]
+        default:
+            components = []
+        }
+        return AgentRuntimeStatus(
             metadata: metadata,
-            discovery: AgentDiscovery(
+            discovery: versionValidatedAgentDiscovery(
+                agentID: metadata.id,
                 isInstalled: metadata.id != .zcode,
-                version: metadata.id == .codex ? "0.145.0" : nil,
-                compatibility: metadata.id == .zcode ? .unknown : .supported
+                components: components
             ),
             integrationStatus: metadata.id == .cursor ? .installed : nil,
             diagnostics: AgentDiagnostics(
@@ -1108,13 +1152,28 @@ private func assertDynamicIslandTaskWorkspace() {
                   expectedReadiness =
                       "experimental · 真实会话 0/10"
               }
+              let capabilityIsTruthful: Bool
+              if agentID == .cursor {
+                  capabilityIsTruthful = summary.contains("unvalidated")
+                      && !summary.contains(profile.supportedCapabilitiesSummary)
+              } else if agentID == .zcode {
+                  capabilityIsTruthful = summary.contains("本机未检测到")
+                      && !summary.contains(profile.supportedCapabilitiesSummary)
+              } else {
+                  capabilityIsTruthful = summary.contains(
+                      profile.supportedCapabilitiesSummary
+                  )
+              }
               return summary.contains("测试 \(profile.testedVersion)")
-                  && summary.contains(profile.supportedCapabilitiesSummary)
+                  && capabilityIsTruthful
                   && summary.contains(profile.knownLimitation)
                   && summary.contains(expectedReadiness)
           }),
           agentHealthRows.first?.contains(
-              "本机 0.145.0 · 测试 0.145.0"
+              "本机 0.145.0 · 已验证 · 测试 0.145.0"
+          ) == true,
+          agentHealthRows.first(where: { $0.contains("Cursor") })?.contains(
+              "Desktop 3.15.19 · Agent CLI 2026.04.14-ee4b43a · unvalidated"
           ) == true,
           workspace.agentHealthAccessibilitySnapshotForSelfTest()
               .contains("本地事件通道已降级"),
@@ -1126,6 +1185,39 @@ private func assertDynamicIslandTaskWorkspace() {
               .contains("未发现 ZCode")
     else {
         fputs("dynamic island agent health workspace self-test failed\n", stderr)
+        exit(1)
+    }
+
+    var missingVersionHealthSnapshot = agentHealthSnapshot
+    missingVersionHealthSnapshot.agentStatuses = agentHealthSnapshot.agentStatuses.map {
+        status in
+        guard status.metadata.id == .zcode else { return status }
+        return AgentRuntimeStatus(
+            metadata: status.metadata,
+            discovery: versionValidatedAgentDiscovery(
+                agentID: .zcode,
+                isInstalled: true,
+                components: []
+            ),
+            integrationStatus: status.integrationStatus,
+            diagnostics: AgentDiagnostics(
+                health: .healthy,
+                summary: "本机可用",
+                counters: [:]
+            ),
+            activeSessionCount: 0,
+            attentionCount: 0
+        )
+    }
+    workspace.apply(
+        snapshot: missingVersionHealthSnapshot,
+        state: .expanded(.agents)
+    )
+    guard workspace.agentHealthRowSummariesForSelfTest()
+        .first(where: { $0.contains("ZCode") })?
+        .contains("本机版本未知 · unvalidated · 测试 3.7.6") == true
+    else {
+        fputs("dynamic island missing agent version validation self-test failed\n", stderr)
         exit(1)
     }
 

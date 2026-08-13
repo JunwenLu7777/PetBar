@@ -20,6 +20,7 @@ INSTALL_COMMAND="$ROOT/macos/package/安装ThreadHelm.command"
 CHECK_COMMAND="$ROOT/macos/package/检查ThreadHelm.command"
 UNINSTALL_COMMAND="$ROOT/macos/package/卸载ThreadHelm.command"
 TRANSACTION_HELPER="$APP_PROJECT/scripts/local-install-transaction.zsh"
+AGENT_TRUTH_ROOT="$APP_PROJECT/Tests/Fixtures/Agents"
 VERIFY_ONLY=false
 SKIP_APP_BINARY_CHECKS="${THREADHELM_SKIP_APP_BINARY_CHECKS:-false}"
 
@@ -60,10 +61,30 @@ verify_inputs() {
   require_file "$ROOT/LICENSE"
   require_file "$ROOT/PRIVACY.md"
   require_file "$ROOT/ASSET-NOTICE.md"
+  require_file "$AGENT_TRUTH_ROOT/index.json"
+  require_file "$AGENT_TRUTH_ROOT/versions.json"
+  local agent_id
+  for agent_id in codex claudeCode cursor zcode pi; do
+    require_file "$AGENT_TRUTH_ROOT/scenarios/$agent_id.json"
+  done
   /usr/bin/plutil -lint "$PLIST_TEMPLATE" >/dev/null
   /bin/zsh -n \
     "$INSTALL_COMMAND" "$CHECK_COMMAND" "$UNINSTALL_COMMAND" \
     "$TRANSACTION_HELPER"
+}
+
+verify_agent_truth_replay() {
+  local binary="$1"
+  local output agent_id
+  [[ -x "$binary" ]] || fail "ThreadHelm binary is not executable: $binary"
+  output="$("$binary" --verify-agent-truth "$AGENT_TRUTH_ROOT")" \
+    || fail "five-agent truth replay failed: $binary"
+  [[ "$output" == *"agent-truth-replay: agents=5 scenarios=81 personal-sessions=unchanged"* ]] \
+    || fail "five-agent truth replay summary is incomplete"
+  for agent_id in codex claudeCode cursor zcode pi; do
+    [[ "$output" == *"agent-truth-metric: agent=$agent_id "* ]] \
+      || fail "missing truth metric for $agent_id"
+  done
 }
 
 path_has_forbidden_marker() {
@@ -195,6 +216,7 @@ release_input_paths() {
   local -a input_roots
   input_roots=()
   [[ -d "$APP_BUILD" ]] && input_roots+=("$APP_BUILD")
+  [[ -d "$AGENT_TRUTH_ROOT" ]] && input_roots+=("$AGENT_TRUTH_ROOT")
 
   print -r -- "$SCRIPT_PATH"
   print -r -- "$ROOT/macos/README.md"
@@ -281,6 +303,8 @@ verify_dist_payload() {
   /usr/bin/ditto -x -k "$OUT" "$unpack_root"
   verify_stage "$unpack_root/$RELEASE_ID"
   verify_stage_matches_current_sources "$unpack_root/$RELEASE_ID"
+  verify_agent_truth_replay \
+    "$unpack_root/$RELEASE_ID/ThreadHelm.app/Contents/MacOS/ThreadHelm"
   /bin/rm -rf "$unpack_root"
 }
 
@@ -299,6 +323,7 @@ if [[ "$VERIFY_ONLY" == true ]]; then
   if [[ -d "$STAGE" ]]; then
     verify_stage "$STAGE"
     verify_stage_matches_current_sources "$STAGE"
+    verify_agent_truth_replay "$STAGE/ThreadHelm.app/Contents/MacOS/ThreadHelm"
   fi
   /bin/echo "verify-only passed"
   exit 0
@@ -309,6 +334,7 @@ require_dir "$APP_BUILD"
 stage_release
 verify_stage "$STAGE"
 verify_stage_matches_current_sources "$STAGE"
+verify_agent_truth_replay "$STAGE/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 mkdir -p "$ROOT/dist"
 /bin/rm -f "$OUT"
 /usr/bin/ditto -c -k --norsrc --keepParent "$STAGE" "$OUT"

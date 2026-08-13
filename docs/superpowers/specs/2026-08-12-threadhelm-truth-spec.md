@@ -14,11 +14,21 @@ The fixture package is the source of truth for normalizing Codex, Claude Code, C
 
 1. Read `index.json`, verify the schema and baseline, then load `versions.json` and each file named by `scenarioFiles`.
 2. Refuse to treat an adapter as validated when its observed version differs from the pinned version until its scenarios have been captured and reviewed again.
-3. For each scenario, feed only the redacted `input.signal` classification to the future adapter/reducer. Compare all fields in `expected`; do not infer a missing field.
+3. For each scenario, feed only the redacted `input.signal` classification through the production Swift normalizer and the real `AgentEventReducer`. Compare all seven fields in `expected`; do not infer a missing field.
 4. Preserve event identity, ordering metadata, and capture-source class where the native surface supplies them. Replays of duplicate or out-of-order scenarios must be deterministic.
 5. `capabilityStatus=unsupported` means no UI control or success claim may be exposed. `capabilityStatus=unknown` must remain visibly unknown and cannot be promoted by inference.
 6. An `openResult` is an expected classification, not proof that a launch occurred during fixture replay. Exact return requires a separate independent identity check.
 7. A fixture joins the accepted truth set only after its expected label is reviewed separately from capture. Synthetic policy cases are allowed for destructive or rare failures but must identify that evidence class.
+8. Fixture replay must not write personal session evidence or personal readiness review state. Its summary must state `personal-sessions=unchanged`.
+
+The production replay entry point is:
+
+```bash
+BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
+"$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents
+```
+
+The accepted baseline contains 81 redacted scenarios across five agents. Duplicate and out-of-order scenarios pass through the real reducer. The emitted miss, false-alert, duplicate, and exact-return numerators and denominators describe only this fixed fixture window; they are not personal live-use measurements, latency measurements, or readiness evidence.
 
 ## Redaction contract
 
@@ -70,8 +80,8 @@ Actionability is one of in-app action, exact native return, native app focus, pr
 
 Only Claude Code has a verified in-app permission/question/plan response path in this baseline. Codex opens its native thread for input. Cursor and ZCode remain native-surface-only in the first adapter. Pi is strictly state-only and cannot call approval, message injection, cancellation, navigation, or session-mutation APIs.
 
-For return classification in this baseline, Codex deep-link dispatch and Claude `--resume` dispatch both remain `unknown`; neither is exact success without a separate destination identity check. Claude may return `exactSession` only after a matching live process plus process-start identity is located at the exact terminal tab. Cursor and ZCode never return exact in this baseline, and Pi always returns `unavailable`.
+For return classification in this baseline, Codex deep-link dispatch and Claude `--resume` dispatch both remain `unknown`; neither is exact success without a separate destination identity check. Claude may return `exactSession` only after a matching live process plus process-start identity is located at the exact terminal tab. Cursor and ZCode never return exact in this baseline. Pi's exact-return capability is `unsupported`, and every Pi open result is `unavailable`.
 
 ## Version and configuration boundary
 
-These truth labels apply only to Codex 0.145.0, Claude Code 2.1.226, Cursor 3.15.6, ZCode 3.7.6 (build 3.7.6.4691), and Pi 0.84.1 on the captured Mac. Discovery is read-only. In particular, it must not create the absent ZCode user CLI configuration or edit existing Claude, Cursor, or Pi integration files.
+These truth labels apply only to Codex 0.145.0, Claude Code 2.1.226, Cursor Desktop 3.15.6 plus Agent CLI 2026.04.14-ee4b43a, ZCode 3.7.6 (build 3.7.6.4691), and Pi 0.84.1 on the captured Mac. `validated` requires an exact match for every declared component. A missing component, a partial match, or any drift is `unvalidated` and cannot inherit the pinned version's capability claims. Discovery is read-only. In particular, it must not create the absent ZCode user CLI configuration or edit existing Claude, Cursor, or Pi integration files.

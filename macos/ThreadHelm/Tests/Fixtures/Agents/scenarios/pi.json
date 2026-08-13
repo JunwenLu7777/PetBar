@@ -178,17 +178,17 @@
       "explicitUnknowns": ["Cold offline startup behavior remains version-bounded and unverified."]
     },
     {
-      "id": "pi-exact-return-unknown",
+      "id": "pi-exact-return-unsupported",
       "agentId": "pi",
-      "capabilityStatus": "unknown",
-      "scenario": "Pi resume/session CLI flags exist, but ThreadHelm does not advertise exact return before independent identity confirmation.",
+      "capabilityStatus": "unsupported",
+      "scenario": "Pi resume/session CLI flags exist, but the state-only ThreadHelm adapter does not advertise or invoke exact return.",
       "captureSource": "bundled CLI documentation and local help",
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "0.84.1",
       "input": {"redacted": true, "signal": "synthetic session identity candidate with no end-to-end confirmation"},
-      "expected": {"executionState": "unknown", "attentionReason": "none", "actionability": "viewOnly", "evidenceQuality": "officialAPI", "freshness": "unknown", "openResult": "unknown", "interruptDecision": "nonInterrupt"},
+      "expected": {"executionState": "unknown", "attentionReason": "none", "actionability": "viewOnly", "evidenceQuality": "officialAPI", "freshness": "unknown", "openResult": "unavailable", "interruptDecision": "nonInterrupt"},
       "evidence": [{"kind": "bundledDocumentation", "reference": "Pi usage and sessions documentation: resume/session flags"}],
-      "explicitUnknowns": ["No exact-session claim is allowed yet."]
+      "explicitUnknowns": ["Pi navigation remains outside the state-only adapter boundary."]
     },
     {
       "id": "pi-terminal-process-fallback-unsupported",

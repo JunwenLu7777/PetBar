@@ -36,6 +36,30 @@ BIN="$HOME/Applications/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 
 如果遇到重复提醒，也归到 `unnecessary`；这样统计口径始终只有上述四类，不会为了备注而写入自由文本。
 
+## 固定版本和 81 场景真值回放
+
+Agents 页面里的 `validated` 不是“看起来能用”，而是本机发现到的所有版本分量都与固定真值版本逐项相等：
+
+- Codex `0.145.0`
+- Claude Code `2.1.226`
+- Cursor Desktop `3.15.6` 和 Agent CLI `2026.04.14-ee4b43a`
+- ZCode `3.7.6` 和 build `3.7.6.4691`
+- Pi `0.84.1`
+
+只要版本没读到、少一个分量或有任意漂移，就显示 `unvalidated`，并隐藏只在固定版本上验证过的能力文案。例如本机 Cursor Desktop 即使只是升级到 `3.15.19`，也不能沿用 `3.15.6` 的验证结论。发现过程只读，不会安装集成或修改厂商配置。
+
+在源码目录构建后，可以运行生产回放器：
+
+```bash
+./macos/ThreadHelm/scripts/build.sh
+BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
+"$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents
+```
+
+这会读取 81 条脱敏场景，经生产 Swift 归一化和真实 `AgentEventReducer` 比较 7 个 expected 字段。duplicate 和 out-of-order 场景也走真实 reducer。输出的 miss、false alert、duplicate、exact return 分子分母只说明这 81 条固定夹具，没有测量你的实际使用、延迟或主观体验；夹具回放也不会增加个人真实会话计数。
+
+该基线里 Codex 精确返回仍是 `unknown`；Claude Code 只有同时匹配会话、活进程和 process-start identity 才可能是 exact，否则降为 `unknown`；Cursor 与 ZCode 不宣称 exact；Pi 的精确返回能力是 `unsupported`，打开结果只能是 `unavailable`。发布脚本会执行同一回放，并把真值夹具纳入 release 输入时间；夹具更新后旧 ZIP 会被判为 stale。
+
 ## 个人真实会话与主人复核
 
 Agents 页面会分别展示本机检测版本、当前真值夹具的测试版本、已支持能力、已知限制，以及个人真实会话计数。当前五个 Agent 一律从：

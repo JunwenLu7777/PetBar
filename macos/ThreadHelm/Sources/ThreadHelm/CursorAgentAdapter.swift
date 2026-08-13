@@ -576,7 +576,7 @@ private func cursorStateMapping(
             .failed,
             .taskFailure,
             .openNativeApp,
-            signal.eventType == "stop" ? .officialHook : .inferred,
+            .inferred,
             "Cursor 报告任务级失败"
         )
     }
@@ -587,7 +587,9 @@ private func cursorStateMapping(
         return (.completed, .reviewReady, .openNativeApp, .officialHook, "Cursor 会话结束")
     case "beforeSubmitPrompt":
         return (.running, .none, .openNativeApp, .officialHook, "Cursor 已提交任务")
-    case "preToolUse", "postToolUse", "postToolUseFailure",
+    case "postToolUseFailure":
+        return (.running, .none, .openNativeApp, .inferred, "Cursor 工具失败")
+    case "preToolUse", "postToolUse",
          "beforeShellExecution", "afterShellExecution",
          "beforeMCPExecution", "afterMCPExecution",
          "beforeReadFile", "afterFileEdit":
@@ -618,21 +620,50 @@ private final class CursorDiscoveryCache {
         lock.lock()
         defer { lock.unlock() }
         if let cached { return cached }
-        let version = cursorBundleVersion()
-        let installed = version != nil || FileManager.default.fileExists(
-            atPath: "/Applications/Cursor.app"
+        let bundleURL = cursorBundleURL()
+        let desktopVersion = cursorBundleVersion(bundleURL: bundleURL)
+        let agentCLIURL = locateCursorCLIExecutable()
+        let agentCLIVersion = cursorAgentCLIVersion(
+            executableURL: agentCLIURL
         )
-        let discovery = AgentDiscovery(
-            isInstalled: installed,
-            version: version,
-            compatibility: installed ? .supported : .unknown
+        let components = [
+            desktopVersion.map {
+                AgentVersionComponent(
+                    key: "desktop",
+                    label: "Desktop",
+                    value: $0
+                )
+            },
+            agentCLIVersion.map {
+                AgentVersionComponent(
+                    key: "agentCLI",
+                    label: "Agent CLI",
+                    value: $0
+                )
+            },
+        ].compactMap { $0 }
+        let discovery = versionValidatedAgentDiscovery(
+            agentID: .cursor,
+            isInstalled: bundleURL != nil || agentCLIURL != nil,
+            components: components
         )
         cached = discovery
         return discovery
     }
 
-    private func cursorBundleVersion() -> String? {
-        let infoURL = URL(fileURLWithPath: "/Applications/Cursor.app")
+    private func cursorBundleURL() -> URL? {
+        let manager = FileManager.default
+        let candidates = [
+            URL(fileURLWithPath: "/Applications/Cursor.app"),
+            manager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications/Cursor.app"),
+        ]
+        return candidates.first { manager.fileExists(atPath: $0.path) }
+    }
+
+    private func cursorBundleVersion(bundleURL: URL?) -> String? {
+        guard let bundleURL else { return nil }
+        let infoURL = bundleURL
             .appendingPathComponent("Contents/Info.plist")
         guard let data = try? Data(contentsOf: infoURL),
               let plist = try? PropertyListSerialization.propertyList(
@@ -641,9 +672,66 @@ private final class CursorDiscoveryCache {
                   format: nil
               ) as? [String: Any]
         else { return nil }
-        return (plist["CFBundleShortVersionString"] as? String)
+        let value = (plist["CFBundleShortVersionString"] as? String)
             ?? (plist["CFBundleVersion"] as? String)
+        return value.flatMap { normalizedAgentVersion(from: $0) }
     }
+}
+
+private func locateCursorCLIExecutable(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    fileManager: FileManager = .default
+) -> URL? {
+    let override = environment["THREADHELM_CURSOR_EXECUTABLE"]
+        ?? environment["CURSOR_BIN"]
+    let pathCandidates = (environment["PATH"] ?? "")
+        .split(separator: ":")
+        .map { URL(fileURLWithPath: String($0)).appendingPathComponent("cursor") }
+    let candidates = [override.map { URL(fileURLWithPath: $0) }]
+        .compactMap { $0 }
+        + pathCandidates
+        + [
+            URL(fileURLWithPath: "/Applications/Cursor.app")
+                .appendingPathComponent("Contents/Resources/app/bin/cursor"),
+            fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent(
+                    "Applications/Cursor.app/Contents/Resources/app/bin/cursor"
+                ),
+            URL(fileURLWithPath: "/opt/homebrew/bin/cursor"),
+            URL(fileURLWithPath: "/usr/local/bin/cursor"),
+        ]
+    var visited = Set<String>()
+    return candidates.first { candidate in
+        let path = candidate.standardizedFileURL.path
+        return visited.insert(path).inserted
+            && fileManager.isExecutableFile(atPath: path)
+    }
+}
+
+private func cursorAgentCLIVersion(executableURL: URL?) -> String? {
+    guard let executableURL else { return nil }
+    let process = Process()
+    let output = Pipe()
+    process.executableURL = executableURL
+    process.arguments = ["agent", "--version"]
+    process.standardOutput = output
+    process.standardError = output
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+    let capture = captureProcessOutput(
+        process: process,
+        output: output.fileHandleForReading,
+        timeout: 2,
+        maximumOutputBytes: 4_096
+    )
+    guard capture.termination == .exited
+            || capture.termination == .outputClosed,
+          let text = String(data: capture.data, encoding: .utf8)
+    else { return nil }
+    return normalizedAgentVersion(from: text)
 }
 
 private func cursorToken(_ value: String) -> String? {
