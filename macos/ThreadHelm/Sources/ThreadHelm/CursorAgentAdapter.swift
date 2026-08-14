@@ -724,13 +724,24 @@ private func cursorAgentCLIVersion(executableURL: URL?) -> String? {
     let capture = captureProcessOutput(
         process: process,
         output: output.fileHandleForReading,
-        timeout: 2,
+        timeout: 8,
         maximumOutputBytes: 4_096
     )
-    guard capture.termination == .exited
-            || capture.termination == .outputClosed,
-          let text = String(data: capture.data, encoding: .utf8)
-    else { return nil }
+    return parsedCursorAgentCLIVersion(from: capture)
+}
+
+func parsedCursorAgentCLIVersion(
+    from capture: ProcessOutputCaptureResult
+) -> String? {
+    switch capture.termination {
+    case .exited, .outputClosed, .timedOut, .completed:
+        break
+    case .outputLimitExceeded, .readFailed:
+        return nil
+    }
+    guard let text = String(data: capture.data, encoding: .utf8) else {
+        return nil
+    }
     return normalizedAgentVersion(from: text)
 }
 

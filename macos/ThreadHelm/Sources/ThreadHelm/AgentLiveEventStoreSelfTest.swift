@@ -353,6 +353,441 @@ func runAgentLiveEventStoreSelfTest() {
     guard ompProjection.kind == .running, !ompProjection.canOpen else {
         failAgentLiveEventStoreSelfTest("OMP dashboard remains state-only")
     }
+
+    let cursorSession = "2cac76a3-df5f-469f-9f64-05972b086c2d"
+    let cursorStart = base.addingTimeInterval(-40)
+    let cursorSnapshot = AgentSessionSnapshot(
+        identity: AgentSessionIdentity(agentID: .cursor, nativeID: cursorSession),
+        adapterVersion: "self-test",
+        executionState: .running,
+        attentionReason: .none,
+        actionability: .openNativeApp,
+        evidenceQuality: .officialHook,
+        freshness: Freshness(observedAt: base, expiresAt: nil),
+        title: "Cursor 会话",
+        activitySummary: "正在执行",
+        workingDirectory: nil,
+        latestEventID: "cursor-latest",
+        updatedAt: base
+    )
+    let cursorItem = taskProgressItem(
+        from: cursorSnapshot,
+        events: [
+            makeLiveStoreAgentEvent(
+                agentID: .cursor,
+                nativeID: cursorSession,
+                eventID: "cursor-start",
+                eventType: "sessionStart",
+                observedAt: cursorStart,
+                state: .idle
+            ),
+            makeLiveStoreAgentEvent(
+                agentID: .cursor,
+                nativeID: cursorSession,
+                eventID: "cursor-tool",
+                eventType: "postToolUse",
+                observedAt: base,
+                state: .running
+            ),
+            makeLiveStoreAgentEvent(
+                agentID: .zcode,
+                nativeID: "other-session",
+                eventID: "ignored",
+                eventType: "postToolUse",
+                observedAt: base,
+                state: .running
+            ),
+        ],
+        cursorWorkingDirectory: { id in
+            id == cursorSession ? "/private/tmp/threadhelm-test/code/PetBar" : nil
+        },
+        cursorSessionContent: { _ in nil }
+    )
+    guard cursorItem.title == "PetBar",
+          cursorItem.workingDirectory == "/private/tmp/threadhelm-test/code/PetBar",
+          cursorItem.startedAt == cursorStart,
+          cursorItem.events.map(\.text) == ["会话开始", "工具调用完成"],
+          cursorItem.activityText == "工具调用完成"
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "Cursor live card must resolve local cwd and safe events"
+        )
+    }
+
+    let transcriptContent = CursorLocalWorkspace.sessionContent(
+        fromJSONL: """
+        {"role":"user","message":{"content":[{"type":"text","text":"帮我看看监听为什么是空的"}]}}
+        {"role":"assistant","message":{"content":[{"type":"text","text":"路径没填上，我去本机记录里读正文。"},{"type":"tool_use","name":"Read","input":{"path":"/secret/do-not-show"}}]}}
+        """
+    )
+    guard transcriptContent.title == "帮我看看监听为什么是空的",
+          transcriptContent.activityText == "路径没填上，我去本机记录里读正文。",
+          transcriptContent.completedActivityText == "路径没填上，我去本机记录里读正文。",
+          transcriptContent.fragments.map(\.text) == [
+              "路径没填上，我去本机记录里读正文。",
+              "正在检查文件",
+          ],
+          transcriptContent.activityText?.contains("/secret") != true,
+          !transcriptContent.fragments.contains(where: { $0.text.contains("/secret") })
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "Cursor transcript must expose public assistant output without tool paths"
+        )
+    }
+
+    let laterQuery = CursorLocalWorkspace.sessionContent(
+        fromJSONL: """
+        {"role":"user","message":{"content":[{"type":"text","text":"<user_query>当前的样式感觉怪怪的,你用你专业的审美帮我看看?如何优化?</user_query>"}]}}
+        {"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}
+        {"role":"user","message":{"content":[{"type":"text","text":"[Image]\\n<user_query>\\ncursor的当前活动不对\\n</user_query>"}]}}
+        {"role":"assistant","message":{"content":[{"type":"text","text":"左侧已经变成「样式优化建议」，右侧也有文件名，但你要的不是这个。"},{"type":"tool_use","name":"Shell"},{"type":"tool_use","name":"StrReplace"}]}}
+        """
+    )
+    guard laterQuery.title == "当前的样式感觉怪怪的,你用你专业的审美帮我看看?如何优化?",
+          laterQuery.activityText
+            == "左侧已经变成「样式优化建议」，右侧也有文件名，但你要的不是这个。",
+          laterQuery.completedActivityText
+            == "左侧已经变成「样式优化建议」，右侧也有文件名，但你要的不是这个。"
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "Cursor title must keep the first user query, not the latest message"
+        )
+    }
+
+    let wrappedTitle = CursorLocalWorkspace.sessionContent(
+        fromJSONL: """
+        {"role":"user","message":{"content":[{"type":"text","text":"[Image]\\n<user_query>\\ncursor的当前活动不对\\n</user_query>"}]}}
+        """
+    )
+    guard wrappedTitle.title == "cursor的当前活动不对" else {
+        failAgentLiveEventStoreSelfTest(
+            "Cursor title must use the user query, not image metadata"
+        )
+    }
+
+    let namedContent = CursorLocalWorkspace.overlaying(
+        laterQuery,
+        with: CursorConversationMetadata(
+            title: "样式优化建议"
+        )
+    )
+    guard namedContent.title == "样式优化建议",
+          namedContent.activityText
+            == "左侧已经变成「样式优化建议」，右侧也有文件名，但你要的不是这个。",
+          namedContent.completedActivityText
+            == "左侧已经变成「样式优化建议」，右侧也有文件名，但你要的不是这个。"
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "Cursor card title must use the sidebar conversation name"
+        )
+    }
+
+    let runningContentItem = taskProgressItem(
+        from: cursorSnapshot,
+        events: [
+            makeLiveStoreAgentEvent(
+                agentID: .cursor,
+                nativeID: cursorSession,
+                eventID: "cursor-tool",
+                eventType: "postToolUse",
+                observedAt: base,
+                state: .running
+            ),
+        ],
+        cursorWorkingDirectory: { _ in "/private/tmp/threadhelm-test/code/PetBar" },
+        cursorSessionContent: { id in
+            id == cursorSession ? transcriptContent : nil
+        }
+    )
+    guard runningContentItem.title == "帮我看看监听为什么是空的",
+          runningContentItem.activityText == "工具调用完成",
+          runningContentItem.events.map(\.text) == [
+              "路径没填上，我去本机记录里读正文。",
+              "正在检查文件",
+          ]
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "running Cursor activity must summarize the latest hook without output body"
+        )
+    }
+
+    let thinkingContentItem = taskProgressItem(
+        from: cursorSnapshot,
+        events: [
+            makeLiveStoreAgentEvent(
+                agentID: .cursor,
+                nativeID: cursorSession,
+                eventID: "cursor-prompt",
+                eventType: "beforeSubmitPrompt",
+                observedAt: base,
+                state: .running
+            ),
+        ],
+        cursorWorkingDirectory: { _ in "/private/tmp/threadhelm-test/code/PetBar" },
+        cursorSessionContent: { id in
+            id == cursorSession ? transcriptContent : nil
+        }
+    )
+    guard thinkingContentItem.activityText == "正在思考",
+          thinkingContentItem.events.contains(where: {
+              $0.text == "路径没填上，我去本机记录里读正文。"
+          }),
+          thinkingContentItem.activityText != transcriptContent.activityText
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "Cursor thinking activity must stay concise while history keeps public events"
+        )
+    }
+
+    let runningNamedItem = taskProgressItem(
+        from: cursorSnapshot,
+        events: [
+            makeLiveStoreAgentEvent(
+                agentID: .cursor,
+                nativeID: cursorSession,
+                eventID: "cursor-tool",
+                eventType: "postToolUse",
+                observedAt: base,
+                state: .running
+            ),
+        ],
+        cursorWorkingDirectory: { _ in "/private/tmp/threadhelm-test/code/PetBar" },
+        cursorSessionContent: { id in
+            id == cursorSession ? namedContent : nil
+        }
+    )
+    guard runningNamedItem.title == "样式优化建议",
+          runningNamedItem.activityText == "工具调用完成"
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "running Cursor card must keep its title and concise activity summary"
+        )
+    }
+
+    let completedSnapshot = AgentSessionSnapshot(
+        identity: AgentSessionIdentity(agentID: .cursor, nativeID: cursorSession),
+        adapterVersion: "self-test",
+        executionState: .completed,
+        attentionReason: .reviewReady,
+        actionability: .openNativeApp,
+        evidenceQuality: .officialHook,
+        freshness: Freshness(observedAt: base, expiresAt: nil),
+        title: "Cursor 会话",
+        activitySummary: "本轮结束",
+        workingDirectory: nil,
+        latestEventID: "cursor-stop",
+        updatedAt: base
+    )
+    let completedContentItem = taskProgressItem(
+        from: completedSnapshot,
+        events: [
+            makeLiveStoreAgentEvent(
+                agentID: .cursor,
+                nativeID: cursorSession,
+                eventID: "cursor-stop",
+                eventType: "stop",
+                observedAt: base,
+                state: .completed
+            ),
+        ],
+        cursorWorkingDirectory: { _ in "/private/tmp/threadhelm-test/code/PetBar" },
+        cursorSessionContent: { id in
+            id == cursorSession ? transcriptContent : nil
+        }
+    )
+    guard completedContentItem.activityText == "本轮已完成",
+          completedContentItem.events.map(\.text) == [
+              "路径没填上，我去本机记录里读正文。",
+              "正在检查文件",
+              "本轮结束",
+          ],
+          !completedContentItem.events.contains(where: { $0.text.contains("/secret") }),
+          !(completedContentItem.activityText ?? "").contains("/secret")
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "completed Cursor activity must not repeat the assistant output body"
+        )
+    }
+
+    let completedNamedItem = taskProgressItem(
+        from: completedSnapshot,
+        events: [
+            makeLiveStoreAgentEvent(
+                agentID: .cursor,
+                nativeID: cursorSession,
+                eventID: "cursor-stop",
+                eventType: "stop",
+                observedAt: base,
+                state: .completed
+            ),
+        ],
+        cursorWorkingDirectory: { _ in "/private/tmp/threadhelm-test/code/PetBar" },
+        cursorSessionContent: { id in
+            id == cursorSession ? namedContent : nil
+        }
+    )
+    guard completedNamedItem.title == "样式优化建议",
+          completedNamedItem.activityText == "本轮已完成",
+          completedNamedItem.events.last?.text == "本轮结束"
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "completed Cursor card must show sidebar title and terminal summary"
+        )
+    }
+
+    let projectedCursor = AgentSessionSnapshot(
+        identity: AgentSessionIdentity(
+            agentID: .cursor,
+            nativeID: "cursor-projection-session"
+        ),
+        adapterVersion: "self-test",
+        executionState: .running,
+        attentionReason: .none,
+        actionability: .openNativeApp,
+        evidenceQuality: .officialHook,
+        freshness: Freshness(observedAt: base, expiresAt: nil),
+        title: "Cursor 会话",
+        activitySummary: "正在执行",
+        workingDirectory: nil,
+        latestEventID: "cursor-prompt",
+        updatedAt: base
+    )
+    let unidentifiedCursor = AgentSessionSnapshot(
+        identity: AgentSessionIdentity(
+            agentID: .cursor,
+            nativeID: "unidentified"
+        ),
+        adapterVersion: "self-test",
+        executionState: .running,
+        attentionReason: .none,
+        actionability: .openNativeApp,
+        evidenceQuality: .officialHook,
+        freshness: Freshness(observedAt: base, expiresAt: nil),
+        title: "Cursor 会话",
+        activitySummary: "正在执行",
+        workingDirectory: nil,
+        latestEventID: "cursor-unidentified",
+        updatedAt: base
+    )
+    let cursorProjection = agentDashboardProjection(
+        collection: .displaying([]),
+        permissionQueue: .empty,
+        liveReduction: AgentReductionResult(
+            snapshots: [projectedCursor, unidentifiedCursor],
+            attentionItems: [],
+            processedEventCount: 1,
+            events: [
+                makeLiveStoreAgentEvent(
+                    agentID: .cursor,
+                    nativeID: "cursor-projection-session",
+                    eventID: "cursor-prompt",
+                    eventType: "beforeSubmitPrompt",
+                    observedAt: base,
+                    state: .running
+                ),
+                makeLiveStoreAgentEvent(
+                    agentID: .cursor,
+                    nativeID: "unidentified",
+                    eventID: "cursor-unidentified",
+                    eventType: "beforeSubmitPrompt",
+                    observedAt: base,
+                    state: .running
+                ),
+            ]
+        ),
+        agentCompatibilities: [.cursor: .validated]
+    )
+    let projectedItem = cursorProjection.taskCollection.items.first {
+        $0.sessionID == "cursor-projection-session"
+    }
+    guard projectedItem?.events.map(\.text) == ["提交提示"],
+          projectedItem?.activityText == "正在思考",
+          projectedItem?.workingDirectory == nil,
+          cursorProjection.taskCollection.items.count == 1,
+          !cursorProjection.snapshots.contains(where: {
+              $0.identity.nativeID == "unidentified"
+          })
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "dashboard must keep identified Cursor events without duplicate generic cards"
+        )
+    }
+
+    var readUnvalidatedCursorDirectory = false
+    var readUnvalidatedCursorContent = false
+    let unvalidatedCursorProjection = agentDashboardProjection(
+        collection: .displaying([]),
+        permissionQueue: .empty,
+        liveReduction: AgentReductionResult(
+            snapshots: [projectedCursor, unidentifiedCursor],
+            attentionItems: [],
+            processedEventCount: 1,
+            events: [
+                makeLiveStoreAgentEvent(
+                    agentID: .cursor,
+                    nativeID: "cursor-projection-session",
+                    eventID: "cursor-prompt",
+                    eventType: "beforeSubmitPrompt",
+                    observedAt: base,
+                    state: .running
+                ),
+            ]
+        ),
+        agentCompatibilities: [.cursor: .unvalidated],
+        cursorWorkingDirectory: { _ in
+            readUnvalidatedCursorDirectory = true
+            return "/private/tmp/threadhelm-test/private-project"
+        },
+        cursorSessionContent: { _ in
+            readUnvalidatedCursorContent = true
+            return CursorLocalSessionContent(
+                title: "不应读取的本地标题",
+                activityText: "不应读取的本地正文",
+                completedActivityText: "不应读取的本地正文",
+                fragments: []
+            )
+        }
+    )
+    let boundedCursor = unvalidatedCursorProjection.taskCollection.items.first
+    guard !readUnvalidatedCursorDirectory,
+          !readUnvalidatedCursorContent,
+          boundedCursor?.title == "Cursor 会话",
+          boundedCursor?.activityText == "正在执行",
+          boundedCursor?.workingDirectory == nil,
+          boundedCursor?.canOpen == false,
+          unvalidatedCursorProjection.taskCollection.items.count == 1
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "unvalidated Cursor must not read local title, body, or working directory"
+        )
+    }
+}
+
+private func makeLiveStoreAgentEvent(
+    agentID: AgentID,
+    nativeID: String,
+    eventID: String,
+    eventType: String,
+    observedAt: Date,
+    state: ExecutionState
+) -> AgentEvent {
+    AgentEvent(
+        identity: AgentSessionIdentity(agentID: agentID, nativeID: nativeID),
+        adapterVersion: "self-test",
+        eventID: eventID,
+        sequence: nil,
+        eventType: eventType,
+        observedAt: observedAt,
+        monotonicNanoseconds: nil,
+        executionState: state,
+        attentionReason: .none,
+        actionability: agentID == .omp ? .viewOnly : .openNativeApp,
+        evidenceQuality: .officialHook,
+        freshness: Freshness(observedAt: observedAt, expiresAt: nil),
+        title: "会话",
+        activitySummary: "正在执行",
+        workingDirectory: nil
+    )
 }
 
 private func makeLiveStoreEnvelope(

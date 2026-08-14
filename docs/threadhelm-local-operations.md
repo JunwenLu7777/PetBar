@@ -42,11 +42,11 @@ Agents 页面里的 `validated` 不是“看起来能用”，而是本机发现
 
 - Codex `0.145.0`
 - Claude Code `2.1.226`
-- Cursor Desktop `3.15.6` 和 Agent CLI `2026.04.14-ee4b43a`
+- Cursor Desktop `3.15.19` 和 Agent CLI `2026.04.15-dccdccd`
 - ZCode `3.7.6` 和 build `3.7.6.4691`
 - OMP `17.3.2`
 
-只要版本没读到、少一个分量或有任意漂移，就显示 `unvalidated`，并隐藏只在固定版本上验证过的能力文案。例如本机 Cursor Desktop 即使只是升级到 `3.15.19`，也不能沿用 `3.15.6` 的验证结论。发现过程只读；`unvalidated` Agent 的安装和修复会跳过，不会改厂商配置，卸载仍可只移除已确认属于 ThreadHelm 的条目。
+只要版本没读到、少一个分量或有任意漂移，就显示 `unvalidated`，并隐藏只在固定版本上验证过的能力文案。例如本机 Cursor Desktop 即使再升到 `3.16.0`，也不能沿用 `3.15.19` 的验证结论。发现过程只读；`unvalidated` Agent 的安装和修复会跳过，不会改厂商配置，卸载仍可只移除已确认属于 ThreadHelm 的条目。
 
 在源码目录构建后，可以运行生产回放器：
 

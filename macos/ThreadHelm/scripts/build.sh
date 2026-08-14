@@ -40,6 +40,7 @@ if ! /usr/bin/swiftc \
   -framework CoreGraphics \
   -framework Network \
   -framework Security \
+  -lsqlite3 \
   "${SOURCE_FILES[@]}" \
   -o "$TMP_DIR/ThreadHelm-arm64" 2>"$TMP_DIR/arm64.log"
 then

@@ -13,9 +13,8 @@ enum AgentHookCommandContract {
     static let flag = "--agent-hook"
     static let inputReadLimit = 64 * 1_024
     static let adapterVersion = "threadhelm-hook-v1"
-    // Vendor hook deadlines include executable startup. Keep 50 ms in reserve
-    // so the complete process remains below the advertised 250 ms ceiling.
-    static let synchronousBudget: TimeInterval = 0.20
+    // Cursor's hook timeout is 1s. Keep 250 ms in reserve for vendor overhead.
+    static let synchronousBudget: TimeInterval = 0.75
 }
 
 enum AgentHookInput {
@@ -32,6 +31,9 @@ func runAgentHookCommandIfRequested(
     readInput: (TimeInterval) -> AgentHookInput = readStandardAgentHookInput,
     send: (AgentTransportEnvelope, URL, TimeInterval) -> AgentTransportAttempt = {
         AgentEventSocketClient.send($0, to: $1, timeout: $2)
+    },
+    persistUndelivered: (AgentTransportEnvelope) -> Void = {
+        persistUndeliveredAgentHookEnvelope($0)
     }
 ) -> Bool {
     let startedAt = DispatchTime.now().uptimeNanoseconds
@@ -47,13 +49,15 @@ func runAgentHookCommandIfRequested(
         eventType: eventType,
         input: readInput(agentHookRemainingTime(startedAt: startedAt))
     ) else { return true }
+    persistUndelivered(envelope)
     let remaining = agentHookRemainingTime(startedAt: startedAt)
-    guard remaining > 0 else { return true }
-    _ = send(
-        envelope,
-        resolveSocketURL(environment),
-        remaining
-    )
+    if remaining > 0 {
+        _ = send(
+            envelope,
+            resolveSocketURL(environment),
+            remaining
+        )
+    }
     return true
 }
 
@@ -158,6 +162,9 @@ func agentHookEnvelope(
     case .malformed:
         return nil
     case .oversized(let byteCount):
+        let nativeAction: Actionability = agentID == .omp
+            ? .viewOnly
+            : .openNativeApp
         return AgentTransportEnvelope(
             agentID: agentID,
             adapterVersion: AgentHookCommandContract.adapterVersion,
@@ -167,6 +174,11 @@ func agentHookEnvelope(
             eventType: safeEventType,
             monotonicNanoseconds: monotonicNanoseconds,
             redactedPayload: [
+                "state": ExecutionState.running.rawValue,
+                "attentionReason": AttentionReason.none.rawValue,
+                "actionability": nativeAction.rawValue,
+                "evidenceQuality": EvidenceQuality.officialHook.rawValue,
+                "freshness": "fresh",
                 "payloadDisposition": "metadataOnly",
                 "payloadSizeBucket": agentHookPayloadSizeBucket(byteCount),
             ]

@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DynamicIslandConfirmationPresenter!
     private var claudePermissionHookServer: ClaudePermissionHookServer?
     private var agentEventSocketServer: AgentEventSocketServer?
+    private var agentHookDropTimer: Timer?
     private var screenParametersObserver: NSObjectProtocol?
     private var statusItem: NSStatusItem?
     private var visibilityHotKey: ThreadHelmVisibilityHotKey?
@@ -142,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startCodexDesktopMonitoring()
         startClaudePermissionHook()
         agentEventChannelAvailable = startAgentEventSocket()
+        startAgentHookDropInbox()
         dashboardStore.update { snapshot in
             snapshot.agentEventChannelAvailable = agentEventChannelAvailable
             snapshot.agentStatuses = agentRuntimeStatusPlaceholders(
@@ -207,6 +209,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         claudePermissionHookServer?.stop()
         agentEventSocketServer?.stop()
         agentEventSocketServer = nil
+        agentHookDropTimer?.invalidate()
+        agentHookDropTimer = nil
         dynamicIslandController?.hide()
         refreshTimer?.invalidate()
         taskProgressTimer?.invalidate()
@@ -919,6 +923,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 readerStore.releaseReader(for: generation, reuse: shouldApply)
                 guard shouldApply else { return }
                 self.lastPolledTaskCollection = collection
+                self.ingestAgentHookDropInbox()
                 self.dashboardStore.update { snapshot in
                     let liveUpdate = self.agentLiveEventStore.snapshotUpdate()
                     guard self.agentLiveReductionGate.shouldApply(
@@ -970,6 +975,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             fputs("ThreadHelm 本地 Agent 状态通道暂不可用。\n", stderr)
             return false
         }
+    }
+
+    private func startAgentHookDropInbox() {
+        let directory = agentHookDropDirectoryURL()
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        _ = chmod(directory.path, S_IRWXU)
+        ingestAgentHookDropInbox()
+        agentHookDropTimer = Timer.scheduledTimer(
+            withTimeInterval: 0.5,
+            repeats: true
+        ) { [weak self] _ in
+            self?.ingestAgentHookDropInbox()
+        }
+    }
+
+    private func ingestAgentHookDropInbox() {
+        let envelopes = drainAgentHookDropInbox()
+        guard !envelopes.isEmpty else { return }
+        var latest: AgentLiveReductionUpdate?
+        for envelope in envelopes {
+            if let update = agentLiveEventStore.ingestUpdate(envelope) {
+                latest = update
+            }
+        }
+        guard let latest else { return }
+        applyLiveAgentReduction(latest)
     }
 
     private func applyLiveAgentReduction(_ update: AgentLiveReductionUpdate) {

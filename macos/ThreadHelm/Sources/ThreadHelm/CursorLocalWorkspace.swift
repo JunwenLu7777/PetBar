@@ -1,0 +1,731 @@
+//
+//  CursorLocalWorkspace.swift
+//  ThreadHelm
+//
+//  模块职责：在 GUI 进程里用 Cursor 本机 transcript 和会话索引还原工作目录、
+//  侧边栏标题和可公开活动正文。不把路径、提示或工具参数写回 hook 传输。
+//
+
+import Foundation
+import SQLite3
+
+struct CursorLocalActivityFragment: Equatable {
+    let kind: TaskActivityEventKind
+    let text: String
+}
+
+struct CursorConversationMetadata: Equatable {
+    let title: String?
+    let activityText: String?
+    let fragments: [CursorLocalActivityFragment]
+
+    init(
+        title: String?,
+        activityText: String? = nil,
+        fragments: [CursorLocalActivityFragment] = []
+    ) {
+        self.title = title
+        self.activityText = activityText
+        self.fragments = fragments
+    }
+}
+
+struct CursorLocalSessionContent: Equatable {
+    let title: String?
+    let activityText: String?
+    let completedActivityText: String?
+    let fragments: [CursorLocalActivityFragment]
+}
+
+enum CursorLocalWorkspace {
+    static let maximumVisibleEvents = 32
+    static let maximumTailBytes: UInt64 = 1_048_576
+
+    private static let cacheLock = NSLock()
+    private static var contentCache: [String: CachedTranscript] = [:]
+
+    private struct CachedTranscript {
+        let modificationDate: Date
+        let content: CursorLocalSessionContent
+    }
+
+    static func workingDirectory(sessionID: String) -> String? {
+        workingDirectory(
+            sessionID: sessionID,
+            projectsRoot: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".cursor/projects", isDirectory: true)
+        )
+    }
+
+    static func workingDirectory(
+        sessionID: String,
+        projectsRoot: URL,
+        fileManager: FileManager = .default,
+        resolvedPathExists: ((String) -> Bool)? = nil
+    ) -> String? {
+        guard let match = locateSession(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: fileManager
+        ) else { return nil }
+        let pathExists = resolvedPathExists ?? { path in
+            fileManager.fileExists(atPath: path)
+        }
+        return decodeProjectSlug(match.projectSlug, pathExists: pathExists)
+    }
+
+    static func sessionContent(sessionID: String) -> CursorLocalSessionContent? {
+        sessionContent(
+            sessionID: sessionID,
+            projectsRoot: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".cursor/projects", isDirectory: true),
+            conversationMetadata: { conversationMetadata(sessionID: $0) }
+        )
+    }
+
+    static func sessionContent(
+        sessionID: String,
+        projectsRoot: URL,
+        fileManager: FileManager = .default,
+        conversationMetadata: ((String) -> CursorConversationMetadata?)? = nil
+    ) -> CursorLocalSessionContent? {
+        guard let match = locateSession(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: fileManager
+        ) else { return nil }
+        let nativeID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let metadata = conversationMetadata?(nativeID)
+        let parsed = match.transcriptURL.flatMap {
+            cachedContent(at: $0, fileManager: fileManager)
+        } ?? CursorLocalSessionContent(
+            title: nil,
+            activityText: nil,
+            completedActivityText: nil,
+            fragments: []
+        )
+        let content = overlaying(parsed, with: metadata)
+        guard content.title != nil
+                || content.activityText != nil
+                || !content.fragments.isEmpty
+        else { return nil }
+        return content
+    }
+
+    static func sessionContent(fromJSONL text: String) -> CursorLocalSessionContent {
+        parseTranscript(text)
+    }
+
+    static func overlaying(
+        _ content: CursorLocalSessionContent,
+        with metadata: CursorConversationMetadata?
+    ) -> CursorLocalSessionContent {
+        let title = trimmedNonEmpty(metadata?.title) ?? content.title
+        let composerText = trimmedNonEmpty(metadata?.activityText)
+        let activityText = composerText ?? content.activityText
+        let completedActivityText = composerText ?? content.completedActivityText
+        let fragments = metadata?.fragments.isEmpty == false
+            ? metadata!.fragments
+            : content.fragments
+        guard title != content.title
+                || activityText != content.activityText
+                || completedActivityText != content.completedActivityText
+                || fragments != content.fragments
+        else { return content }
+        return CursorLocalSessionContent(
+            title: title,
+            activityText: activityText,
+            completedActivityText: completedActivityText,
+            fragments: fragments
+        )
+    }
+
+    static func conversationMetadata(
+        sessionID: String,
+        conversationSearchURL: URL = defaultConversationSearchDatabaseURL,
+        composerStateURL: URL = defaultComposerStateDatabaseURL
+    ) -> CursorConversationMetadata? {
+        let nativeID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard nativeID.count >= 8,
+              nativeID != "unidentified",
+              !nativeID.hasPrefix("unknown-")
+        else { return nil }
+
+        let searchTitle = sqliteQueryText(
+            databaseURL: conversationSearchURL,
+            sql: "SELECT title FROM conversations WHERE id = ? LIMIT 1",
+            bind: nativeID
+        )
+        let composerTitle = sqliteQueryText(
+            databaseURL: composerStateURL,
+            sql: "SELECT json_extract(value, '$.name') FROM cursorDiskKV WHERE key = ? LIMIT 1",
+            bind: "composerData:\(nativeID)"
+        )
+        let title = (trimmedNonEmpty(searchTitle) ?? trimmedNonEmpty(composerTitle))
+            .map { String($0.prefix(80)) }
+        let composerFragments = composerPublicActivityFragments(
+            sessionID: nativeID,
+            databaseURL: composerStateURL
+        )
+        let activityText = composerFragments.last?.text
+        guard title != nil || activityText != nil else { return nil }
+        return CursorConversationMetadata(
+            title: title,
+            activityText: activityText,
+            fragments: composerFragments
+        )
+    }
+
+    private static func composerPublicActivityFragments(
+        sessionID: String,
+        databaseURL: URL
+    ) -> [CursorLocalActivityFragment] {
+        let sql = """
+        WITH composer(value) AS (
+          SELECT value
+          FROM cursorDiskKV
+          WHERE key = 'composerData:' || ?1
+          LIMIT 1
+        ),
+        headers(position, header) AS (
+          SELECT CAST(entry.key AS INTEGER), entry.value
+          FROM composer,
+               json_each(
+                 json_extract(composer.value, '$.fullConversationHeadersOnly')
+               ) AS entry
+        )
+        SELECT
+          CAST(json_extract(bubble.value, '$.type') AS TEXT),
+          json_extract(bubble.value, '$.text'),
+          json_extract(headers.header, '$.grouping.textPreview')
+        FROM headers
+        LEFT JOIN cursorDiskKV AS bubble
+          ON bubble.key = 'bubbleId:' || ?1 || ':'
+            || json_extract(headers.header, '$.bubbleId')
+        WHERE CAST(json_extract(headers.header, '$.type') AS INTEGER) = 2
+          AND json_extract(headers.header, '$.grouping.isRenderable') = 1
+          AND json_extract(headers.header, '$.grouping.hasText') = 1
+        ORDER BY headers.position
+        """
+        guard let rows = sqliteQueryTextRows(
+            databaseURL: databaseURL,
+            sql: sql,
+            bind: sessionID,
+            columns: 3
+        ) else { return [] }
+        return rows.reduce(into: []) { fragments, row in
+            let fullText = row[0] == "2" ? row[1] : nil
+            let candidate = trimmedNonEmpty(fullText) ?? trimmedNonEmpty(row[2])
+            guard let candidate,
+                  let paragraph = safePublicActivityParagraph(from: candidate)
+            else { return }
+            fragments = appendingCursorFragment(
+                CursorLocalActivityFragment(
+                    kind: .commentary,
+                    text: paragraph
+                ),
+                to: fragments
+            )
+        }
+    }
+
+    static var defaultConversationSearchDatabaseURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                "Library/Application Support/Cursor/User/globalStorage/conversation-search.db"
+            )
+    }
+
+    static var defaultComposerStateDatabaseURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                "Library/Application Support/Cursor/User/globalStorage/state.vscdb"
+            )
+    }
+
+    static func datedEvents(
+        from fragments: [CursorLocalActivityFragment],
+        startedAt: Date,
+        updatedAt: Date
+    ) -> [TaskActivityEvent] {
+        let rows = fragments.suffix(maximumVisibleEvents)
+        guard !rows.isEmpty else { return [] }
+        if rows.count == 1 {
+            return [
+                TaskActivityEvent(
+                    kind: rows[rows.startIndex].kind,
+                    occurredAt: updatedAt,
+                    text: rows[rows.startIndex].text
+                )
+            ]
+        }
+        let span = max(updatedAt.timeIntervalSince(startedAt), 0)
+        return rows.enumerated().map { index, fragment in
+            let fraction = Double(index) / Double(rows.count - 1)
+            return TaskActivityEvent(
+                kind: fragment.kind,
+                occurredAt: startedAt.addingTimeInterval(span * fraction),
+                text: fragment.text
+            )
+        }
+    }
+
+    static func decodeProjectSlug(
+        _ slug: String,
+        pathExists: (String) -> Bool
+    ) -> String? {
+        if slug == "empty-window" || slug.hasPrefix("var-folders-") {
+            return nil
+        }
+        let parts = slug.split(separator: "-").map(String.init)
+        guard !parts.isEmpty else { return nil }
+
+        var consumed = 0
+        var current = ""
+        while consumed < parts.count {
+            var matched: String?
+            for end in stride(from: parts.count, through: consumed + 1, by: -1) {
+                let component = parts[consumed..<end].joined(separator: "-")
+                let candidate = current + "/" + component
+                if pathExists(candidate) {
+                    matched = candidate
+                    consumed = end
+                    break
+                }
+            }
+            guard let next = matched else { return nil }
+            current = next
+        }
+        return current
+    }
+
+    static func activityEvents(from events: [AgentEvent]) -> [TaskActivityEvent] {
+        let rows = events.compactMap(activityEvent(from:)).sorted {
+            if $0.occurredAt == $1.occurredAt {
+                return $0.text < $1.text
+            }
+            return $0.occurredAt < $1.occurredAt
+        }
+        if rows.count <= maximumVisibleEvents {
+            return rows
+        }
+        return Array(rows.suffix(maximumVisibleEvents))
+    }
+
+    static func activityEvent(from event: AgentEvent) -> TaskActivityEvent? {
+        let text: String
+        let kind: TaskActivityEventKind
+        switch event.eventType.lowercased() {
+        case "sessionstart", "session_start":
+            kind = .lifecycle
+            text = "会话开始"
+        case "sessionend", "session_end":
+            kind = .lifecycle
+            text = "会话结束"
+        case "beforesubmitprompt", "userpromptsubmit":
+            kind = .commentary
+            text = "提交提示"
+        case "pretooluse", "tool_call",
+             "beforeshellexecution", "beforemcpexecution", "beforereadfile":
+            kind = .tool
+            text = "准备调用工具"
+        case "posttooluse", "tool_result",
+             "aftershellexecution", "aftermcpexecution", "afterfileedit":
+            kind = .tool
+            text = "工具调用完成"
+        case "posttoolusefailure":
+            kind = .tool
+            text = "工具调用失败"
+        case "stop", "agent_settled", "agent_end":
+            kind = .lifecycle
+            text = "本轮结束"
+        case "subagentstart", "agent_start":
+            kind = .lifecycle
+            text = "启动子任务"
+        case "subagentstop":
+            kind = .lifecycle
+            text = "子任务结束"
+        default:
+            return nil
+        }
+        return TaskActivityEvent(
+            kind: kind,
+            occurredAt: event.observedAt,
+            text: text
+        )
+    }
+
+    private static func locateSession(
+        sessionID: String,
+        projectsRoot: URL,
+        fileManager: FileManager
+    ) -> (projectSlug: String, transcriptURL: URL?)? {
+        let nativeID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard nativeID.count >= 8,
+              nativeID != "unidentified",
+              !nativeID.hasPrefix("unknown-")
+        else { return nil }
+
+        guard let projects = try? fileManager.contentsOfDirectory(
+            at: projectsRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+
+        for projectURL in projects.sorted(by: { $0.path < $1.path }) {
+            let transcripts = projectURL.appendingPathComponent(
+                "agent-transcripts",
+                isDirectory: true
+            )
+            let sessionDirectory = transcripts.appendingPathComponent(
+                nativeID,
+                isDirectory: true
+            )
+            let nestedFile = sessionDirectory.appendingPathComponent(
+                "\(nativeID).jsonl"
+            )
+            let flatFile = transcripts.appendingPathComponent(
+                "\(nativeID).jsonl"
+            )
+            var isDirectory: ObjCBool = false
+            let directoryExists = fileManager.fileExists(
+                atPath: sessionDirectory.path,
+                isDirectory: &isDirectory
+            ) && isDirectory.boolValue
+            let transcriptURL: URL?
+            if fileManager.fileExists(atPath: nestedFile.path) {
+                transcriptURL = nestedFile
+            } else if fileManager.fileExists(atPath: flatFile.path) {
+                transcriptURL = flatFile
+            } else if directoryExists {
+                transcriptURL = nil
+            } else {
+                continue
+            }
+            return (projectURL.lastPathComponent, transcriptURL)
+        }
+        return nil
+    }
+
+    private static func cachedContent(
+        at url: URL,
+        fileManager: FileManager
+    ) -> CursorLocalSessionContent? {
+        let attributes = try? fileManager.attributesOfItem(atPath: url.path)
+        let modificationDate = attributes?[.modificationDate] as? Date
+            ?? Date.distantPast
+        let cacheKey = url.path
+        cacheLock.lock()
+        if let cached = contentCache[cacheKey],
+           cached.modificationDate == modificationDate
+        {
+            cacheLock.unlock()
+            return cached.content
+        }
+        cacheLock.unlock()
+        guard let text = tailedUTF8String(at: url, fileManager: fileManager)
+        else { return nil }
+        let content = parseTranscript(text)
+        cacheLock.lock()
+        contentCache[cacheKey] = CachedTranscript(
+            modificationDate: modificationDate,
+            content: content
+        )
+        cacheLock.unlock()
+        return content
+    }
+
+    private static func tailedUTF8String(
+        at url: URL,
+        fileManager: FileManager
+    ) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let size = (try? fileManager.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?
+            .uint64Value ?? 0
+        if size > maximumTailBytes {
+            try? handle.seek(toOffset: size - maximumTailBytes)
+        }
+        let data = (try? handle.readToEnd()) ?? Data()
+        guard !data.isEmpty else { return nil }
+        if let text = String(data: data, encoding: .utf8) {
+            if size > maximumTailBytes,
+               let newline = text.firstIndex(of: "\n")
+            {
+                return String(text[text.index(after: newline)...])
+            }
+            return text
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func parseTranscript(_ text: String) -> CursorLocalSessionContent {
+        var title: String?
+        var fragments: [CursorLocalActivityFragment] = []
+        var latestPublicText: String?
+        var latestTool: String?
+
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let data = line.data(using: .utf8),
+                  let record = try? JSONSerialization.jsonObject(with: data)
+                    as? [String: Any]
+            else { continue }
+            let role = ((record["role"] as? String) ?? (record["type"] as? String))?
+                .lowercased()
+            if role == "turn_ended" || record["type"] as? String == "turn_ended" {
+                continue
+            }
+            let message = record["message"] as? [String: Any]
+            let blocks = contentBlocks(from: message?["content"] ?? record["content"])
+            if role == "user" {
+                let userText = blocks.compactMap { block -> String? in
+                    guard block.type == "text" else { return nil }
+                    return block.text
+                }.joined(separator: " ")
+                if title == nil, let nextTitle = cursorTaskTitle(from: userText) {
+                    title = nextTitle
+                }
+                continue
+            }
+            guard role == "assistant" else { continue }
+            for block in blocks {
+                if block.type == "text",
+                   let text = block.text,
+                   let paragraph = safePublicActivityParagraph(from: text)
+                {
+                    latestPublicText = paragraph
+                    fragments = appendingCursorFragment(
+                        CursorLocalActivityFragment(
+                            kind: .commentary,
+                            text: paragraph
+                        ),
+                        to: fragments
+                    )
+                    continue
+                }
+                guard block.type == "tool_use" || block.type == "tool-use",
+                      let name = block.name
+                else { continue }
+                let toolActivity = cursorSafeToolActivity(name: name)
+                latestTool = toolActivity
+                fragments = appendingCursorFragment(
+                    CursorLocalActivityFragment(
+                        kind: .tool,
+                        text: toolActivity
+                    ),
+                    to: fragments
+                )
+            }
+        }
+
+        let completedActivityText = latestPublicText ?? (fragments.isEmpty
+            ? nil
+            : fragments.map(\.text).joined(separator: " · "))
+        return CursorLocalSessionContent(
+            title: title,
+            activityText: latestPublicText ?? latestTool,
+            completedActivityText: completedActivityText,
+            fragments: fragments
+        )
+    }
+}
+
+private struct CursorTranscriptBlock {
+    let type: String
+    let text: String?
+    let name: String?
+}
+
+private func contentBlocks(from value: Any?) -> [CursorTranscriptBlock] {
+    if let text = value as? String {
+        return [CursorTranscriptBlock(type: "text", text: text, name: nil)]
+    }
+    guard let items = value as? [[String: Any]] else { return [] }
+    return items.compactMap { item in
+        let type = (item["type"] as? String)?.lowercased() ?? ""
+        return CursorTranscriptBlock(
+            type: type,
+            text: item["text"] as? String,
+            name: item["name"] as? String
+        )
+    }
+}
+
+private func appendingCursorFragment(
+    _ fragment: CursorLocalActivityFragment,
+    to fragments: [CursorLocalActivityFragment]
+) -> [CursorLocalActivityFragment] {
+    var next = fragments.filter {
+        !($0.kind == fragment.kind && $0.text == fragment.text)
+    }
+    next.append(fragment)
+    return next
+}
+
+private func cursorTaskTitle(from rawText: String) -> String? {
+    var value = rawText
+    if let start = value.range(of: "<user_query>"),
+       let end = value.range(of: "</user_query>")
+    {
+        value = String(value[start.upperBound..<end.lowerBound])
+    }
+    value = value.replacingOccurrences(
+        of: #"\[Image\]"#,
+        with: " ",
+        options: .regularExpression
+    )
+    value = value.replacingOccurrences(
+        of: #"<[^>]+>"#,
+        with: " ",
+        options: .regularExpression
+    )
+    let skippedPrefixes = [
+        "the following images were provided",
+        "these images can be copied",
+        "<image_files>",
+    ]
+    let lines = value.components(separatedBy: .newlines).compactMap { line -> String? in
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let lower = trimmed.lowercased()
+        if skippedPrefixes.contains(where: { lower.hasPrefix($0) }) {
+            return nil
+        }
+        if lower.hasPrefix("<timestamp>") || lower.hasPrefix("timestamp>") {
+            return nil
+        }
+        return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "#*- "))
+    }
+    let text = lines.joined(separator: " ")
+        .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return nil }
+    return String(text.prefix(80))
+}
+
+private func trimmedNonEmpty(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+private let sqliteTransientDestructor = unsafeBitCast(
+    -1,
+    to: sqlite3_destructor_type.self
+)
+
+private func sqliteQueryText(
+    databaseURL: URL,
+    sql: String,
+    bind: String
+) -> String? {
+    sqliteQueryTexts(
+        databaseURL: databaseURL,
+        sql: sql,
+        bind: bind,
+        columns: 1
+    )?[0]
+}
+
+private func sqliteQueryTexts(
+    databaseURL: URL,
+    sql: String,
+    bind: String,
+    columns: Int
+) -> [String?]? {
+    sqliteQueryTextRows(
+        databaseURL: databaseURL,
+        sql: sql,
+        bind: bind,
+        columns: columns
+    )?.first
+}
+
+private func sqliteQueryTextRows(
+    databaseURL: URL,
+    sql: String,
+    bind: String,
+    columns: Int
+) -> [[String?]]? {
+    guard columns > 0,
+          FileManager.default.fileExists(atPath: databaseURL.path)
+    else { return nil }
+    var db: OpaquePointer?
+    let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+    guard sqlite3_open_v2(databaseURL.path, &db, flags, nil) == SQLITE_OK,
+          let opened = db
+    else {
+        if db != nil {
+            sqlite3_close(db)
+        }
+        return nil
+    }
+    defer { sqlite3_close(opened) }
+    sqlite3_busy_timeout(opened, 200)
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(opened, sql, -1, &statement, nil) == SQLITE_OK,
+          let prepared = statement
+    else { return nil }
+    defer { sqlite3_finalize(prepared) }
+    let bindResult = bind.withCString { pointer in
+        sqlite3_bind_text(
+            prepared,
+            1,
+            pointer,
+            -1,
+            sqliteTransientDestructor
+        )
+    }
+    guard bindResult == SQLITE_OK else { return nil }
+    var rows: [[String?]] = []
+    while true {
+        let result = sqlite3_step(prepared)
+        if result == SQLITE_DONE {
+            return rows
+        }
+        guard result == SQLITE_ROW else { return nil }
+        rows.append((0..<columns).map { index in
+            let column = Int32(index)
+            if sqlite3_column_type(prepared, column) == SQLITE_NULL {
+                return nil
+            }
+            guard let text = sqlite3_column_text(prepared, column) else {
+                return nil
+            }
+            return String(cString: text)
+        })
+    }
+}
+
+private func cursorSafeToolActivity(name: String) -> String {
+    let normalized = name.lowercased()
+    if normalized.contains("ask") || normalized.contains("question") {
+        return "等待输入"
+    }
+    if normalized.contains("shell")
+        || normalized.contains("bash")
+        || normalized.contains("command")
+    {
+        return "正在运行命令"
+    }
+    if normalized.contains("edit")
+        || normalized.contains("write")
+        || normalized.contains("patch")
+        || normalized.contains("replace")
+        || normalized.contains("delete")
+    {
+        return "正在编辑文件"
+    }
+    if normalized.contains("read")
+        || normalized.contains("grep")
+        || normalized.contains("glob")
+        || normalized.contains("search")
+    {
+        return "正在检查文件"
+    }
+    if normalized.contains("web") || normalized.contains("browser") {
+        return "正在搜索或检查网页"
+    }
+    return "正在使用工具"
+}

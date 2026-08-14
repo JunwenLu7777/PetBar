@@ -223,11 +223,11 @@ private func runAgentVersionTruthSelfTest() {
         agentID: .cursor,
         isInstalled: true,
         components: [
-            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.6"),
+            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.19"),
             AgentVersionComponent(
                 key: "agentCLI",
                 label: "Agent CLI",
-                value: "2026.04.14-ee4b43a"
+                value: "2026.04.15-dccdccd"
             ),
         ]
     )
@@ -235,11 +235,11 @@ private func runAgentVersionTruthSelfTest() {
         agentID: .cursor,
         isInstalled: true,
         components: [
-            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.19"),
+            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.6"),
             AgentVersionComponent(
                 key: "agentCLI",
                 label: "Agent CLI",
-                value: "2026.04.14-ee4b43a"
+                value: "2026.04.15-dccdccd"
             ),
         ]
     )
@@ -247,7 +247,7 @@ private func runAgentVersionTruthSelfTest() {
         agentID: .cursor,
         isInstalled: true,
         components: [
-            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.6"),
+            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.19"),
         ]
     )
     let zcodePinned = versionValidatedAgentDiscovery(
@@ -298,7 +298,7 @@ private func runAgentVersionTruthSelfTest() {
 
     guard Set(profiles.keys) == Set(AgentID.builtInOrder),
           cursorPinned.compatibility == .validated,
-          cursorPinned.version == "3.15.6",
+          cursorPinned.version == "3.15.19",
           cursorPinned.versionComponents.map(\.key) == ["desktop", "agentCLI"],
           cursorDrifted.compatibility == .unvalidated,
           cursorMissingCLI.compatibility == .unvalidated,

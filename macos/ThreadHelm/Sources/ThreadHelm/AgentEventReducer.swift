@@ -13,7 +13,12 @@ enum AgentEventReducer {
         previousSnapshots: [AgentSessionSnapshot] = [],
         preservingAgentIDs: Set<AgentID> = []
     ) -> AgentReductionResult {
-        let uniqueEvents = deduplicated(events)
+        let uniqueEvents = deduplicated(events).sorted {
+            if $0.identity.key != $1.identity.key {
+                return $0.identity.key < $1.identity.key
+            }
+            return deterministicFallbackIsEarlier($0, $1)
+        }
         let grouped = Dictionary(grouping: uniqueEvents, by: \.identity.key)
         var snapshots = grouped.values.compactMap { sessionEvents in
             latestEvent(in: sessionEvents).map(makeSnapshot)
@@ -31,7 +36,8 @@ enum AgentEventReducer {
         return AgentReductionResult(
             snapshots: snapshots,
             attentionItems: attentionItems,
-            processedEventCount: uniqueEvents.count
+            processedEventCount: uniqueEvents.count,
+            events: uniqueEvents
         )
     }
 

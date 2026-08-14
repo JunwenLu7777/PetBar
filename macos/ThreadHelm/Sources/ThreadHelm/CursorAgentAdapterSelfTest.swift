@@ -7,8 +7,33 @@
 //
 
 import Foundation
+import SQLite3
 
 func runCursorAgentAdapterSelfTest() {
+    guard parsedCursorAgentCLIVersion(
+        from: ProcessOutputCaptureResult(
+            data: Data("2026.04.15-dccdccd\n".utf8),
+            termination: .timedOut
+        )
+    ) == "2026.04.15-dccdccd",
+          parsedCursorAgentCLIVersion(
+            from: ProcessOutputCaptureResult(
+                data: Data(),
+                termination: .timedOut
+            )
+          ) == nil,
+          parsedCursorAgentCLIVersion(
+            from: ProcessOutputCaptureResult(
+                data: Data("2026.04.15-dccdccd\n".utf8),
+                termination: .readFailed
+            )
+          ) == nil
+    else {
+        failCursorAdapterSelfTest(
+            "Agent CLI version must parse even when cursor agent --version is slow to exit"
+        )
+    }
+
     let manager = FileManager.default
     let root = manager.temporaryDirectory.appendingPathComponent(
         "threadhelm-cursor-adapter-self-test-\(UUID().uuidString)",
@@ -491,6 +516,329 @@ private func runCursorOpenSelfTest() {
     guard failedAdapter.open(session: appOnly).result == .failed,
           unavailableAdapter.open(session: appOnly).result == .unavailable
     else { failCursorAdapterSelfTest("failed/unavailable open boundary") }
+
+    let existingPaths: Set<String> = [
+        "/private",
+        "/private/tmp",
+        "/private/tmp/threadhelm-test",
+        "/private/tmp/threadhelm-test/code",
+        "/private/tmp/threadhelm-test/code/engineering-kit",
+        "/private/tmp/threadhelm-test/code/PetBar",
+    ]
+    guard CursorLocalWorkspace.decodeProjectSlug(
+        "private-tmp-threadhelm-test-code-engineering-kit",
+        pathExists: existingPaths.contains
+    ) == "/private/tmp/threadhelm-test/code/engineering-kit",
+          CursorLocalWorkspace.decodeProjectSlug(
+            "private-tmp-threadhelm-test-code-PetBar",
+            pathExists: existingPaths.contains
+          ) == "/private/tmp/threadhelm-test/code/PetBar",
+          CursorLocalWorkspace.decodeProjectSlug(
+            "empty-window",
+            pathExists: existingPaths.contains
+          ) == nil
+    else {
+        failCursorAdapterSelfTest("Cursor project slug decode")
+    }
+
+    let manager = FileManager.default
+    let lookupRoot = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-workspace-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let sessionID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    let transcript = lookupRoot
+        .appendingPathComponent(
+            "private-tmp-threadhelm-test-code-PetBar",
+            isDirectory: true
+        )
+        .appendingPathComponent("agent-transcripts", isDirectory: true)
+        .appendingPathComponent(sessionID, isDirectory: true)
+    do {
+        try manager.createDirectory(at: transcript, withIntermediateDirectories: true)
+        let jsonl = transcript.appendingPathComponent("\(sessionID).jsonl")
+        try Data("""
+        {"role":"user","message":{"content":[{"type":"text","text":"把卡片补上正文"}]}}
+        {"role":"assistant","message":{"content":[{"type":"text","text":"我去读本机会话记录。"},{"type":"tool_use","name":"Read","input":{"path":"/secret"}}]}}
+        """.utf8).write(to: jsonl)
+        defer { try? manager.removeItem(at: lookupRoot) }
+        let diskContent = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: lookupRoot
+        )
+        guard CursorLocalWorkspace.workingDirectory(
+            sessionID: sessionID,
+            projectsRoot: lookupRoot,
+            resolvedPathExists: existingPaths.contains
+        ) == "/private/tmp/threadhelm-test/code/PetBar",
+              CursorLocalWorkspace.workingDirectory(
+                sessionID: "missing-session-id-value",
+                projectsRoot: lookupRoot,
+                resolvedPathExists: existingPaths.contains
+              ) == nil,
+              diskContent?.title == "把卡片补上正文",
+              diskContent?.activityText == "我去读本机会话记录。",
+              diskContent?.completedActivityText == "我去读本机会话记录。",
+              diskContent?.activityText?.contains("/secret") != true
+        else {
+            failCursorAdapterSelfTest("Cursor session-to-workspace lookup")
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor workspace lookup setup: \(error)")
+    }
+
+    let metadataRoot = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-title-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    do {
+        try manager.createDirectory(at: metadataRoot, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: metadataRoot) }
+        let searchURL = metadataRoot.appendingPathComponent("conversation-search.db")
+        let stateURL = metadataRoot.appendingPathComponent("state.vscdb")
+        let metadataSession = "2cac76a3-df5f-469f-9f64-05972b086c2d"
+        try writeCursorConversationSearchDatabase(
+            at: searchURL,
+            sessionID: metadataSession,
+            title: "样式优化建议"
+        )
+        try writeCursorComposerStateDatabase(
+            at: stateURL,
+            sessionID: metadataSession,
+            name: "",
+            subtitle: "Edited CursorLocalWorkspace.swift",
+            assistantMessages: [
+                (
+                    fullText: "完整的 Cursor 可见正文，不应退化为预览。",
+                    preview: "完整的 Cursor 可见正"
+                ),
+            ],
+            includePrivateHeaders: true
+        )
+        let metadata = CursorLocalWorkspace.conversationMetadata(
+            sessionID: metadataSession,
+            conversationSearchURL: searchURL,
+            composerStateURL: stateURL
+        )
+        guard metadata?.title == "样式优化建议",
+              metadata?.activityText == "完整的 Cursor 可见正文，不应退化为预览。",
+              metadata?.fragments.map(\.text) == [
+                  "完整的 Cursor 可见正文，不应退化为预览。",
+              ],
+              metadata?.fragments.contains(where: {
+                  $0.text.contains("/private/secret")
+                      || $0.text.contains("内部思考")
+              }) == false,
+              CursorLocalWorkspace.overlaying(
+                CursorLocalSessionContent(
+                    title: "旧标题",
+                    activityText: "transcript 里的旧正文",
+                    completedActivityText: "transcript 里的旧正文",
+                    fragments: []
+                ),
+                with: metadata
+              ).completedActivityText == "完整的 Cursor 可见正文，不应退化为预览。"
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor composer must prefer public bubble text without private headers"
+            )
+        }
+        guard CursorLocalWorkspace.conversationMetadata(
+            sessionID: "missing-session-id-value",
+            conversationSearchURL: searchURL,
+            composerStateURL: stateURL
+        ) == nil
+        else {
+            failCursorAdapterSelfTest("missing Cursor conversation must not invent a title")
+        }
+
+        let fallbackSearch = metadataRoot.appendingPathComponent("empty-search.db")
+        let fallbackState = metadataRoot.appendingPathComponent("named-state.vscdb")
+        try writeCursorConversationSearchDatabase(
+            at: fallbackSearch,
+            sessionID: metadataSession,
+            title: "   "
+        )
+        try writeCursorComposerStateDatabase(
+            at: fallbackState,
+            sessionID: metadataSession,
+            name: "样式优化建议",
+            subtitle: "",
+            assistantMessages: [
+                (
+                    fullText: nil,
+                    preview: "bubble 尚未落盘时使用可见预览"
+                ),
+            ]
+        )
+        let fallback = CursorLocalWorkspace.conversationMetadata(
+            sessionID: metadataSession,
+            conversationSearchURL: fallbackSearch,
+            composerStateURL: fallbackState
+        )
+        guard fallback?.title == "样式优化建议",
+              fallback?.activityText == "bubble 尚未落盘时使用可见预览"
+        else {
+            failCursorAdapterSelfTest(
+                "composer name and public preview must remain available before bubble flush"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor conversation metadata setup: \(error)")
+    }
+}
+
+private func writeCursorConversationSearchDatabase(
+    at url: URL,
+    sessionID: String,
+    title: String
+) throws {
+    var db: OpaquePointer?
+    guard sqlite3_open(url.path, &db) == SQLITE_OK, let opened = db else {
+        if db != nil { sqlite3_close(db) }
+        throw CursorAgentAdapterSelfTestError.invalidJSON
+    }
+    defer { sqlite3_close(opened) }
+    let create = """
+    CREATE TABLE conversations (
+      fts_rowid INTEGER PRIMARY KEY,
+      source TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      is_archived INTEGER NOT NULL
+    );
+    """
+    guard sqlite3_exec(opened, create, nil, nil, nil) == SQLITE_OK else {
+        throw CursorAgentAdapterSelfTestError.invalidJSON
+    }
+    var statement: OpaquePointer?
+    let sql = """
+    INSERT INTO conversations(source, scope, id, title, updated_at, is_archived)
+    VALUES ('local', '', ?, ?, 1, 0);
+    """
+    guard sqlite3_prepare_v2(opened, sql, -1, &statement, nil) == SQLITE_OK,
+          let prepared = statement
+    else { throw CursorAgentAdapterSelfTestError.invalidJSON }
+    defer { sqlite3_finalize(prepared) }
+    let destructor = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    guard sessionID.withCString({ pointer in
+        sqlite3_bind_text(prepared, 1, pointer, -1, destructor)
+    }) == SQLITE_OK,
+          title.withCString({ pointer in
+            sqlite3_bind_text(prepared, 2, pointer, -1, destructor)
+          }) == SQLITE_OK,
+          sqlite3_step(prepared) == SQLITE_DONE
+    else { throw CursorAgentAdapterSelfTestError.invalidJSON }
+}
+
+private func writeCursorComposerStateDatabase(
+    at url: URL,
+    sessionID: String,
+    name: String,
+    subtitle: String,
+    assistantMessages: [(fullText: String?, preview: String)] = [],
+    includePrivateHeaders: Bool = false
+) throws {
+    var db: OpaquePointer?
+    guard sqlite3_open(url.path, &db) == SQLITE_OK, let opened = db else {
+        if db != nil { sqlite3_close(db) }
+        throw CursorAgentAdapterSelfTestError.invalidJSON
+    }
+    defer { sqlite3_close(opened) }
+    guard sqlite3_exec(
+        opened,
+        "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB);",
+        nil,
+        nil,
+        nil
+    ) == SQLITE_OK else {
+        throw CursorAgentAdapterSelfTestError.invalidJSON
+    }
+    var headers: [[String: Any]] = []
+    if includePrivateHeaders {
+        headers.append([
+            "bubbleId": "thinking-bubble",
+            "type": 2,
+            "grouping": [
+                "isRenderable": true,
+                "hasThinking": true,
+                "textPreview": "内部思考不应展示",
+            ] as [String: Any],
+        ])
+        headers.append([
+            "bubbleId": "tool-bubble",
+            "type": 2,
+            "grouping": [
+                "isRenderable": true,
+                "toolDisplayPath": "/private/secret/tool-input.swift",
+            ] as [String: Any],
+        ])
+    }
+    for (index, message) in assistantMessages.enumerated() {
+        headers.append([
+            "bubbleId": "assistant-\(index)",
+            "type": 2,
+            "grouping": [
+                "isRenderable": true,
+                "hasText": true,
+                "textPreview": message.preview,
+            ] as [String: Any],
+        ])
+    }
+    let payload: [String: Any] = [
+        "name": name,
+        "subtitle": subtitle,
+        "fullConversationHeadersOnly": headers,
+    ]
+    let data = try JSONSerialization.data(withJSONObject: payload)
+    guard let json = String(data: data, encoding: .utf8) else {
+        throw CursorAgentAdapterSelfTestError.invalidJSON
+    }
+    let key = "composerData:\(sessionID)"
+    try insertCursorDiskKV(key: key, value: json, database: opened)
+    for (index, message) in assistantMessages.enumerated() {
+        guard let fullText = message.fullText else { continue }
+        let bubble = try JSONSerialization.data(withJSONObject: [
+            "type": 2,
+            "text": fullText,
+        ])
+        guard let bubbleJSON = String(data: bubble, encoding: .utf8) else {
+            throw CursorAgentAdapterSelfTestError.invalidJSON
+        }
+        try insertCursorDiskKV(
+            key: "bubbleId:\(sessionID):assistant-\(index)",
+            value: bubbleJSON,
+            database: opened
+        )
+    }
+}
+
+private func insertCursorDiskKV(
+    key: String,
+    value: String,
+    database: OpaquePointer
+) throws {
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(
+        database,
+        "INSERT INTO cursorDiskKV(key, value) VALUES (?, ?);",
+        -1,
+        &statement,
+        nil
+    ) == SQLITE_OK, let prepared = statement
+    else { throw CursorAgentAdapterSelfTestError.invalidJSON }
+    defer { sqlite3_finalize(prepared) }
+    let destructor = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    guard key.withCString({ pointer in
+        sqlite3_bind_text(prepared, 1, pointer, -1, destructor)
+    }) == SQLITE_OK,
+          value.withCString({ pointer in
+              sqlite3_bind_text(prepared, 2, pointer, -1, destructor)
+          }) == SQLITE_OK,
+          sqlite3_step(prepared) == SQLITE_DONE
+    else { throw CursorAgentAdapterSelfTestError.invalidJSON }
 }
 
 private func cursorSelfTestObject(at url: URL) throws -> [String: Any] {

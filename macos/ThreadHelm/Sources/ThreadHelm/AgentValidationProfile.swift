@@ -94,17 +94,17 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
         ),
         AgentValidationProfile(
             agentID: .cursor,
-            testedVersion: "Desktop 3.15.6 · Agent CLI 2026.04.14-ee4b43a",
+            testedVersion: "Desktop 3.15.19 · Agent CLI 2026.04.15-dccdccd",
             testedVersionComponents: [
                 AgentVersionComponent(
                     key: "desktop",
                     label: "Desktop",
-                    value: "3.15.6"
+                    value: "3.15.19"
                 ),
                 AgentVersionComponent(
                     key: "agentCLI",
                     label: "Agent CLI",
-                    value: "2026.04.14-ee4b43a"
+                    value: "2026.04.15-dccdccd"
                 ),
             ],
             supportedCapabilitiesSummary:

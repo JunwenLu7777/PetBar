@@ -100,7 +100,8 @@ func runAgentHookCommandSelfTest() {
         input: .oversized(AgentHookCommandContract.inputReadLimit + 1),
         monotonicNanoseconds: 46
     ), oversized.redactedPayload["payloadDisposition"] == "metadataOnly",
-       oversized.redactedPayload["payloadSizeBucket"] == "64-128KiB"
+       oversized.redactedPayload["payloadSizeBucket"] == "64-128KiB",
+       oversized.redactedPayload["state"] == "running"
     else {
         failAgentHookCommandSelfTest("oversized metadata-only")
     }
@@ -124,7 +125,7 @@ func runAgentHookCommandSelfTest() {
             sent = envelope
             guard socketURL.path == "/tmp/threadhelm-self-test.sock",
                   timeout > 0,
-                  timeout <= AgentTransportContract.synchronousTimeout
+                  timeout <= AgentHookCommandContract.synchronousBudget
             else {
                 failAgentHookCommandSelfTest("socket override")
             }
@@ -133,7 +134,8 @@ func runAgentHookCommandSelfTest() {
                 vendorResponse: Data(),
                 usedMetadataOnlyEnvelope: false
             )
-        }
+        },
+        persistUndelivered: { _ in }
     )
     guard handled,
           sent?.agentID == .cursor,
@@ -143,6 +145,9 @@ func runAgentHookCommandSelfTest() {
               readInput: { _ in .malformed },
               send: { _, _, _ in
                   failAgentHookCommandSelfTest("unrelated command sent event")
+              },
+              persistUndelivered: { _ in
+                  failAgentHookCommandSelfTest("unrelated command persisted")
               }
           ) == false
     else {
@@ -168,7 +173,8 @@ func runAgentHookCommandSelfTest() {
                 vendorResponse: Data(),
                 usedMetadataOnlyEnvelope: false
             )
-        }
+        },
+        persistUndelivered: { _ in }
     )
     guard sharedDeadlineHandled,
           inputBudget > 0.15,
@@ -180,6 +186,7 @@ func runAgentHookCommandSelfTest() {
     }
 
     runAgentHookInputDeadlineSelfTest()
+    runAgentHookDropSelfTest()
 }
 
 private func runAgentHookInputDeadlineSelfTest() {
@@ -217,6 +224,57 @@ private func runAgentHookInputDeadlineSelfTest() {
           elapsed <= AgentTransportContract.synchronousTimeout + 0.05
     else {
         failAgentHookCommandSelfTest("stdin must fail open within 250ms")
+    }
+}
+
+private func runAgentHookDropSelfTest() {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(
+            "threadhelm-hook-drop-\(UUID().uuidString)",
+            isDirectory: true
+        )
+    defer { try? FileManager.default.removeItem(at: directory) }
+    guard let envelope = agentHookEnvelope(
+        agentID: .cursor,
+        eventType: "beforeSubmitPrompt",
+        input: .object([
+            "session_id": "drop-session",
+            "event_id": "drop-event",
+        ]),
+        monotonicNanoseconds: 99
+    ) else {
+        failAgentHookCommandSelfTest("drop envelope")
+    }
+    var persisted: AgentTransportEnvelope?
+    let handled = runAgentHookCommandIfRequested(
+        arguments: ["ThreadHelm", "--agent-hook", "cursor", "beforeSubmitPrompt"],
+        readInput: { _ in
+            .object([
+                "session_id": "drop-session",
+                "event_id": "drop-event",
+            ])
+        },
+        send: { _, _, _ in
+            AgentTransportAttempt(
+                disposition: .delivered,
+                vendorResponse: Data(),
+                usedMetadataOnlyEnvelope: false
+            )
+        },
+        persistUndelivered: { persisted = $0 }
+    )
+    guard handled,
+          persisted?.eventID == "drop-event",
+          persistUndeliveredAgentHookEnvelope(
+              envelope,
+              directory: directory
+          ),
+          let drained = drainAgentHookDropInbox(directory: directory).first,
+          drained.eventID == envelope.eventID,
+          drained.nativeSessionCandidate == "drop-session",
+          drainAgentHookDropInbox(directory: directory).isEmpty
+    else {
+        failAgentHookCommandSelfTest("hook must persist a drop file even if the socket is delivered")
     }
 }
 

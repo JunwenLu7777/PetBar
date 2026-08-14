@@ -188,7 +188,13 @@ func agentDashboardProjection(
     permissionQueue: ClaudePermissionQueueSnapshot,
     liveReduction: AgentReductionResult,
     agentCompatibilities: [AgentID: AgentCompatibility],
-    registry: AgentRegistry = .builtIn
+    registry: AgentRegistry = .builtIn,
+    cursorWorkingDirectory: (String) -> String? = {
+        CursorLocalWorkspace.workingDirectory(sessionID: $0)
+    },
+    cursorSessionContent: (String) -> CursorLocalSessionContent? = {
+        CursorLocalWorkspace.sessionContent(sessionID: $0)
+    }
 ) -> AgentDashboardProjection {
     let polledCollection = collection
     let polled = normalizedBuiltInAgentState(
@@ -204,6 +210,7 @@ func agentDashboardProjection(
     }
     let liveSnapshots = liveReduction.snapshots.filter {
         hookObservedAgentIDs.contains($0.identity.agentID)
+            && isDisplayableLiveSnapshot($0)
     }.map {
         validationBoundedSnapshot(
             $0,
@@ -235,14 +242,53 @@ func agentDashboardProjection(
             compatibility: agentCompatibilities[$0.source]
         )
     }
+    let eventsByIdentity = Dictionary(
+        grouping: liveReduction.events,
+        by: \.identity.key
+    )
     let liveItems = liveSnapshots.filter {
         overlaidLiveKeys.contains($0.identity.key)
-    }.map(taskProgressItem(from:))
+    }.map { snapshot in
+        let compatibility = agentCompatibilities[snapshot.identity.agentID]
+        let events = eventsByIdentity[snapshot.identity.key] ?? []
+        let item: TaskProgressItem
+        if snapshot.identity.agentID == .cursor,
+           compatibility != .validated
+        {
+            item = taskProgressItem(
+                from: snapshot,
+                events: events,
+                cursorWorkingDirectory: { _ in nil },
+                cursorSessionContent: { _ in nil }
+            )
+        } else {
+            item = taskProgressItem(
+                from: snapshot,
+                events: events,
+                cursorWorkingDirectory: cursorWorkingDirectory,
+                cursorSessionContent: cursorSessionContent
+            )
+        }
+        return validationBoundedTaskProgressItem(
+            item,
+            compatibility: compatibility
+        )
+    }
     return AgentDashboardProjection(
         taskCollection: .displaying(fallbackItems + liveItems),
         snapshots: snapshots,
         attentionItems: attentionItems
     )
+}
+
+private func isDisplayableLiveSnapshot(_ snapshot: AgentSessionSnapshot) -> Bool {
+    guard snapshot.identity.agentID == .cursor else { return true }
+    let nativeID = snapshot.identity.nativeID
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return nativeID.count >= 8
+        && nativeID != "unidentified"
+        && nativeID != "unknown-session"
+        && !nativeID.hasPrefix("unknown-")
 }
 
 private func validationBoundedSnapshot(
@@ -346,7 +392,16 @@ struct AgentLiveReductionGate {
     }
 }
 
-func taskProgressItem(from snapshot: AgentSessionSnapshot) -> TaskProgressItem {
+func taskProgressItem(
+    from snapshot: AgentSessionSnapshot,
+    events: [AgentEvent] = [],
+    cursorWorkingDirectory: (String) -> String? = {
+        CursorLocalWorkspace.workingDirectory(sessionID: $0)
+    },
+    cursorSessionContent: (String) -> CursorLocalSessionContent? = {
+        CursorLocalWorkspace.sessionContent(sessionID: $0)
+    }
+) -> TaskProgressItem {
     let kind: TaskProgressKind
     switch snapshot.attentionReason {
     case .permission, .question, .planApproval, .blocked:
@@ -379,20 +434,111 @@ func taskProgressItem(from snapshot: AgentSessionSnapshot) -> TaskProgressItem {
         default: status = nil
         }
     }
+    let sessionEvents = events.filter { $0.identity.key == snapshot.identity.key }
+    let startedAt = sessionEvents.map(\.observedAt).min()
+        ?? snapshot.freshness.observedAt
+    let localContent = snapshot.identity.agentID == .cursor
+        ? cursorSessionContent(snapshot.identity.nativeID)
+        : nil
+    let hookEvents = CursorLocalWorkspace.activityEvents(from: sessionEvents)
+    var activityEvents: [TaskActivityEvent]
+    if let localContent, !localContent.fragments.isEmpty {
+        activityEvents = CursorLocalWorkspace.datedEvents(
+            from: localContent.fragments,
+            startedAt: startedAt,
+            updatedAt: snapshot.updatedAt
+        )
+        if !kind.isActive {
+            let terminal = hookEvents.filter { $0.kind == .lifecycle }
+            activityEvents.append(contentsOf: terminal)
+        }
+    } else {
+        activityEvents = hookEvents
+    }
+    let resolvedDirectory: String?
+    if let existing = snapshot.workingDirectory {
+        resolvedDirectory = existing
+    } else if snapshot.identity.agentID == .cursor {
+        resolvedDirectory = cursorWorkingDirectory(snapshot.identity.nativeID)
+    } else {
+        resolvedDirectory = nil
+    }
+    let title: String
+    if let localTitle = localContent?.title, !localTitle.isEmpty {
+        title = localTitle
+    } else if let resolvedDirectory,
+              snapshot.identity.agentID == .cursor
+    {
+        let projectName = URL(fileURLWithPath: resolvedDirectory).lastPathComponent
+        title = projectName.isEmpty ? snapshot.title : projectName
+    } else {
+        title = snapshot.title
+    }
     return TaskProgressItem(
-        title: snapshot.title,
+        title: title,
         kind: kind,
-        startedAt: snapshot.freshness.observedAt,
+        startedAt: startedAt,
         updatedAt: snapshot.updatedAt,
         source: snapshot.identity.agentID,
-        activityText: snapshot.activitySummary,
+        activityText: liveCardActivityText(
+            kind: kind,
+            agentID: snapshot.identity.agentID,
+            hookEvents: hookEvents,
+            activityEvents: activityEvents,
+            snapshotSummary: snapshot.activitySummary
+        ),
         statusOverride: status,
         sessionID: snapshot.identity.nativeID,
-        workingDirectory: snapshot.workingDirectory,
+        workingDirectory: resolvedDirectory,
         processID: snapshot.identity.processID,
         processStartIdentity: snapshot.identity.processStartIdentity,
+        events: activityEvents,
         allowsAgentOpen: snapshot.actionability != .viewOnly
     )
+}
+
+private func liveCardActivityText(
+    kind: TaskProgressKind,
+    agentID: AgentID,
+    hookEvents: [TaskActivityEvent],
+    activityEvents: [TaskActivityEvent],
+    snapshotSummary: String?
+) -> String? {
+    if agentID == .cursor {
+        switch kind {
+        case .completed:
+            return "本轮已完成"
+        case .failed:
+            return "任务执行失败"
+        case .waitingForInput:
+            return "等待你的输入"
+        case .reading:
+            return "正在读取"
+        case .idle:
+            return "等待任务"
+        case .running:
+            let latestStatusEvent = hookEvents.last ?? activityEvents.last
+            guard let latestStatusEvent else {
+                return snapshotSummary ?? "正在执行"
+            }
+            switch latestStatusEvent.kind {
+            case .tool:
+                return latestStatusEvent.text
+            case .commentary:
+                return "正在思考"
+            case .lifecycle:
+                switch latestStatusEvent.text {
+                case "会话开始": return "等待任务"
+                case "启动子任务": return "正在处理子任务"
+                case "子任务结束": return "正在整理结果"
+                default: return snapshotSummary ?? "正在执行"
+                }
+            }
+        }
+    }
+    return kind.isActive
+        ? (activityEvents.last?.text ?? snapshotSummary)
+        : nil
 }
 
 final class AgentLiveEventStore {
@@ -559,7 +705,8 @@ final class AgentLiveEventStore {
         return AgentReductionResult(
             snapshots: snapshots,
             attentionItems: attentionItems,
-            processedEventCount: reduction.processedEventCount
+            processedEventCount: reduction.processedEventCount,
+            events: reduction.events
         )
     }
 }

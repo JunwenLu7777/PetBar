@@ -387,6 +387,19 @@ struct AgentReductionResult: Equatable {
     let snapshots: [AgentSessionSnapshot]
     let attentionItems: [AgentAttentionItem]
     let processedEventCount: Int
+    let events: [AgentEvent]
+
+    init(
+        snapshots: [AgentSessionSnapshot],
+        attentionItems: [AgentAttentionItem],
+        processedEventCount: Int,
+        events: [AgentEvent] = []
+    ) {
+        self.snapshots = snapshots
+        self.attentionItems = attentionItems
+        self.processedEventCount = processedEventCount
+        self.events = events
+    }
 }
 
 struct AgentMetadata: Equatable {

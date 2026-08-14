@@ -969,13 +969,13 @@ private func assertDynamicIslandTaskWorkspace() {
         metadata: cursorMetadata,
         discovery: AgentDiscovery(
             isInstalled: true,
-            version: "3.15.19",
+            version: "3.16.0",
             compatibility: .unvalidated,
             versionComponents: [
                 AgentVersionComponent(
                     key: "desktop",
                     label: "Desktop",
-                    value: "3.15.19"
+                    value: "3.16.0"
                 ),
                 AgentVersionComponent(
                     key: "agentCLI",
@@ -1008,8 +1008,8 @@ private func assertDynamicIslandTaskWorkspace() {
     )
     guard emptyCopy?.title == "还听不到 Cursor 的执行",
           emptyCopy?.eyebrow == "Cursor · 监听未安装",
+          emptyCopy?.body.contains("3.16.0") == true,
           emptyCopy?.body.contains("3.15.19") == true,
-          emptyCopy?.body.contains("3.15.6") == true,
           emptyCopy?.facts.contains(where: {
               $0.label == "集成状态" && $0.value == "未安装"
           }) == true,
