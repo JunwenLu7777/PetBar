@@ -19,7 +19,7 @@
 - macOS 12.3+
 - Apple 芯片（arm64）；暂不支持 Intel Mac
 - 已安装并登录 Codex，用于读取本机额度与任务状态
-- Claude Code 额度与任务兼容为可选功能；未安装时 ThreadHelm 自动隐藏相关入口和任务，使用时需安装并登录 Claude Code
+- Claude Code 额度与任务兼容为可选功能；可使用独立 Claude Code CLI 或 Claude Desktop 内置 CLI，二者均未安装时 ThreadHelm 自动隐藏额度入口
 - Cursor、ZCode 和 OMP 都是可选本机任务来源；未安装或版本未验证的 Agent 不会被安装器创建或改写配置，卸载器仍可只移除 ThreadHelm 自己的条目
 
 ## 包内容
@@ -36,11 +36,11 @@
 
 - ThreadHelm 是独立 App，不包含桌面宠物，也不再向 `$CODEX_HOME/pets` 安装宠物或写入 Codex `selected-avatar-id`。
 - 灵动岛默认是胶囊，点击后展开为功能面板；胶囊可拖到其他屏幕并吸附到该屏幕顶部中央。
-- 检测到 Claude Code CLI 时可切换额度来源：Codex 显示周额度，Claude Code 同时显示 5h、周额度与 Fable 周额度；不显示 Token、Credits 或任何行情模块。
-- 任务状态统一呈现 Codex、Claude Code、Cursor、ZCode 和 OMP，并区分需要你、执行中与最近完成；不支持精确返回的来源只会打开原生应用、目录或保持只读。
+- 检测到独立 Claude Code CLI 或 Claude Desktop 内置 CLI 时可切换额度来源：Codex 显示周额度，Claude Code 同时显示 5h、周额度与 Fable 周额度；不显示 Token、Credits 或任何行情模块。
+- 任务状态统一呈现 Codex、Claude Code（包括 Claude Desktop 本地 Agent 会话）、Cursor、ZCode 和 OMP，并区分需要你、执行中与最近完成；Desktop 会话保持只读，不会被当成可通过终端精确返回的 CLI 会话。
 - 运行中任务显示开始时间与持续时间；运行中最新一条会交替替换展示，详情区可滚动查看完整公开输出。
 - 点击 Codex 任务会通过官方深链打开，点击 Claude 任务会在原工作目录通过 Terminal 恢复会话。
-- 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json` 和会话公开输出；不会发起远程第三方行情请求。
+- 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json`、CLI 会话公开输出和 Claude Desktop 本地 Agent transcript；不会发起远程第三方行情请求。
 - 任务名称、已读状态、额度百分比和重置时间只在本机读取和显示，不写入发布包，也不上传。
 - 不需要管理员权限或另行填写 API Key；辅助功能权限仅是当前运行中新任务气泡自动静音的可选增强。
 

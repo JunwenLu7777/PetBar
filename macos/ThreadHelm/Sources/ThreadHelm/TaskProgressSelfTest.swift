@@ -26,10 +26,99 @@ func runTaskProgressSelfTest() -> Never {
         fputs("task progress refresh reader stability failed\n", stderr)
         exit(1)
     }
+    runClaudeDesktopTaskDiscoverySelfTest()
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
-    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-agents-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
+    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-desktop=local-session+view-only; claude-agents-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
     exit(0)
+}
+
+private func runClaudeDesktopTaskDiscoverySelfTest() {
+    let fileManager = FileManager.default
+    let home = fileManager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-claude-desktop-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let localSessionID = "local_11111111-1111-4111-8111-111111111111"
+    let cliSessionID = "22222222-2222-4222-8222-222222222222"
+    let sessionDirectory = home
+        .appendingPathComponent(
+            "Library/Application Support/Claude/local-agent-mode-sessions",
+            isDirectory: true
+        )
+        .appendingPathComponent(
+            "33333333-3333-4333-8333-333333333333",
+            isDirectory: true
+        )
+        .appendingPathComponent(
+            "44444444-4444-4444-8444-444444444444",
+            isDirectory: true
+        )
+    let localSessionDirectory = sessionDirectory.appendingPathComponent(
+        localSessionID,
+        isDirectory: true
+    )
+    let transcriptDirectory = localSessionDirectory
+        .appendingPathComponent(".claude/projects", isDirectory: true)
+        .appendingPathComponent("-desktop-workspace", isDirectory: true)
+    let transcriptURL = transcriptDirectory.appendingPathComponent(
+        "\(cliSessionID).jsonl"
+    )
+    let metadataURL = sessionDirectory.appendingPathComponent(
+        "\(localSessionID).json"
+    )
+    var currentTime = Date()
+    defer { try? fileManager.removeItem(at: home) }
+
+    let userRecord = #"{"type":"user","timestamp":"2026-08-14T08:00:00.000Z","cwd":"/desktop/outputs","message":{"role":"user","content":"Desktop 会话识别回归"}}"#
+    let toolRecord = #"{"type":"assistant","timestamp":"2026-08-14T08:00:01.000Z","cwd":"/desktop/outputs","message":{"role":"assistant","content":[{"type":"tool_use","id":"desktop-tool","name":"Bash"}],"stop_reason":"tool_use"}}"#
+    do {
+        try fileManager.createDirectory(
+            at: transcriptDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            #"{"sessionId":"\#(localSessionID)","cliSessionId":"\#(cliSessionID)"}"#.utf8
+        ).write(to: metadataURL)
+        try Data(
+            [userRecord, toolRecord].joined(separator: "\n")
+                .appending("\n")
+                .utf8
+        ).write(to: transcriptURL)
+        try fileManager.setAttributes(
+            [.modificationDate: currentTime],
+            ofItemAtPath: transcriptURL.path
+        )
+    } catch {
+        fputs("Claude Desktop task fixture failed\n", stderr)
+        exit(1)
+    }
+
+    let reader = ClaudeTaskProgressReader(
+        homeDirectory: home,
+        environment: [:],
+        claudeExecutable: { nil },
+        now: { currentTime }
+    )
+    let item = reader.readCollection().items.first {
+        $0.sessionID == cliSessionID
+    }
+    guard item?.title == "Desktop 会话识别回归",
+          item?.kind == .running,
+          item?.activityText == "正在运行命令",
+          item?.allowsAgentOpen == false,
+          item?.canOpen == false
+    else {
+        fputs("Claude Desktop local session was not discovered safely\n", stderr)
+        exit(1)
+    }
+    currentTime = currentTime.addingTimeInterval(31)
+    guard !reader.readCollection().items.contains(where: {
+        $0.sessionID == cliSessionID
+    }) else {
+        fputs("stale Claude Desktop activity stayed cached as running\n", stderr)
+        exit(1)
+    }
 }
 
 private func runCodexTailMetadataBackfillSelfTest(now: Date, started: String) {

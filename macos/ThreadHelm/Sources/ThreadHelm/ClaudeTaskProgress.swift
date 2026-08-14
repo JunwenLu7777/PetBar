@@ -3,8 +3,8 @@
 //  ThreadHelm
 //
 //  模块职责：Claude Code 任务进度读取——进程链活性检测、`claude agents`
-//  快照解析、transcript jsonl 扫描与状态推断，以及 Codex/Claude 双源
-//  进度的合并读取器。
+//  快照解析、CLI 与 Claude Desktop 本地 Agent transcript 扫描、状态推断，
+//  以及 Codex/Claude 双源进度的合并读取器。
 //
 
 import AppKit
@@ -284,6 +284,12 @@ final class ClaudeTaskProgressReader {
         let url: URL
         let modificationDate: Date
         let sessionID: String
+        let allowsAgentOpen: Bool
+    }
+
+    private struct TranscriptRoot {
+        let url: URL
+        let allowsAgentOpen: Bool
     }
 
     private struct ParsedCacheEntry {
@@ -292,10 +298,16 @@ final class ClaudeTaskProgressReader {
         let activeTitle: String
         let activeProcessID: Int32?
         let activeProcessStartIdentity: String?
+        let allowsAgentOpen: Bool
+        let inferredActivityExpiresAt: Date?
         let item: TaskProgressItem?
     }
 
     private let fileManager = FileManager.default
+    private let homeDirectory: URL
+    private let environment: [String: String]
+    private let claudeExecutable: () -> URL?
+    private let nowProvider: () -> Date
     private let maximumTailBytes: UInt64 = 1_048_576
     private let transcriptRescanInterval: TimeInterval = 5
     private let completedTaskVisibility = completedTaskPanelRetention
@@ -305,8 +317,25 @@ final class ClaudeTaskProgressReader {
     private var cachedAgents: [ClaudeAgentSnapshot] = []
     private var nextAgentRefreshAt = Date.distantPast
 
+    init(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        claudeExecutable: (() -> URL?)? = nil,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.homeDirectory = homeDirectory
+        self.environment = environment
+        self.claudeExecutable = claudeExecutable ?? {
+            locateClaudeExecutable(
+                environment: environment,
+                homeDirectory: homeDirectory
+            )
+        }
+        nowProvider = now
+    }
+
     func readCollection() -> TaskProgressCollectionSnapshot {
-        let now = Date()
+        let now = nowProvider()
         let cachedActiveSessionIDs = Set(
             cachedAgents.map { $0.sessionID.lowercased() }
         )
@@ -354,7 +383,9 @@ final class ClaudeTaskProgressReader {
                cached.activeTitle == (agent?.title ?? ""),
                cached.activeProcessID == agent?.processID,
                cached.activeProcessStartIdentity
-                    == agent?.processStartIdentity
+                    == agent?.processStartIdentity,
+               cached.allowsAgentOpen == candidate.allowsAgentOpen,
+               cached.inferredActivityExpiresAt.map { now <= $0 } ?? true
             {
                 item = cached.item
             } else {
@@ -369,7 +400,9 @@ final class ClaudeTaskProgressReader {
                     activeKind: agent?.kind,
                     startedAt: agent?.startedAt ?? candidate.modificationDate,
                     modificationDate: candidate.modificationDate,
-                    statusOverride: agent?.statusOverride
+                    statusOverride: agent?.statusOverride,
+                    allowsAgentOpen: candidate.allowsAgentOpen,
+                    now: now
                 )
                 parsedCache[cacheKey] = ParsedCacheEntry(
                     modificationDate: candidate.modificationDate,
@@ -377,6 +410,11 @@ final class ClaudeTaskProgressReader {
                     activeTitle: agent?.title ?? "",
                     activeProcessID: agent?.processID,
                     activeProcessStartIdentity: agent?.processStartIdentity,
+                    allowsAgentOpen: candidate.allowsAgentOpen,
+                    inferredActivityExpiresAt:
+                        agent == nil && item?.kind == .running
+                            ? candidate.modificationDate.addingTimeInterval(30)
+                            : nil,
                     item: item
                 )
             }
@@ -445,7 +483,9 @@ final class ClaudeTaskProgressReader {
         activeKind: TaskProgressKind?,
         startedAt: Date,
         modificationDate: Date,
-        statusOverride: String? = nil
+        statusOverride: String? = nil,
+        allowsAgentOpen: Bool = true,
+        now: Date = Date()
     ) -> TaskProgressItem? {
         guard UUID(uuidString: sessionID) != nil else { return nil }
         var latestUserTitle: String?
@@ -607,6 +647,9 @@ final class ClaudeTaskProgressReader {
                 ),
                 to: events
             )
+        } else if (!activeTools.isEmpty || lastStopReason == "tool_use"),
+                  now.timeIntervalSince(modificationDate) <= 30 {
+            kind = .running
         } else {
             return nil
         }
@@ -645,12 +688,13 @@ final class ClaudeTaskProgressReader {
             workingDirectory: cwd.isEmpty ? nil : cwd,
             processID: processID,
             processStartIdentity: processStartIdentity,
-            events: events
+            events: events,
+            allowsAgentOpen: allowsAgentOpen
         )
     }
 
     private func readAgents() -> [ClaudeAgentSnapshot] {
-        guard let claudeURL = locateClaudeExecutable(),
+        guard let claudeURL = claudeExecutable(),
               let data = captureClaudeAgentsJSON(executableURL: claudeURL)
         else {
             return []
@@ -734,20 +778,33 @@ final class ClaudeTaskProgressReader {
             }
         }
         nextTranscriptScanAt = now.addingTimeInterval(transcriptRescanInterval)
-        let home = fileManager.homeDirectoryForCurrentUser
-        let roots = [
-            ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].map {
+        var roots = [
+            environment["CLAUDE_CONFIG_DIR"].map {
                 URL(fileURLWithPath: $0, isDirectory: true)
                     .appendingPathComponent("projects", isDirectory: true)
             },
-            home.appendingPathComponent(".config/claude/projects", isDirectory: true),
-            home.appendingPathComponent(".claude/projects", isDirectory: true),
-        ].compactMap { $0 }
+            homeDirectory.appendingPathComponent(
+                ".config/claude/projects",
+                isDirectory: true
+            ),
+            homeDirectory.appendingPathComponent(
+                ".claude/projects",
+                isDirectory: true
+            ),
+        ].compactMap { $0 }.map {
+            TranscriptRoot(url: $0, allowsAgentOpen: true)
+        }
+        roots.append(contentsOf: claudeDesktopTranscriptRoots(
+            homeDirectory: homeDirectory,
+            fileManager: fileManager
+        ).map {
+            TranscriptRoot(url: $0, allowsAgentOpen: false)
+        })
 
         var byPath: [String: TranscriptCandidate] = [:]
         for root in roots {
             guard let enumerator = fileManager.enumerator(
-                at: root,
+                at: root.url,
                 includingPropertiesForKeys: [
                     .contentModificationDateKey,
                     .isRegularFileKey,
@@ -778,7 +835,8 @@ final class ClaudeTaskProgressReader {
                 byPath[url.path] = TranscriptCandidate(
                     url: url,
                     modificationDate: modificationDate,
-                    sessionID: sessionID
+                    sessionID: sessionID,
+                    allowsAgentOpen: root.allowsAgentOpen
                 )
             }
         }
@@ -880,6 +938,55 @@ final class ClaudeTaskProgressReader {
     }()
 
     private static let iso8601 = ISO8601DateFormatter()
+}
+
+func claudeDesktopTranscriptRoots(
+    homeDirectory: URL,
+    fileManager: FileManager = .default
+) -> [URL] {
+    let sessionsDirectory = homeDirectory.appendingPathComponent(
+        "Library/Application Support/Claude/local-agent-mode-sessions",
+        isDirectory: true
+    )
+    var searchDirectories = [sessionsDirectory]
+    var roots: [URL] = []
+    for _ in 0..<3 {
+        var nextDirectories: [URL] = []
+        for directory in searchDirectories {
+            let children = (try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsPackageDescendants]
+            )) ?? []
+            for child in children {
+                guard (try? child.resourceValues(forKeys: [.isDirectoryKey]))?
+                    .isDirectory == true
+                else { continue }
+                let name = child.lastPathComponent
+                if name.hasPrefix("local_"),
+                   UUID(uuidString: String(name.dropFirst("local_".count))) != nil
+                {
+                    let projects = child.appendingPathComponent(
+                        ".claude/projects",
+                        isDirectory: true
+                    )
+                    var isDirectory: ObjCBool = false
+                    if fileManager.fileExists(
+                        atPath: projects.path,
+                        isDirectory: &isDirectory
+                    ), isDirectory.boolValue {
+                        roots.append(projects)
+                    }
+                } else if name != "skills-plugin" {
+                    nextDirectories.append(child)
+                }
+            }
+        }
+        searchDirectories = nextDirectories
+    }
+    return Dictionary(grouping: roots, by: \.path)
+        .compactMap { $0.value.first }
+        .sorted { $0.path < $1.path }
 }
 
 func combinedTaskProgressItems(

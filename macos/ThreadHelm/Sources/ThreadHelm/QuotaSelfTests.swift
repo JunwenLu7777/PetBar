@@ -532,6 +532,51 @@ func runClaudeQuotaSelfTest() -> Never {
         homeDirectory: URL(fileURLWithPath: "/test-home", isDirectory: true),
         isExecutableFile: { _ in false }
     )
+    let desktopLocatorHome = FileManager.default.temporaryDirectory
+        .appendingPathComponent(
+            "threadhelm-claude-desktop-locator-\(UUID().uuidString)",
+            isDirectory: true
+        )
+    let olderDesktopClaude = desktopLocatorHome.appendingPathComponent(
+        "Library/Application Support/Claude/claude-code/2.1.229/claude.app/Contents/MacOS/claude"
+    )
+    let newestDesktopClaude = desktopLocatorHome.appendingPathComponent(
+        "Library/Application Support/Claude/claude-code/2.1.231/claude.app/Contents/MacOS/claude"
+    )
+    do {
+        try FileManager.default.createDirectory(
+            at: olderDesktopClaude.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: newestDesktopClaude.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: olderDesktopClaude)
+        try Data().write(to: newestDesktopClaude)
+    } catch {
+        fputs("Claude Desktop locator fixture failed\n", stderr)
+        exit(1)
+    }
+    var checkedDesktopPaths: [String] = []
+    let bundledDesktopClaudeURL = locateClaudeExecutable(
+        environment: [:],
+        homeDirectory: desktopLocatorHome,
+        isExecutableFile: {
+            checkedDesktopPaths.append($0)
+            return $0 == newestDesktopClaude.path
+        }
+    )
+    try? FileManager.default.removeItem(at: desktopLocatorHome)
+    guard bundledDesktopClaudeURL?.path == newestDesktopClaude.path else {
+        fputs(
+            "Claude Desktop bundled locator did not select the newest executable: "
+                + "\(bundledDesktopClaudeURL?.path ?? "nil") "
+                + "checked=\(checkedDesktopPaths.joined(separator: " | "))\n",
+            stderr
+        )
+        exit(1)
+    }
     let authenticationPresentation = quotaFailurePresentation(
         for: ClaudeQuotaError.authenticationRequired,
         hasExistingRows: false,
@@ -594,6 +639,6 @@ func runClaudeQuotaSelfTest() -> Never {
         exit(1)
     }
 
-    print("claude-quota-self-test: left-percent=3/3 used-percent=3/3 non-interactive=3/3 windows=5h+weekly+fable legacy-without-fable=pass provider-availability=installed+hidden fallback=pass auth-copy=pass locator=custom+missing task-filter=pass")
+    print("claude-quota-self-test: left-percent=3/3 used-percent=3/3 non-interactive=3/3 windows=5h+weekly+fable legacy-without-fable=pass provider-availability=installed+hidden fallback=pass auth-copy=pass locator=custom+desktop-bundled+missing task-filter=pass")
     exit(0)
 }

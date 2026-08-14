@@ -311,19 +311,49 @@ func locateClaudeExecutable(
         named: "claude",
         pathEnvironment: environment["PATH"]
     )
-    let candidatePaths: [String?] = [
+    let primaryCandidatePaths: [String?] = [
         environment["CLAUDE_BIN"],
     ] + pathCandidates.map(Optional.some) + [
         homeDirectory.appendingPathComponent(".local/bin/claude").path,
         "/opt/homebrew/bin/claude",
         "/usr/local/bin/claude",
     ]
-    let candidates: [String] = candidatePaths.compactMap { path -> String? in
+    let primaryCandidates: [String] = primaryCandidatePaths.compactMap {
+        path -> String? in
         guard let path, !path.isEmpty else { return nil }
         return path
     }
-    return candidates.first(where: isExecutableFile)
+    if let primary = primaryCandidates.first(where: isExecutableFile) {
+        return URL(fileURLWithPath: primary)
+    }
+    return claudeDesktopBundledExecutablePaths(homeDirectory: homeDirectory)
+        .first(where: isExecutableFile)
         .map(URL.init(fileURLWithPath:))
+}
+
+func claudeDesktopBundledExecutablePaths(
+    homeDirectory: URL,
+    fileManager: FileManager = .default
+) -> [String] {
+    let versionsDirectory = homeDirectory.appendingPathComponent(
+        "Library/Application Support/Claude/claude-code",
+        isDirectory: true
+    )
+    let versions = (try? fileManager.contentsOfDirectory(
+        atPath: versionsDirectory.path
+    )) ?? []
+    return versions.sorted { lhsVersion, rhsVersion in
+        let order = lhsVersion.compare(
+            rhsVersion,
+            options: [.numeric, .caseInsensitive]
+        )
+        if order == .orderedSame { return lhsVersion > rhsVersion }
+        return order == .orderedDescending
+    }.map {
+        versionsDirectory.appendingPathComponent(
+            "\($0)/claude.app/Contents/MacOS/claude"
+        ).path
+    }
 }
 
 func locateCodexExecutable(
