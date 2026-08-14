@@ -665,7 +665,7 @@ func dynamicIslandCapsulePresentation(
         let startAndElapsed = taskProgressStartAndDurationText(for: item, now: now)
         let provider = agentPresentation(for: item.source).displayName
         let activity = dynamicIslandSanitizedTaskActivityText(
-            item.events.last?.text ?? item.activityText
+            item.activityText ?? item.events.last?.text
         )
         let status: String
         switch style {
@@ -750,14 +750,6 @@ func dynamicIslandCapsulePresentation(
         return !snapshot.acknowledgedTerminalTaskKeys.contains(key)
     }) {
         return taskModel(item, style: .failed)
-    }
-    if let item = snapshot.taskCollection.items.first(where: {
-        guard $0.kind == .completed,
-              let key = terminalTaskAcknowledgementKey(for: $0)
-        else { return false }
-        return !snapshot.acknowledgedTerminalTaskKeys.contains(key)
-    }) {
-        return taskModel(item, style: .completed)
     }
     if snapshot.codexDesktopRunning
         || snapshot.availableProviders.contains(.claudeCode)

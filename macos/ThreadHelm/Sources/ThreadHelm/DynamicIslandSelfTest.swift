@@ -304,17 +304,19 @@ private func assertDynamicIslandCapsulePresentation() {
         exit(1)
     }
     let completed = dynamicIslandCapsulePresentation(
-        snapshot: snapshot(
-            items: [failedTask, completedTask],
-            acknowledged: [failedKey]
-        ),
+        snapshot: snapshot(items: [completedTask]),
         now: now
     )
-    guard completed.title == completedTask.title,
-          completed.statusText == "已完成",
-          completed.progressStyle == .completed
+    guard completed.title == "ThreadHelm 空闲",
+          completed.statusText == "空闲",
+          completed.progressStyle == .idle,
+          completed.preferredTab == .quota,
+          completed.quotaItems.map(\.label) == ["GPT", "Claude"]
     else {
-        fputs("dynamic island capsule completed priority self-test failed\n", stderr)
+        fputs(
+            "dynamic island capsule must show quota when only completed tasks remain\n",
+            stderr
+        )
         exit(1)
     }
 
@@ -759,7 +761,7 @@ private func assertDynamicIslandTaskWorkspace() {
         startedAt: now.addingTimeInterval(-90),
         updatedAt: now.addingTimeInterval(4),
         source: .codex,
-        activityText: "正在整理输出",
+        activityText: fullActivityText,
         threadID: "thread-abc1234",
         workingDirectory: "/tmp/threadhelm/../threadhelm",
         events: (1...5).map(event)
@@ -1783,8 +1785,14 @@ private func assertDynamicIslandPreviewRendering() {
             terminalPreviewData.append(try Data(contentsOf: stateURL))
             try? FileManager.default.removeItem(at: stateURL)
         }
-        guard Set(terminalPreviewData).count == terminalStates.count else {
-            fputs("dynamic island terminal capsule previews are identical\n", stderr)
+        guard terminalPreviewData.count == 3,
+              terminalPreviewData[0] != terminalPreviewData[2],
+              terminalPreviewData[1] == terminalPreviewData[2]
+        else {
+            fputs(
+                "dynamic island completed capsule must match idle quota, and stay distinct from failed\n",
+                stderr
+            )
             exit(1)
         }
     } catch {

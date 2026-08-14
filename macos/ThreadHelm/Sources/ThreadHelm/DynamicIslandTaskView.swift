@@ -808,7 +808,7 @@ final class DynamicIslandTaskViewController:
         elapsedField.stringValue = "持续 \(durationText)"
         workingDirectoryField.stringValue = copyPathForSelfTest()
             ?? "工作目录不可用"
-        let currentActivity = (item.events.last?.text ?? item.activityText)?
+        let currentActivity = (item.activityText ?? item.events.last?.text)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         renderCurrentActivity(
             currentActivity.flatMap { $0.isEmpty ? nil : $0 }
