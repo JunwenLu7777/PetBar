@@ -693,11 +693,11 @@ struct ZCodeAgentAdapter: AgentAdapter {
     func integrationStatus(in scope: AgentIntegrationScope) -> AgentIntegrationStatus {
         do {
             return try ZCodeHookConfiguration.status(
-                at: zcodeConfigURL(in: scope),
+                at: zcodeConfigURL(in: scope, for: .read),
                 executablePath: executablePath()
             )
         } catch {
-            return .needsRepair
+            return agentIntegrationStatusForFailedProbe(error)
         }
     }
 
@@ -911,8 +911,11 @@ private func normalizedZCodeStateAndReason(
     }
 }
 
-private func zcodeConfigURL(in scope: AgentIntegrationScope) throws -> URL {
-    try scope.managedURL(relativePath: ".zcode/cli/config.json")
+private func zcodeConfigURL(
+    in scope: AgentIntegrationScope,
+    for access: AgentIntegrationAccess = .write
+) throws -> URL {
+    try scope.managedURL(relativePath: ".zcode/cli/config.json", for: access)
 }
 
 private func zcodeLocalDiscovery(

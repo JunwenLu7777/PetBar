@@ -79,7 +79,7 @@ struct CursorAgentAdapter: AgentAdapter {
     func integrationStatus(in scope: AgentIntegrationScope) -> AgentIntegrationStatus {
         do {
             switch try CursorHookConfiguration.status(
-                at: cursorHooksURL(in: scope),
+                at: cursorHooksURL(in: scope, for: .read),
                 command: hookCommand
             ) {
             case .installed: return .installed
@@ -88,7 +88,7 @@ struct CursorAgentAdapter: AgentAdapter {
             case .conflict: return .needsRepair
             }
         } catch {
-            return .needsRepair
+            return agentIntegrationStatusForFailedProbe(error)
         }
     }
 
@@ -603,8 +603,11 @@ private func cursorStateMapping(
     }
 }
 
-private func cursorHooksURL(in scope: AgentIntegrationScope) throws -> URL {
-    try scope.managedURL(relativePath: ".cursor/hooks.json")
+private func cursorHooksURL(
+    in scope: AgentIntegrationScope,
+    for access: AgentIntegrationAccess = .write
+) throws -> URL {
+    try scope.managedURL(relativePath: ".cursor/hooks.json", for: access)
 }
 
 private func makeCursorDiscoveryProvider() -> () -> AgentDiscovery {

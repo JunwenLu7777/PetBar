@@ -827,6 +827,34 @@ private func runClaudeAdapterLifecycleSelfTest() {
             failAgentIntegrationSelfTest("Claude live-home guard error type")
         }
 
+        // Inspecting the live home configuration is not a mutation: the write
+        // guard must not turn a read-only status probe into a failure that the
+        // dashboard would then misreport as repairable drift.
+        guard let liveReadURL = try? liveHomeScope.managedURL(
+            relativePath: ".claude/settings.json",
+            for: .read
+        ), liveReadURL.path.hasSuffix("/.claude/settings.json"),
+        (try? liveHomeScope.managedURL(
+            relativePath: ".claude/settings.json",
+            for: .write
+        )) == nil
+        else {
+            failAgentIntegrationSelfTest("live-home read must survive write guard")
+        }
+
+        guard agentIntegrationStatusForFailedProbe(
+            AgentIntegrationError.liveConfigurationWriteDenied
+        ) == .checkFailed,
+        agentIntegrationStatusForFailedProbe(
+            AgentIntegrationError.invalidManagedPath
+        ) == .checkFailed,
+        agentIntegrationStatusForFailedProbe(
+            ClaudeHookConfigurationError.invalidSettings
+        ) == .needsRepair
+        else {
+            failAgentIntegrationSelfTest("probe failure classification")
+        }
+
         let unavailableRoot = temporaryRoot.appendingPathComponent(
             "claude-unavailable",
             isDirectory: true

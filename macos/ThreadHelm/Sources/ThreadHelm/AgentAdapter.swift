@@ -110,6 +110,26 @@ enum AgentIntegrationStatus: String, Codable, Equatable {
     case disabled
     case needsRepair
     case unsupportedVersion
+    /// The local configuration could not be inspected at all. This is a probe
+    /// failure, not observed drift: it must never be reported as repairable
+    /// state, because repairing it would fail for the same reason.
+    case checkFailed
+}
+
+/// Distinguishes inspecting a vendor configuration from mutating it. Only
+/// mutation is gated by `permitsLiveConfigurationChanges`.
+enum AgentIntegrationAccess: Equatable {
+    case read
+    case write
+}
+
+/// Classifies a failed integration probe. Scope/path failures mean the
+/// configuration was never read, so they surface as `.checkFailed`; anything
+/// else came from parsing real user configuration and stays repairable.
+func agentIntegrationStatusForFailedProbe(
+    _ error: Error
+) -> AgentIntegrationStatus {
+    error is AgentIntegrationError ? .checkFailed : .needsRepair
 }
 
 enum AgentIntegrationOperationResult: String, Codable, Equatable {
@@ -149,7 +169,10 @@ extension AgentIntegrationError: LocalizedError {
 }
 
 extension AgentIntegrationScope {
-    func managedURL(relativePath: String) throws -> URL {
+    func managedURL(
+        relativePath: String,
+        for access: AgentIntegrationAccess = .write
+    ) throws -> URL {
         guard !relativePath.isEmpty,
               !relativePath.hasPrefix("/"),
               !relativePath.split(separator: "/").contains("..")
@@ -160,7 +183,8 @@ extension AgentIntegrationScope {
         guard root.path != "/" else {
             throw AgentIntegrationError.invalidManagedPath
         }
-        if !permitsLiveConfigurationChanges,
+        if access == .write,
+           !permitsLiveConfigurationChanges,
            root == FileManager.default.homeDirectoryForCurrentUser
                 .standardizedFileURL
                 .resolvingSymlinksInPath()
@@ -631,14 +655,14 @@ struct ClaudeCodeAgentAdapter: AgentAdapter {
     func integrationStatus(in scope: AgentIntegrationScope) -> AgentIntegrationStatus {
         do {
             switch try ClaudeHookConfiguration.status(
-                at: claudeSettingsURL(in: scope)
+                at: claudeSettingsURL(in: scope, for: .read)
             ) {
             case .installed: return .installed
             case .missing: return .notInstalled
             case .conflict: return .needsRepair
             }
         } catch {
-            return .needsRepair
+            return agentIntegrationStatusForFailedProbe(error)
         }
     }
 
@@ -726,9 +750,10 @@ struct ClaudeCodeAgentAdapter: AgentAdapter {
 }
 
 private func claudeSettingsURL(
-    in scope: AgentIntegrationScope
+    in scope: AgentIntegrationScope,
+    for access: AgentIntegrationAccess = .write
 ) throws -> URL {
-    try scope.managedURL(relativePath: ".claude/settings.json")
+    try scope.managedURL(relativePath: ".claude/settings.json", for: access)
 }
 
 private extension AgentAdapter {

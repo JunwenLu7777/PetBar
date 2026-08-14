@@ -388,6 +388,7 @@ private func agentRuntimeIntegrationText(_ status: AgentRuntimeStatus) -> String
     case .installed: return "集成已安装"
     case .disabled: return "集成已停用"
     case .needsRepair: return "集成需修复"
+    case .checkFailed: return "集成状态未能读取"
     case .unsupportedVersion: return "版本不兼容"
     }
 }

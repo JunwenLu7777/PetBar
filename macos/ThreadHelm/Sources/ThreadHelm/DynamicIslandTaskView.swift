@@ -99,6 +99,11 @@ func cursorListeningEmptyPresentation(
         body = "Cursor 钩子配置不完整，ThreadHelm 现在听不到执行。"
         statusValue = "需修复"
         hookValue = "配置不完整"
+    case .checkFailed:
+        eyebrow = "Cursor · 集成状态未能读取"
+        body = "ThreadHelm 这次没能读到 Cursor 钩子配置，所以无法判断监听是否就位。"
+        statusValue = "未能读取"
+        hookValue = "配置未被读取"
     case .unsupportedVersion:
         eyebrow = "Cursor · 版本不兼容"
         body = "当前 Cursor 版本还没纳入验证，安装会被跳过，所以这边一直是 0。"

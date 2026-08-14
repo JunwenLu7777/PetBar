@@ -46,7 +46,7 @@ struct OMPAgentAdapter: AgentAdapter {
                 executablePath: executablePath()
             )
         } catch {
-            return .needsRepair
+            return agentIntegrationStatusForFailedProbe(error)
         }
     }
 
@@ -147,7 +147,7 @@ enum OMPExtensionConfiguration {
         executablePath: String,
         fileManager: FileManager = .default
     ) throws -> AgentIntegrationStatus {
-        let directoryURL = try extensionDirectoryURL(in: scope)
+        let directoryURL = try extensionDirectoryURL(in: scope, for: .read)
         let scriptURL = directoryURL.appendingPathComponent(scriptFilename)
         guard fileManager.fileExists(atPath: directoryURL.path) else {
             return .notInstalled
@@ -222,9 +222,10 @@ enum OMPExtensionConfiguration {
     }
 
     static func extensionDirectoryURL(
-        in scope: AgentIntegrationScope
+        in scope: AgentIntegrationScope,
+        for access: AgentIntegrationAccess = .write
     ) throws -> URL {
-        try scope.managedURL(relativePath: extensionDirectoryPath)
+        try scope.managedURL(relativePath: extensionDirectoryPath, for: access)
     }
 
     static func generatedFilesForSelfTest(
