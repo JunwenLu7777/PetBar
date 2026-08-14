@@ -9,23 +9,23 @@ import Foundation
 
 func runAgentLiveEventStoreSelfTest() {
     let base = Date(timeIntervalSince1970: 1_786_510_000)
-    let piEscalation = makeLiveStoreEnvelope(
-        agentID: .pi,
-        eventID: "pi-escalation",
+    let ompEscalation = makeLiveStoreEnvelope(
+        agentID: .omp,
+        eventID: "omp-escalation",
         sequence: 1,
         state: .running,
         reason: .permission,
         actionability: .inApp
     )
-    guard let piEvent = AgentTransportEnvelopeProjection.event(
-        from: piEscalation,
+    guard let ompEvent = AgentTransportEnvelopeProjection.event(
+        from: ompEscalation,
         receivedAt: base
-    ), piEvent.attentionReason == .none,
-       piEvent.actionability == .viewOnly,
-       piEvent.workingDirectory == nil,
-       !piEvent.title.contains("/")
+    ), ompEvent.attentionReason == .none,
+       ompEvent.actionability == .viewOnly,
+       ompEvent.workingDirectory == nil,
+       !ompEvent.title.contains("/")
     else {
-        failAgentLiveEventStoreSelfTest("Pi state-only capability boundary")
+        failAgentLiveEventStoreSelfTest("OMP state-only capability boundary")
     }
 
     let invalidFailure = makeLiveStoreEnvelope(
@@ -192,7 +192,7 @@ func runAgentLiveEventStoreSelfTest() {
     let revisionStore = AgentLiveEventStore()
     guard let delayedIngest = revisionStore.ingestUpdate(
         makeLiveStoreEnvelope(
-            agentID: .pi,
+            agentID: .omp,
             eventID: "revision-running",
             nativeSessionCandidate: "revision-session",
             sequence: 1,
@@ -336,22 +336,22 @@ func runAgentLiveEventStoreSelfTest() {
         )
     }
 
-    let piProjection = taskProgressItem(from: AgentSessionSnapshot(
-        identity: AgentSessionIdentity(agentID: .pi, nativeID: "pi-one"),
+    let ompProjection = taskProgressItem(from: AgentSessionSnapshot(
+        identity: AgentSessionIdentity(agentID: .omp, nativeID: "omp-one"),
         adapterVersion: "self-test",
         executionState: .running,
         attentionReason: .none,
         actionability: .viewOnly,
         evidenceQuality: .officialHook,
         freshness: Freshness(observedAt: base, expiresAt: nil),
-        title: "Pi 会话",
+        title: "OMP 会话",
         activitySummary: "正在执行",
         workingDirectory: nil,
-        latestEventID: "pi-event",
+        latestEventID: "omp-event",
         updatedAt: base
     ))
-    guard piProjection.kind == .running, !piProjection.canOpen else {
-        failAgentLiveEventStoreSelfTest("Pi dashboard remains state-only")
+    guard ompProjection.kind == .running, !ompProjection.canOpen else {
+        failAgentLiveEventStoreSelfTest("OMP dashboard remains state-only")
     }
 }
 

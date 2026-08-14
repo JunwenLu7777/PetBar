@@ -1,28 +1,28 @@
 //
-//  PiAgentAdapter.swift
+//  OMPAgentAdapter.swift
 //  ThreadHelm
 //
-//  模块职责：Pi 的本地只读发现、隔离 extension 生命周期和 state-only 事件归一化。
+//  模块职责：OMP 的本地只读发现、隔离 extension 生命周期和 state-only 事件归一化。
 //
 
 import Foundation
 
-struct PiAgentAdapter: AgentAdapter {
+struct OMPAgentAdapter: AgentAdapter {
     let metadata: AgentMetadata
     private let discoveryProvider: () -> AgentDiscovery
     private let readEvents: () throws -> [AgentEvent]
     private let executablePath: () -> String
 
     var managedIntegrationRelativePaths: [String] {
-        [".pi/agent/extensions/threadhelm-state-observer"]
+        [".omp/agent/extensions/threadhelm-state-observer"]
     }
 
     init(
         metadata: AgentMetadata? = builtInAgentMetadata().first {
-            $0.id == .pi
+            $0.id == .omp
         },
         discovery: @escaping () -> AgentDiscovery = {
-            discoverLocalPiAgent()
+            discoverLocalOMPAgent()
         },
         readEvents: @escaping () throws -> [AgentEvent] = { [] },
         executablePath: @escaping () -> String = {
@@ -41,7 +41,7 @@ struct PiAgentAdapter: AgentAdapter {
 
     func integrationStatus(in scope: AgentIntegrationScope) -> AgentIntegrationStatus {
         do {
-            return try PiExtensionConfiguration.status(
+            return try OMPExtensionConfiguration.status(
                 in: scope,
                 executablePath: executablePath()
             )
@@ -54,7 +54,7 @@ struct PiAgentAdapter: AgentAdapter {
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationOperationResult {
         guard discover().isInstalled else { return .unchanged }
-        let changed = try PiExtensionConfiguration.install(
+        let changed = try OMPExtensionConfiguration.install(
             in: scope,
             executablePath: executablePath()
         )
@@ -65,7 +65,7 @@ struct PiAgentAdapter: AgentAdapter {
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationOperationResult {
         guard discover().isInstalled else { return .unchanged }
-        let changed = try PiExtensionConfiguration.install(
+        let changed = try OMPExtensionConfiguration.install(
             in: scope,
             executablePath: executablePath()
         )
@@ -75,12 +75,12 @@ struct PiAgentAdapter: AgentAdapter {
     func uninstallIntegration(
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationOperationResult {
-        let changed = try PiExtensionConfiguration.uninstall(in: scope)
+        let changed = try OMPExtensionConfiguration.uninstall(in: scope)
         return changed ? .uninstalled : .unchanged
     }
 
     func observe() throws -> AgentObservation {
-        let events = try readEvents().compactMap(piStateOnlyEvent)
+        let events = try readEvents().compactMap(ompStateOnlyEvent)
         return AgentObservation(
             events: events,
             snapshots: AgentEventReducer.reduce(events: events).snapshots
@@ -97,11 +97,11 @@ struct PiAgentAdapter: AgentAdapter {
         guard snapshot.executionState == .running || snapshot.executionState == .idle
         else { return snapshot.freshness }
         let expiresAt = snapshot.freshness.expiresAt
-            ?? snapshot.updatedAt.addingTimeInterval(PiAgentDefaults.staleAfter)
+            ?? snapshot.updatedAt.addingTimeInterval(OMPAgentDefaults.staleAfter)
         return Freshness(
             observedAt: snapshot.freshness.observedAt,
             expiresAt: expiresAt,
-            staleReason: now >= expiresAt ? "pi-session-stale" : nil
+            staleReason: now >= expiresAt ? "omp-session-stale" : nil
         )
     }
 
@@ -119,24 +119,24 @@ struct PiAgentAdapter: AgentAdapter {
         let discovery = discover()
         return AgentDiagnostics(
             health: discovery.isInstalled ? .healthy : .unavailable,
-            summary: discovery.isInstalled ? "已发现 Pi" : "未发现 Pi",
+            summary: discovery.isInstalled ? "已发现 OMP" : "未发现 OMP",
             counters: [:]
         )
     }
 }
 
-enum PiAgentDefaults {
-    static let adapterVersion = "pi-extension-v1"
+enum OMPAgentDefaults {
+    static let adapterVersion = "omp-extension-v1"
     static let staleAfter: TimeInterval = 30 * 60
 }
 
-enum PiExtensionConfigurationError: Error, Equatable {
+enum OMPExtensionConfigurationError: Error, Equatable {
     case notOwned
 }
 
-enum PiExtensionConfiguration {
+enum OMPExtensionConfiguration {
     private static let extensionDirectoryPath =
-        ".pi/agent/extensions/threadhelm-state-observer"
+        ".omp/agent/extensions/threadhelm-state-observer"
     private static let scriptFilename = "index.ts"
     private static let ownershipFilename = ".threadhelm-owner"
     private static let marker = "threadhelm-managed-state-observer-v1"
@@ -174,7 +174,7 @@ enum PiExtensionConfiguration {
         if fileManager.fileExists(atPath: directoryURL.path),
            !isOwned(directoryURL: directoryURL)
         {
-            throw PiExtensionConfigurationError.notOwned
+            throw OMPExtensionConfigurationError.notOwned
         }
         if try status(
             in: scope,
@@ -215,7 +215,7 @@ enum PiExtensionConfiguration {
             return false
         }
         guard isOwned(directoryURL: directoryURL) else {
-            throw PiExtensionConfigurationError.notOwned
+            throw OMPExtensionConfigurationError.notOwned
         }
         try fileManager.removeItem(at: directoryURL)
         return true
@@ -251,7 +251,7 @@ enum PiExtensionConfiguration {
         import type {
           ExtensionAPI,
           ExtensionContext
-        } from "@earendil-works/pi-coding-agent";
+        } from "@oh-my-pi/pi-coding-agent";
         import { spawn } from "node:child_process";
 
         const THREADHELM = \(encodedPath);
@@ -264,43 +264,55 @@ enum PiExtensionConfiguration {
             : fallback;
         }
 
-        function emit(kind: string, ctx: ExtensionContext): void {
+        function emit(
+          kind: string,
+          ctx: ExtensionContext,
+          outcome?: "success" | "task_failure" | "continuing"
+        ): void {
           try {
             const session = safeText(
               ctx.sessionManager.getSessionId(),
-              "pi-session-unknown"
+              "omp-session-unknown"
             );
             sequence += 1;
             const body = {
               session_id: session,
               event_id: safeText(
                 `${kind}:${session}:${sequence}`,
-                `pi-event-${sequence}`
+                `omp-event-${sequence}`
               ),
-              sequence
+              sequence,
+              ...(outcome ? { outcome } : {})
             };
             const child = spawn(
               THREADHELM,
-              ["--agent-hook", "pi", kind],
+              ["--agent-hook", "omp", kind],
               { stdio: ["pipe", "ignore", "ignore"] }
             );
             child.on("error", () => {});
             child.stdin.on("error", () => {});
             child.stdin.end(JSON.stringify(body));
           } catch (_) {
-            // Observation is best-effort and must never affect Pi.
+            // Observation is best-effort and must never affect OMP.
           }
         }
 
-        export default function threadHelmStateObserver(pi: ExtensionAPI): void {
-          pi.on("session_start", (_event, ctx) => emit("session_start", ctx));
-          pi.on("agent_start", (_event, ctx) => emit("agent_start", ctx));
-          pi.on("agent_end", (_event, ctx) => emit("agent_end", ctx));
-          pi.on("tool_call", (_event, ctx) => emit("tool_call", ctx));
-          pi.on("tool_result", (_event, ctx) => emit("tool_result", ctx));
-          pi.on("session_compact", (_event, ctx) => emit("session_compact", ctx));
-          pi.on("agent_settled", (_event, ctx) => emit("agent_settled", ctx));
-          pi.on("session_shutdown", (_event, ctx) => emit("session_shutdown", ctx));
+        export default function threadHelmStateObserver(omp: ExtensionAPI): void {
+          omp.on("session_start", (_event, ctx) => emit("session_start", ctx));
+          omp.on("agent_start", (_event, ctx) => emit("agent_start", ctx));
+          omp.on("agent_end", (event, ctx) => {
+            const last = event.messages[event.messages.length - 1];
+            const outcome = event.willContinue
+              ? "continuing"
+              : last?.role === "assistant" && last.stopReason === "error"
+                ? "task_failure"
+                : "success";
+            emit("agent_end", ctx, outcome);
+          });
+          omp.on("tool_call", (_event, ctx) => emit("tool_call", ctx));
+          omp.on("tool_result", (_event, ctx) => emit("tool_result", ctx));
+          omp.on("session_compact", (_event, ctx) => emit("session_compact", ctx));
+          omp.on("session_shutdown", (_event, ctx) => emit("session_shutdown", ctx));
         }
         """
     }
@@ -318,20 +330,19 @@ enum PiExtensionConfiguration {
     }
 }
 
-private let piStateOnlyEventTypes: Set<String> = [
+private let ompStateOnlyEventTypes: Set<String> = [
     "session_start",
     "agent_start",
     "agent_end",
     "tool_call",
     "tool_result",
     "session_compact",
-    "agent_settled",
     "session_shutdown",
 ]
 
-private func piStateOnlyEvent(_ event: AgentEvent) -> AgentEvent? {
-    guard event.identity.agentID == .pi,
-          piStateOnlyEventTypes.contains(event.eventType)
+private func ompStateOnlyEvent(_ event: AgentEvent) -> AgentEvent? {
+    guard event.identity.agentID == .omp,
+          ompStateOnlyEventTypes.contains(event.eventType)
     else { return nil }
     let state: ExecutionState
     let reason: AttentionReason
@@ -339,9 +350,18 @@ private func piStateOnlyEvent(_ event: AgentEvent) -> AgentEvent? {
     case "session_start":
         state = .idle
         reason = .none
-    case "agent_settled":
-        state = event.executionState == .failed ? .failed : .completed
-        reason = state == .failed ? .taskFailure : .reviewReady
+    case "agent_end":
+        switch event.executionState {
+        case .failed:
+            state = .failed
+            reason = .taskFailure
+        case .running:
+            state = .running
+            reason = .none
+        default:
+            state = .completed
+            reason = .reviewReady
+        }
     case "session_shutdown":
         state = .offline
         reason = .none
@@ -362,17 +382,17 @@ private func piStateOnlyEvent(_ event: AgentEvent) -> AgentEvent? {
         actionability: .viewOnly,
         evidenceQuality: event.evidenceQuality,
         freshness: event.freshness,
-        title: "Pi 会话",
+        title: "OMP 会话",
         activitySummary: nil,
         workingDirectory: nil
     )
 }
 
-func piAgentEvent(
+func ompAgentEvent(
     from envelope: AgentTransportEnvelope,
     observedAt: Date
 ) -> AgentEvent? {
-    guard envelope.agentID == .pi else { return nil }
+    guard envelope.agentID == .omp else { return nil }
     let state = envelope.redactedPayload["state"].flatMap {
         ExecutionState(rawValue: $0)
     }
@@ -380,12 +400,12 @@ func piAgentEvent(
     let rawReason = envelope.redactedPayload["attentionReason"]
         .flatMap { AttentionReason(rawValue: $0) } ?? .none
     let reason: AttentionReason
-    if envelope.eventType == "agent_settled",
+    if envelope.eventType == "agent_end",
        state == .failed,
        rawReason == .taskFailure
     {
         reason = .taskFailure
-    } else if envelope.eventType == "agent_settled",
+    } else if envelope.eventType == "agent_end",
               state == .completed
     {
         reason = .reviewReady
@@ -397,9 +417,9 @@ func piAgentEvent(
         .flatMap { EvidenceQuality(rawValue: $0) } ?? .officialHook
     let freshnessClass = envelope.redactedPayload["freshness"] ?? "fresh"
     let stale = freshnessClass == "stale" || state == .offline || state == .stale
-    let nativeID = envelope.nativeSessionCandidate ?? "pi-session-unknown"
+    let nativeID = envelope.nativeSessionCandidate ?? "omp-session-unknown"
     return AgentEvent(
-        identity: AgentSessionIdentity(agentID: .pi, nativeID: nativeID),
+        identity: AgentSessionIdentity(agentID: .omp, nativeID: nativeID),
         adapterVersion: envelope.adapterVersion,
         eventID: envelope.eventID,
         sequence: envelope.sequence,
@@ -413,21 +433,21 @@ func piAgentEvent(
         freshness: Freshness(
             observedAt: observedAt,
             expiresAt: stale ? observedAt : observedAt.addingTimeInterval(
-                PiAgentDefaults.staleAfter
+                OMPAgentDefaults.staleAfter
             ),
-            staleReason: stale ? "pi-session-shutdown-or-stale" : nil
+            staleReason: stale ? "omp-session-shutdown-or-stale" : nil
         ),
-        title: "Pi session",
+        title: "OMP session",
         activitySummary: nil,
         workingDirectory: nil
     )
 }
 
-func discoverLocalPiAgent(
+func discoverLocalOMPAgent(
     environment: [String: String] = ProcessInfo.processInfo.environment,
     fileManager: FileManager = .default
 ) -> AgentDiscovery {
-    guard let executable = locatePiExecutable(
+    guard let executable = locateOMPExecutable(
         environment: environment,
         fileManager: fileManager
     ) else {
@@ -437,9 +457,9 @@ func discoverLocalPiAgent(
             compatibility: .unknown
         )
     }
-    let version = piVersion(executableURL: executable)
+    let version = ompVersion(executableURL: executable)
     return versionValidatedAgentDiscovery(
-        agentID: .pi,
+        agentID: .omp,
         isInstalled: true,
         components: version.map {
             [AgentVersionComponent(key: "version", label: "Version", value: $0)]
@@ -447,11 +467,11 @@ func discoverLocalPiAgent(
     )
 }
 
-func locatePiExecutable(
+func locateOMPExecutable(
     environment: [String: String] = ProcessInfo.processInfo.environment,
     fileManager: FileManager = .default
 ) -> URL? {
-    if let override = environment["THREADHELM_PI_EXECUTABLE"],
+    if let override = environment["THREADHELM_OMP_EXECUTABLE"],
        !override.isEmpty,
        fileManager.isExecutableFile(atPath: override)
     {
@@ -463,7 +483,7 @@ func locatePiExecutable(
         + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
     for directory in pathCandidates {
         let candidate = URL(fileURLWithPath: directory)
-            .appendingPathComponent("pi")
+            .appendingPathComponent("omp")
         if fileManager.isExecutableFile(atPath: candidate.path) {
             return candidate
         }
@@ -471,16 +491,16 @@ func locatePiExecutable(
     return nil
 }
 
-private func piVersion(executableURL: URL) -> String? {
+private func ompVersion(executableURL: URL) -> String? {
     for _ in 0..<2 {
-        if let version = probePiVersion(executableURL: executableURL) {
+        if let version = probeOMPVersion(executableURL: executableURL) {
             return version
         }
     }
     return nil
 }
 
-private func probePiVersion(executableURL: URL) -> String? {
+private func probeOMPVersion(executableURL: URL) -> String? {
     let process = Process()
     process.executableURL = executableURL
     process.arguments = ["--version"]

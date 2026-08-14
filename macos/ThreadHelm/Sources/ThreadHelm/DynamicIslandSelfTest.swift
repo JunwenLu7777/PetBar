@@ -1110,7 +1110,7 @@ private func assertDynamicIslandTaskWorkspace() {
               "额度",
           ],
           workspace.sourceFilterLabelsForSelfTest()
-              == ["全部", "Codex", "Claude", "Cursor", "ZCode", "Pi"],
+              == ["全部", "Codex", "Claude", "Cursor", "ZCode", "OMP"],
           workspace.selectedTopLevelTabForSelfTest() == 0,
           !workspace.accessibilitySnapshotForSelfTest().contains("确认")
     else {
@@ -1193,12 +1193,12 @@ private func assertDynamicIslandTaskWorkspace() {
             ]
         case .zcode:
             components = []
-        case .pi:
+        case .omp:
             components = [
                 AgentVersionComponent(
                     key: "version",
                     label: "Version",
-                    value: "0.84.1"
+                    value: "17.3.2"
                 ),
             ]
         default:

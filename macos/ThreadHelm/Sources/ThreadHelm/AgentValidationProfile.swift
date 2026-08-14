@@ -132,8 +132,8 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
                 "限制：精确会话、问题/计划语义和 SessionEnd 尚未验证"
         ),
         AgentValidationProfile(
-            agentID: .pi,
-            testedVersion: "0.84.1",
+            agentID: .omp,
+            testedVersion: "17.3.2",
             supportedCapabilitiesSummary: "支持：只读状态",
             knownLimitation:
                 "限制：不支持审批、输入、取消、导航或精确返回"

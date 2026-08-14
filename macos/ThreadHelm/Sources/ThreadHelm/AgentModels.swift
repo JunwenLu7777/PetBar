@@ -21,14 +21,14 @@ struct AgentID: RawRepresentable, Hashable, Codable, Comparable,
     static let claudeCode = AgentID(rawValue: "claudeCode")
     static let cursor = AgentID(rawValue: "cursor")
     static let zcode = AgentID(rawValue: "zcode")
-    static let pi = AgentID(rawValue: "pi")
+    static let omp = AgentID(rawValue: "omp")
 
     static let builtInOrder: [AgentID] = [
         .codex,
         .claudeCode,
         .cursor,
         .zcode,
-        .pi,
+        .omp,
     ]
 
     var description: String { rawValue }

@@ -134,7 +134,7 @@ assert_package_is_complete() {
   /usr/bin/plutil -lint "$PLIST_SOURCE" >/dev/null \
     || fail "登录启动项模板无效。"
   local unmanaged_artifact
-  for unmanaged_artifact in .claude .cursor .zcode .pi; do
+  for unmanaged_artifact in .claude .cursor .zcode .omp; do
     [[ ! -e "$ROOT/$unmanaged_artifact" ]] \
       || fail "安装包不得携带厂商配置或未受管 Hook：$unmanaged_artifact"
   done
@@ -263,7 +263,7 @@ mkdir -p "$HEALTH_DIR"
 INTEGRATION_REPORT=""
 INTEGRATION_REPORT="$(
   "$APP_BINARY" --agent-integrations install --live
-)" || fail "无法安全安装 Claude、Cursor、ZCode 和 Pi 的受管集成。"
+)" || fail "无法安全安装 Claude、Cursor、ZCode 和 OMP 的受管集成。"
 threadhelm_set_integration_backup_id "$INTEGRATION_REPORT" \
   || fail "无法读取五 Agent 本机集成恢复点。"
 "$APP_BINARY" \
@@ -315,7 +315,7 @@ cleanup_legacy_products
 echo ""
 echo "安装完成："
 echo "  ✓ ThreadHelm 独立 App"
-echo "  ✓ Codex、Claude、Cursor、ZCode 与 Pi 本机控制台"
+echo "  ✓ Codex、Claude、Cursor、ZCode 与 OMP 本机控制台"
 echo "  ✓ 已清理旧 ChatBird App 与启动项"
 echo "  ✓ 已启用 Codex 原生任务气泡静音同步"
 echo "  ✓ 已处理四个受管集成；Codex 集成保持只读、不写配置"

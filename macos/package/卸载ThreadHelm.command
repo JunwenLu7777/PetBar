@@ -94,7 +94,7 @@ else
     "$CLEANUP_BINARY" --agent-integrations uninstall --live
   )" \
     || {
-      echo "无法安全卸载 Claude、Cursor、ZCode 和 Pi 的受管集成，已停止卸载。"
+      echo "无法安全卸载 Claude、Cursor、ZCode 和 OMP 的受管集成，已停止卸载。"
       exit 1
     }
   INTEGRATION_BACKUP_ID="$(

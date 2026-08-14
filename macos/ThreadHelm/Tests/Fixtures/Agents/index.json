@@ -8,14 +8,14 @@
     "claudeCode",
     "cursor",
     "zcode",
-    "pi"
+    "omp"
   ],
   "scenarioFiles": {
     "codex": "scenarios/codex.json",
     "claudeCode": "scenarios/claudeCode.json",
     "cursor": "scenarios/cursor.json",
     "zcode": "scenarios/zcode.json",
-    "pi": "scenarios/pi.json"
+    "omp": "scenarios/omp.json"
   },
   "counts": {
     "total": 81,
@@ -24,7 +24,7 @@
       "claudeCode": 17,
       "cursor": 16,
       "zcode": 16,
-      "pi": 16
+      "omp": 16
     }
   },
   "replayContract": "docs/superpowers/specs/2026-08-12-threadhelm-truth-spec.md",
@@ -34,6 +34,6 @@
     "Claude --resume dispatch is not independently confirmed as exact return.",
     "Cursor arbitrary IDE session return is not proven end to end.",
     "ZCode exact session return and already-running-session hook pickup are not proven.",
-    "Pi exact session return is unsupported by the state-only adapter."
+    "OMP exact session return is unsupported by the state-only adapter."
   ]
 }

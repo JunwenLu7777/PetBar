@@ -10,7 +10,7 @@ ThreadHelm 只供这台 Mac 的当前用户使用。集成管理没有云端、�
 | Claude Code | 只管理自己拥有的 `PermissionRequest` HTTP Hook；其他 Hook、环境变量和设置保留。 | `~/.claude/settings.json` |
 | Cursor | 只管理带 `threadhelmOwner` / `threadhelmAgent` 标记的生命周期 Hook；其他 Hook 和禁用选择保留。 | `~/.cursor/hooks.json` |
 | ZCode | 只管理状态观察事件中的 ThreadHelm process Hook；不注册 `PermissionRequest`，并保留已有配置的其他键、事件顺序和 `hooks.enabled`。配置文件原本不存在时会新建并启用 Hook，同时写入独立所有权标记，卸载时据此恢复到“文件不存在”；旧版 ThreadHelm 单独创建且尚未启用的纯受管配置会安全迁移。变更只对新启动的 ZCode 会话生效。 | `~/.zcode/cli/config.json`、`~/.zcode/cli/.threadhelm-config-owner` |
-| Pi | 只管理一个带所有权文件的 state-only 扩展；不做审批、发消息、取消、导航或会话修改。 | `~/.pi/agent/extensions/threadhelm-state-observer/` |
+| OMP | 只管理一个带所有权文件的 state-only 扩展；不做审批、发消息、取消、导航或会话修改。 | `~/.omp/agent/extensions/threadhelm-state-observer/` |
 
 App 本身安装到 `~/Applications/ThreadHelm.app`，登录启动项是 `~/Library/LaunchAgents/dev.threadhelm.app.plist`。运行日志在 `~/Library/Logs/ThreadHelm.log`，健康文件在 `~/Library/Caches/dev.threadhelm.app/`。
 
@@ -44,7 +44,7 @@ Agents 页面里的 `validated` 不是“看起来能用”，而是本机发现
 - Claude Code `2.1.226`
 - Cursor Desktop `3.15.6` 和 Agent CLI `2026.04.14-ee4b43a`
 - ZCode `3.7.6` 和 build `3.7.6.4691`
-- Pi `0.84.1`
+- OMP `17.3.2`
 
 只要版本没读到、少一个分量或有任意漂移，就显示 `unvalidated`，并隐藏只在固定版本上验证过的能力文案。例如本机 Cursor Desktop 即使只是升级到 `3.15.19`，也不能沿用 `3.15.6` 的验证结论。发现过程只读；`unvalidated` Agent 的安装和修复会跳过，不会改厂商配置，卸载仍可只移除已确认属于 ThreadHelm 的条目。
 
@@ -58,7 +58,7 @@ BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 
 这会读取 81 条脱敏场景，经生产 Swift 归一化和真实 `AgentEventReducer` 比较 7 个 expected 字段。duplicate 和 out-of-order 场景也走真实 reducer。输出的 miss、false alert、duplicate、exact return 分子分母只说明这 81 条固定夹具，没有测量实际使用、延迟或主观体验；回放过程不写持久化用户状态。
 
-该基线里 Codex 精确返回仍是 `unknown`；Claude Code 只有同时匹配会话、活进程和 process-start identity 才可能是 exact，否则降为 `unknown`；Cursor 与 ZCode 不宣称 exact；Pi 的精确返回能力是 `unsupported`，打开结果只能是 `unavailable`。发布脚本会执行同一回放，并把真值夹具纳入 release 输入时间；夹具更新后旧 ZIP 会被判为 stale。
+该基线里 Codex 精确返回仍是 `unknown`；Claude Code 只有同时匹配会话、活进程和 process-start identity 才可能是 exact，否则降为 `unknown`；Cursor 与 ZCode 不宣称 exact；OMP 的精确返回能力是 `unsupported`，打开结果只能是 `unavailable`。发布脚本会执行同一回放，并把真值夹具纳入 release 输入时间；夹具更新后旧 ZIP 会被判为 stale。
 
 ## 检查、安装、修复和卸载集成
 
@@ -104,7 +104,7 @@ ZCode 的“完整安装”不会要求额外确认：如果 `~/.zcode/cli/confi
 任何一步失败时，安装器会：
 
 1. 停止失败的新 LaunchAgent；
-2. 用 `backupID` 恢复 Claude、Cursor、ZCode 和 Pi 配置；
+2. 用 `backupID` 恢复 Claude、Cursor、ZCode 和 OMP 配置；
 3. 恢复旧 App、旧 LaunchAgent 和 Codex 气泡状态；
 4. 重新启动原来的 LaunchAgent。
 

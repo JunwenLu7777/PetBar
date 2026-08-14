@@ -2,7 +2,7 @@
 //  AgentHookCommand.swift
 //  ThreadHelm
 //
-//  模块职责：作为 Cursor、ZCode、Pi hook/extension 的快速 fail-open 入口，
+//  模块职责：作为 Cursor、ZCode、OMP hook/extension 的快速 fail-open 入口，
 //  只从 stdin 提取身份和状态分类，再送入 owner-only Unix socket。
 //
 
@@ -40,7 +40,7 @@ func runAgentHookCommandIfRequested(
     ) else { return false }
     guard arguments.indices.contains(flagIndex + 2) else { return true }
     let agentID = AgentID(rawValue: arguments[flagIndex + 1])
-    guard [.cursor, .zcode, .pi].contains(agentID) else { return true }
+    guard [.cursor, .zcode, .omp].contains(agentID) else { return true }
     let eventType = arguments[flagIndex + 2]
     guard let envelope = agentHookEnvelope(
         agentID: agentID,
@@ -150,7 +150,7 @@ func agentHookEnvelope(
     input: AgentHookInput,
     monotonicNanoseconds: UInt64 = DispatchTime.now().uptimeNanoseconds
 ) -> AgentTransportEnvelope? {
-    guard [.cursor, .zcode, .pi].contains(agentID),
+    guard [.cursor, .zcode, .omp].contains(agentID),
           let safeEventType = agentHookToken(eventType, maximumLength: 96)
     else { return nil }
 
@@ -244,7 +244,7 @@ private func agentHookStateMapping(
 )? {
     let normalized = eventType.lowercased()
     let taskFailed = agentHookTerminalFailureIsExplicit(object)
-    let nativeAction: Actionability = agentID == .pi
+    let nativeAction: Actionability = agentID == .omp
         ? .viewOnly
         : .openNativeApp
 
@@ -283,10 +283,12 @@ private func agentHookStateMapping(
     switch normalized {
     case "session_start":
         return (.idle, .none, .viewOnly, .officialHook, "fresh")
-    case "agent_start", "agent_end", "tool_call", "tool_result",
-         "session_compact":
+    case "agent_start", "tool_call", "tool_result", "session_compact":
         return (.running, .none, .viewOnly, .officialHook, "fresh")
-    case "agent_settled":
+    case "agent_end":
+        if agentHookContinuationIsExplicit(object) {
+            return (.running, .none, .viewOnly, .officialHook, "fresh")
+        }
         return taskFailed
             ? (.failed, .taskFailure, .viewOnly, .officialHook, "fresh")
             : (.completed, .reviewReady, .viewOnly, .officialHook, "fresh")
@@ -295,6 +297,15 @@ private func agentHookStateMapping(
     default:
         return nil
     }
+}
+
+private func agentHookContinuationIsExplicit(
+    _ object: [String: Any]
+) -> Bool {
+    let values = ["outcome", "result", "terminal_status", "terminalStatus"]
+        .compactMap { object[$0] as? String }
+        .map { $0.lowercased() }
+    return values.contains("continuing")
 }
 
 private func agentHookTerminalFailureIsExplicit(

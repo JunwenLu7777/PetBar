@@ -457,7 +457,7 @@ func builtInAgentAdapters() -> [any AgentAdapter] {
         ClaudeCodeAgentAdapter(metadata: indexed[.claudeCode]!),
         CursorAgentAdapter(metadata: indexed[.cursor]!),
         ZCodeAgentAdapter(metadata: indexed[.zcode]!),
-        PiAgentAdapter(metadata: indexed[.pi]!),
+        OMPAgentAdapter(metadata: indexed[.omp]!),
     ]
 }
 
@@ -823,7 +823,7 @@ private func normalizedActionability(
     if agentID == .cursor || agentID == .zcode {
         return item.canOpen ? .openNativeApp : .viewOnly
     }
-    if agentID == .pi {
+    if agentID == .omp {
         return .viewOnly
     }
     if item.canOpen { return .openExactNativeSession }
@@ -1082,13 +1082,13 @@ func builtInAgentMetadata() -> [AgentMetadata] {
             )
         ),
         AgentMetadata(
-            id: .pi,
-            displayName: "Pi",
-            shortName: "Pi",
-            iconResourceName: "ProviderIcon-pi",
+            id: .omp,
+            displayName: "OMP",
+            shortName: "OMP",
+            iconResourceName: "ProviderIcon-omp",
             fallbackSymbolName: "waveform.path.ecg",
             brandColor: AgentColorComponents(red: 0.96, green: 0.67, blue: 0.22),
-            versionSource: "pi --version",
+            versionSource: "omp --version",
             identityPolicy: "state-only; native session return unverified",
             capabilities: AgentCapabilitySet(
                 supported: [.lifecycleObservation, .managedIntegration],

@@ -16,7 +16,7 @@ enum AgentLiveEventPolicy {
     static let terminalFreshness: TimeInterval = 24 * 60 * 60
 }
 
-let hookObservedAgentIDs: Set<AgentID> = [.cursor, .zcode, .pi]
+let hookObservedAgentIDs: Set<AgentID> = [.cursor, .zcode, .omp]
 
 enum AgentTransportEnvelopeProjection {
     static func event(
@@ -88,7 +88,7 @@ enum AgentTransportEnvelopeProjection {
         for agentID: AgentID,
         metadata: AgentMetadata
     ) -> Actionability {
-        guard agentID != .pi else { return .viewOnly }
+        guard agentID != .omp else { return .viewOnly }
         return metadata.capabilities.supports(.nativeNavigation)
             ? .openNativeApp
             : .viewOnly
@@ -123,7 +123,7 @@ enum AgentTransportEnvelopeProjection {
             {
                 actionability = .openNativeApp
             }
-        case .pi:
+        case .omp:
             if ![.taskFailure, .reviewReady, .none].contains(reason) {
                 reason = .none
             }

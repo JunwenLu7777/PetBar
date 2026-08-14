@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_ROOT = ROOT / "macos/ThreadHelm/Tests/Fixtures/Agents"
 SCENARIO_ROOT = FIXTURE_ROOT / "scenarios"
-AGENTS = ("codex", "claudeCode", "cursor", "zcode", "pi")
+AGENTS = ("codex", "claudeCode", "cursor", "zcode", "omp")
 BASELINE_COMMIT = "f7cb4843eea3aa5aae9ee6045092c007f7cd9452"
 PREVIEW_STATES = (
     "capsule-confirmation",
@@ -39,7 +39,7 @@ EXPECTED_SCENARIO_COUNTS = {
     "claudeCode": 17,
     "cursor": 16,
     "zcode": 16,
-    "pi": 16,
+    "omp": 16,
 }
 
 EXPECTED_ENUMS = {
@@ -198,15 +198,15 @@ for agent_id in AGENTS:
             assert scenario["expected"]["evidenceQuality"] in {
                 "inferred", "unknown",
             }, f"{scenario['id']} overstates synthetic evidence quality"
-        if agent_id == "pi":
+        if agent_id == "omp":
             assert scenario["expected"]["actionability"] not in {
                 "inApp", "openExactNativeSession", "openNativeApp",
                 "openWorkingDirectory",
-            }, f"{scenario['id']} violates the Pi state-only boundary"
+            }, f"{scenario['id']} violates the OMP state-only boundary"
             assert scenario["expected"]["openResult"] not in {
                 "exactSession", "appFocused", "workingDirectoryFallback",
-            }, f"{scenario['id']} violates the Pi no-navigation boundary"
-        if agent_id in {"codex", "cursor", "zcode", "pi"}:
+            }, f"{scenario['id']} violates the OMP no-navigation boundary"
+        if agent_id in {"codex", "cursor", "zcode", "omp"}:
             assert scenario["expected"]["openResult"] != "exactSession", (
                 f"{scenario['id']} lacks independent exact-return confirmation"
             )

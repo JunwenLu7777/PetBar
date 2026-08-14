@@ -64,8 +64,8 @@ func runAgentOpenMeasurementSelfTest() {
         invokedExactTarget: false,
         independentlyConfirmedIdentity: false
     )
-    let pi = AgentOpenReport(
-        agentID: .pi,
+    let omp = AgentOpenReport(
+        agentID: .omp,
         advertisedActionability: .viewOnly,
         result: .unavailable,
         invokedExactTarget: false,
@@ -94,7 +94,7 @@ func runAgentOpenMeasurementSelfTest() {
           claude.result == .exactSession,
           !cursor.exactAttempted,
           !zcode.exactAttempted,
-          !pi.exactAttempted,
+          !omp.exactAttempted,
           unconfirmedExactClaim.result == .unknown,
           !unconfirmedExactClaim.independentlyConfirmedIdentity,
           invalidCursorExactClaim.result == .unknown,
@@ -104,7 +104,7 @@ func runAgentOpenMeasurementSelfTest() {
         failAgentOpenMeasurementSelfTest("truthful exact-attempt boundary")
     }
 
-    for report in [codex, claude, cursor, zcode, pi] {
+    for report in [codex, claude, cursor, zcode, omp] {
         guard store.record(report) else {
             failAgentOpenMeasurementSelfTest("persist report")
         }
@@ -125,8 +125,8 @@ func runAgentOpenMeasurementSelfTest() {
           reloaded.totals(for: .zcode).exactAttempts == 0,
           reloaded.totals(for: .zcode)
             .resultCount(.workingDirectoryFallback) == 1,
-          reloaded.totals(for: .pi).exactAttempts == 0,
-          reloaded.totals(for: .pi).resultCount(.unavailable) == 1
+          reloaded.totals(for: .omp).exactAttempts == 0,
+          reloaded.totals(for: .omp).resultCount(.unavailable) == 1
     else {
         failAgentOpenMeasurementSelfTest("five-agent persisted totals")
     }

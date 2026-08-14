@@ -479,7 +479,7 @@ private enum AgentEventSocketEnvelopeValidator {
         _ candidate: AgentTransportEnvelope
     ) -> AgentTransportEnvelope? {
         guard candidate.schemaVersion == AgentTransportContract.schemaVersion,
-              [.cursor, .zcode, .pi].contains(candidate.agentID)
+              [.cursor, .zcode, .omp].contains(candidate.agentID)
         else { return nil }
         let canonical = AgentTransportEnvelope(
             agentID: candidate.agentID,

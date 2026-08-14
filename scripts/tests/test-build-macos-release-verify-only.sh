@@ -58,7 +58,7 @@ write_truth_replay_binary() {
 case \"\${1:-}\" in
   --verify-agent-truth)
     echo 'agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged'
-    for agent_id in codex claudeCode cursor zcode pi; do
+    for agent_id in codex claudeCode cursor zcode omp; do
       echo \"agent-truth-metric: agent=\$agent_id miss=0/1 falseAlert=0/1 duplicate=0/1 exactReturn=0/0 testedVersion=test collectionWindow=test..test source=redacted-truth-fixture\"
     done
     ;;

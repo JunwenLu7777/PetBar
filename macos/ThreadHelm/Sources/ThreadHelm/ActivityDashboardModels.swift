@@ -23,7 +23,7 @@ struct TaskSourceFilter: RawRepresentable, Hashable {
     static let claudeCode = TaskSourceFilter(agentID: .claudeCode)
     static let cursor = TaskSourceFilter(agentID: .cursor)
     static let zcode = TaskSourceFilter(agentID: .zcode)
-    static let pi = TaskSourceFilter(agentID: .pi)
+    static let omp = TaskSourceFilter(agentID: .omp)
 
     var agentID: AgentID? {
         self == .all ? nil : AgentID(rawValue: rawValue)

@@ -38,11 +38,11 @@ func runAgentIntegrationSelfTest() {
         .claudeCode,
         .cursor,
         .zcode,
-        .pi,
+        .omp,
     ]
     guard AgentID.builtInOrder == expectedBuiltIns,
           expectedBuiltIns.map(\.rawValue) == [
-              "codex", "claudeCode", "cursor", "zcode", "pi",
+              "codex", "claudeCode", "cursor", "zcode", "omp",
           ]
     else {
         failAgentIntegrationSelfTest("built-in IDs/order")
@@ -156,16 +156,16 @@ func runAgentIntegrationSelfTest() {
         }
     }
 
-    guard registry.metadata(for: .pi)?.capabilities.status(
+    guard registry.metadata(for: .omp)?.capabilities.status(
         for: .lifecycleObservation
     ) == .supported,
-          registry.metadata(for: .pi)?.capabilities.status(
+          registry.metadata(for: .omp)?.capabilities.status(
               for: .nativeNavigation
           ) == .unsupported,
-          registry.metadata(for: .pi)?.capabilities.status(
+          registry.metadata(for: .omp)?.capabilities.status(
               for: .inAppPermission
           ) == .unsupported,
-          registry.metadata(for: .pi)?.capabilities.status(
+          registry.metadata(for: .omp)?.capabilities.status(
               for: .exactReturn
           ) == .unsupported,
           registry.metadata(for: .cursor)?.capabilities.status(
@@ -177,7 +177,7 @@ func runAgentIntegrationSelfTest() {
           registry.metadata(for: .codex)?.capabilities.status(
               for: .managedIntegration
           ) == .unsupported,
-          [.claudeCode, .cursor, .zcode, .pi].allSatisfy({ agentID in
+          [.claudeCode, .cursor, .zcode, .omp].allSatisfy({ agentID in
               registry.metadata(for: agentID)?.capabilities.status(
                   for: .managedIntegration
               ) == .supported
@@ -192,7 +192,7 @@ func runAgentIntegrationSelfTest() {
     }
 
     guard TaskSourceFilter.options(for: AgentID.builtInOrder).map(\.rawValue)
-        == ["all", "codex", "claudeCode", "cursor", "zcode", "pi"],
+        == ["all", "codex", "claudeCode", "cursor", "zcode", "omp"],
           TaskSourceFilter(agentID: mock.metadata.id).agentID == mock.metadata.id
     else {
         failAgentIntegrationSelfTest("source-agnostic filters")
@@ -208,7 +208,7 @@ func runAgentIntegrationSelfTest() {
     }
     runCursorAgentAdapterSelfTest()
     runZCodeAgentAdapterSelfTest()
-    runPiAgentAdapterSelfTest()
+    runOMPAgentAdapterSelfTest()
     runCodexClaudeAdapterSelfTest()
     runAgentVersionTruthSelfTest()
     runAgentOpenMeasurementSelfTest()
@@ -274,7 +274,7 @@ private func runAgentVersionTruthSelfTest() {
         ]
     )
     let codexMetadata = builtInAgentMetadata().first { $0.id == .codex }
-    let piMetadata = builtInAgentMetadata().first { $0.id == .pi }
+    let ompMetadata = builtInAgentMetadata().first { $0.id == .omp }
     let driftedCodexAdapter = CodexAgentAdapter(
         readCollection: { .displaying([]) },
         discovery: {
@@ -331,7 +331,7 @@ private func runAgentVersionTruthSelfTest() {
               for: .managedIntegration
           ) == .unsupported,
           codexMetadata?.capabilities.status(for: .exactReturn) == .unknown,
-          piMetadata?.capabilities.status(for: .exactReturn) == .unsupported,
+          ompMetadata?.capabilities.status(for: .exactReturn) == .unsupported,
           normalizedAgentVersion(from: "codex-cli 0.145.0") == "0.145.0",
           normalizedAgentVersion(from: "2.1.226 (Claude Code)") == "2.1.226",
           normalizedAgentVersion(from: "2026.04.14-ee4b43a")
@@ -1095,13 +1095,13 @@ private func runAgentReducerSelfTest() {
         failAgentIntegrationSelfTest("event IDs are scoped to session identity")
     }
 
-    let previousPi = AgentEventReducer.reduce(events: [
+    let previousOMP = AgentEventReducer.reduce(events: [
         makeAgentSelfTestEvent(
             identity: AgentSessionIdentity(
-                agentID: .pi,
-                nativeID: "pi-preserved"
+                agentID: .omp,
+                nativeID: "omp-preserved"
             ),
-            eventID: "pi-old",
+            eventID: "omp-old",
             sequence: 1,
             observedAt: base,
             state: .running,
@@ -1110,11 +1110,11 @@ private func runAgentReducerSelfTest() {
     ])
     let failurePreserved = AgentEventReducer.reduce(
         events: [newerWaiting],
-        previousSnapshots: previousPi.snapshots,
-        preservingAgentIDs: [.pi]
+        previousSnapshots: previousOMP.snapshots,
+        preservingAgentIDs: [.omp]
     )
     guard Set(failurePreserved.snapshots.map(\.identity.agentID))
-        == Set([.codex, .pi])
+        == Set([.codex, .omp])
     else {
         failAgentIntegrationSelfTest("adapter failure preserves prior frame")
     }

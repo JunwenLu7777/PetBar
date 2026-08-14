@@ -64,7 +64,7 @@ verify_inputs() {
   require_file "$AGENT_TRUTH_ROOT/index.json"
   require_file "$AGENT_TRUTH_ROOT/versions.json"
   local agent_id
-  for agent_id in codex claudeCode cursor zcode pi; do
+  for agent_id in codex claudeCode cursor zcode omp; do
     require_file "$AGENT_TRUTH_ROOT/scenarios/$agent_id.json"
   done
   /usr/bin/plutil -lint "$PLIST_TEMPLATE" >/dev/null
@@ -81,7 +81,7 @@ verify_agent_truth_replay() {
     || fail "five-agent truth replay failed: $binary"
   [[ "$output" == *"agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged"* ]] \
     || fail "five-agent truth replay summary is incomplete"
-  for agent_id in codex claudeCode cursor zcode pi; do
+  for agent_id in codex claudeCode cursor zcode omp; do
     [[ "$output" == *"agent-truth-metric: agent=$agent_id "* ]] \
       || fail "missing truth metric for $agent_id"
   done
@@ -164,7 +164,7 @@ verify_stage() {
   [[ ! -e "$target/preview-qa" ]] || fail "release must not publish pet preview assets"
   [[ ! -e "$target/quota-panel" ]] || fail "release must not publish a standalone quota-panel directory"
   local unmanaged_artifact
-  for unmanaged_artifact in .claude .cursor .zcode .pi; do
+  for unmanaged_artifact in .claude .cursor .zcode .omp; do
     [[ ! -e "$target/$unmanaged_artifact" ]] \
       || fail "release must not contain vendor config or unmanaged hooks: $unmanaged_artifact"
   done

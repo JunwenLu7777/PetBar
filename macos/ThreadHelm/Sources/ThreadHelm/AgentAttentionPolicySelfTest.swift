@@ -60,7 +60,7 @@ func runAgentAttentionPolicySelfTest() {
         updatedAt: base
     )
     let processChurn = makeAttentionPolicySnapshot(
-        agentID: .pi,
+        agentID: .omp,
         nativeID: "stale-session",
         state: .stale,
         reason: .none,

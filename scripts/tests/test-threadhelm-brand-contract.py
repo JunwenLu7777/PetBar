@@ -61,7 +61,7 @@ for installer in (package_installer, source_installer):
     ):
         assert required in installer, required
 
-for unmanaged_artifact in (".claude", ".cursor", ".zcode", ".pi"):
+for unmanaged_artifact in (".claude", ".cursor", ".zcode", ".omp"):
     assert unmanaged_artifact in package_installer
 
 for required in (

@@ -61,10 +61,10 @@
         "reference": "ZCode application bundle Info.plist"
       }
     },
-    "pi": {
-      "agentId": "pi",
-      "displayName": "Pi",
-      "version": "0.84.1",
+    "omp": {
+      "agentId": "omp",
+      "displayName": "OMP",
+      "version": "17.3.2",
       "revalidateOnVersionChange": true,
       "discovery": {
         "status": "installed",
@@ -72,7 +72,7 @@
       },
       "evidence": {
         "kind": "localCommand",
-        "reference": "pi --version"
+        "reference": "omp --version"
       }
     }
   }

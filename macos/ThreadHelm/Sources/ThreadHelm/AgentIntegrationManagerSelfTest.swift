@@ -79,7 +79,7 @@ func runAgentIntegrationManagerSelfTest() {
               status.record(for: .claudeCode)?.statusAfter == .notInstalled,
               status.record(for: .cursor)?.statusAfter == .notInstalled,
               status.record(for: .zcode)?.statusAfter == .notInstalled,
-              status.record(for: .pi)?.statusAfter == .notInstalled
+              status.record(for: .omp)?.statusAfter == .notInstalled
         else {
             failIntegrationManagerSelfTest("five-agent status")
         }
@@ -91,7 +91,7 @@ func runAgentIntegrationManagerSelfTest() {
               installed.record(for: .claudeCode)?.statusAfter == .installed,
               installed.record(for: .cursor)?.statusAfter == .installed,
               installed.record(for: .zcode)?.statusAfter == .installed,
-              installed.record(for: .pi)?.statusAfter == .installed,
+              installed.record(for: .omp)?.statusAfter == .installed,
               !fileManager.fileExists(
                   atPath: root.appendingPathComponent(".codex").path
               )
@@ -154,7 +154,7 @@ func runAgentIntegrationManagerSelfTest() {
               restored.restoredBackupID == originalBackupID,
               try fixtures.matchesOriginalBytes(),
               !fileManager.fileExists(
-                  atPath: fixtures.piManagedDirectory.path
+                  atPath: fixtures.ompManagedDirectory.path
               )
         else {
             failIntegrationManagerSelfTest("backup restore drill")
@@ -192,7 +192,7 @@ private struct IntegrationManagerFixtures {
     let originalClaude: Data
     let originalCursor: Data
     let originalZCode: Data
-    let unrelatedPi: Data
+    let unrelatedOMP: Data
 
     var claudeURL: URL {
         root.appendingPathComponent(".claude/settings.json")
@@ -206,15 +206,15 @@ private struct IntegrationManagerFixtures {
         root.appendingPathComponent(".zcode/cli/config.json")
     }
 
-    var piUnrelatedURL: URL {
+    var ompUnrelatedURL: URL {
         root.appendingPathComponent(
-            ".pi/agent/extensions/user-owned/index.ts"
+            ".omp/agent/extensions/user-owned/index.ts"
         )
     }
 
-    var piManagedDirectory: URL {
+    var ompManagedDirectory: URL {
         root.appendingPathComponent(
-            ".pi/agent/extensions/threadhelm-state-observer",
+            ".omp/agent/extensions/threadhelm-state-observer",
             isDirectory: true
         )
     }
@@ -223,7 +223,7 @@ private struct IntegrationManagerFixtures {
         try Data(contentsOf: claudeURL) == originalClaude
             && Data(contentsOf: cursorURL) == originalCursor
             && Data(contentsOf: zcodeURL) == originalZCode
-            && Data(contentsOf: piUnrelatedURL) == unrelatedPi
+            && Data(contentsOf: ompUnrelatedURL) == unrelatedOMP
     }
 
     func unrelatedConfigurationIsPreserved() throws -> Bool {
@@ -236,11 +236,11 @@ private struct IntegrationManagerFixtures {
         let zcode = try JSONSerialization.jsonObject(
             with: Data(contentsOf: zcodeURL)
         ) as? [String: Any]
-        let piData = try Data(contentsOf: piUnrelatedURL)
+        let ompData = try Data(contentsOf: ompUnrelatedURL)
         return claude?["model"] as? String == "keep-claude"
             && cursor?["keep"] as? String == "keep-cursor"
             && zcode?["keep"] as? String == "keep-zcode"
-            && piData == unrelatedPi
+            && ompData == unrelatedOMP
     }
 }
 
@@ -252,19 +252,19 @@ private func makeIntegrationManagerFixtures(
     let originalZCode = Data(
         #"{"hooks":{"enabled":true,"events":{}},"keep":"keep-zcode"}"#.utf8
     )
-    let unrelatedPi = Data("export default 'keep-pi'\n".utf8)
+    let unrelatedOMP = Data("export default 'keep-omp'\n".utf8)
     let fixtures = IntegrationManagerFixtures(
         root: root,
         originalClaude: originalClaude,
         originalCursor: originalCursor,
         originalZCode: originalZCode,
-        unrelatedPi: unrelatedPi
+        unrelatedOMP: unrelatedOMP
     )
     for (url, data) in [
         (fixtures.claudeURL, originalClaude),
         (fixtures.cursorURL, originalCursor),
         (fixtures.zcodeURL, originalZCode),
-        (fixtures.piUnrelatedURL, unrelatedPi),
+        (fixtures.ompUnrelatedURL, unrelatedOMP),
     ] {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
@@ -303,7 +303,7 @@ private func makeIntegrationManagerRegistry(
             discovery: installed,
             executablePath: { "/tmp/ThreadHelm" }
         ),
-        PiAgentAdapter(
+        OMPAgentAdapter(
             discovery: installed,
             executablePath: { "/tmp/ThreadHelm" }
         ),
@@ -323,7 +323,7 @@ private func runIntegrationManagerVersionGateSelfTest(root: URL) throws {
     guard status.operation == .status,
           status.backupID == nil,
           try fixtures.matchesOriginalBytes(),
-          !fileManager.fileExists(atPath: fixtures.piManagedDirectory.path)
+          !fileManager.fileExists(atPath: fixtures.ompManagedDirectory.path)
     else {
         throw IntegrationManagerSelfTestError.assertion(
             "status must remain read-only for drifted versions"
@@ -345,7 +345,7 @@ private func runIntegrationManagerVersionGateSelfTest(root: URL) throws {
                       && $0.statusAfter == .notInstalled
               }),
               try fixtures.matchesOriginalBytes(),
-              !fileManager.fileExists(atPath: fixtures.piManagedDirectory.path)
+              !fileManager.fileExists(atPath: fixtures.ompManagedDirectory.path)
         else {
             throw IntegrationManagerSelfTestError.assertion(
                 "\(operation.rawValue) changed drifted-version configuration"
@@ -365,7 +365,7 @@ private func runIntegrationManagerVersionGateSelfTest(root: URL) throws {
                 && record.statusAfter == .notInstalled
     }),
     try fixtures.unrelatedConfigurationIsPreserved(),
-    !fileManager.fileExists(atPath: fixtures.piManagedDirectory.path)
+    !fileManager.fileExists(atPath: fixtures.ompManagedDirectory.path)
     else {
         throw IntegrationManagerSelfTestError.assertion(
             "drifted-version uninstall must remove only ThreadHelm-owned entries"

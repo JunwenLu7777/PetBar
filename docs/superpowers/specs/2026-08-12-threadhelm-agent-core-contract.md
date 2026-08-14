@@ -2,19 +2,19 @@
 
 Date: 2026-08-12
 
-Scope: the owner's Mac; Codex, Claude Code, Cursor, ZCode, and Pi; schema version 1.
+Scope: the owner's Mac; Codex, Claude Code, Cursor, ZCode, and OMP; schema version 1.
 
 ## Stable core
 
 `AgentID` is an extensible, bounded token. The built-in order is `codex`,
-`claudeCode`, `cursor`, `zcode`, `pi`; a new ID sorts after built-ins without a
+`claudeCode`, `cursor`, `zcode`, `omp`; a new ID sorts after built-ins without a
 UI vendor switch. Task sources and quota providers are separate registries.
 Only Codex and Claude Code are quota providers.
 
 Adapters expose discovery/version, managed-integration lifecycle, observation,
 capabilities, freshness, opening, and privacy-safe diagnostics. Unsupported and
 unknown are different states. In particular, Cursor and ZCode exact return
-remain unknown; Pi exact return, navigation, and all Pi mutation/action
+remain unknown; OMP exact return, navigation, and all OMP mutation/action
 capabilities are unsupported.
 
 The reducer keys a session by agent plus native identity, scopes event IDs to a

@@ -1,38 +1,38 @@
 //
-//  PiAgentAdapterSelfTest.swift
+//  OMPAgentAdapterSelfTest.swift
 //  ThreadHelm
 //
-//  模块职责：Pi state-only adapter 的隔离配置、传输和归一化自测。
+//  模块职责：OMP state-only adapter 的隔离配置、传输和归一化自测。
 //
 
 import Foundation
 
-func runPiAgentAdapterSelfTest() {
+func runOMPAgentAdapterSelfTest() {
     do {
-        try runPiDelayedVersionDiscoverySelfTest()
-        try runPiIntegrationLifecycleSelfTest()
-        try runPiStateOnlyContractSelfTest()
-        try runPiGeneratedExtensionLoadSelfTest()
-        try runPiEventReductionSelfTest()
-        try runPiTransportContractSelfTest()
+        try runOMPDelayedVersionDiscoverySelfTest()
+        try runOMPIntegrationLifecycleSelfTest()
+        try runOMPStateOnlyContractSelfTest()
+        try runOMPGeneratedExtensionLoadSelfTest()
+        try runOMPEventReductionSelfTest()
+        try runOMPTransportContractSelfTest()
         print(
-            "pi-agent-adapter-self-test: lifecycle=install+repeat+status+repair+repeat-uninstall+partial+preserve+live-home-guard "
+            "omp-agent-adapter-self-test: lifecycle=install+repeat+status+repair+repeat-uninstall+partial+preserve+live-home-guard "
                 + "state-only=open-unavailable+no-control-fields+installed-jiti-load "
                 + "events=offline+slow+malformed+duplicate+out-of-order+shutdown-stale"
         )
     } catch {
-        fputs("pi-agent-adapter-self-test failed: \(error)\n", stderr)
+        fputs("omp-agent-adapter-self-test failed: \(error)\n", stderr)
         exit(1)
     }
 }
 
-private func runPiDelayedVersionDiscoverySelfTest() throws {
+private func runOMPDelayedVersionDiscoverySelfTest() throws {
     let manager = FileManager.default
     let temporaryRoot = manager.temporaryDirectory.appendingPathComponent(
-        "threadhelm-pi-version-self-test-\(UUID().uuidString)",
+        "threadhelm-omp-version-self-test-\(UUID().uuidString)",
         isDirectory: true
     )
-    let executableURL = temporaryRoot.appendingPathComponent("pi")
+    let executableURL = temporaryRoot.appendingPathComponent("omp")
     defer { try? manager.removeItem(at: temporaryRoot) }
 
     try manager.createDirectory(
@@ -47,7 +47,7 @@ private func runPiDelayedVersionDiscoverySelfTest() throws {
           /usr/bin/touch "\(attemptURL.path)"
           /bin/sleep 3
         fi
-        /bin/echo 0.84.1
+        /bin/echo 17.3.2
         """.appending("\n").utf8
     ).write(to: executableURL)
     try manager.setAttributes(
@@ -55,21 +55,21 @@ private func runPiDelayedVersionDiscoverySelfTest() throws {
         ofItemAtPath: executableURL.path
     )
 
-    let discovery = discoverLocalPiAgent(environment: [
-        "THREADHELM_PI_EXECUTABLE": executableURL.path,
+    let discovery = discoverLocalOMPAgent(environment: [
+        "THREADHELM_OMP_EXECUTABLE": executableURL.path,
         "PATH": "/usr/bin:/bin",
     ])
     guard discovery.isInstalled,
-          discovery.version == "0.84.1",
+          discovery.version == "17.3.2",
           discovery.compatibility == .validated
     else {
-        throw PiAgentAdapterSelfTestError.failed(
-            "Pi CLI transient cold-start timeout was not retried"
+        throw OMPAgentAdapterSelfTestError.failed(
+            "OMP CLI transient cold-start timeout was not retried"
         )
     }
 }
 
-private enum PiAgentAdapterSelfTestError: Error, CustomStringConvertible {
+private enum OMPAgentAdapterSelfTestError: Error, CustomStringConvertible {
     case failed(String)
 
     var description: String {
@@ -79,17 +79,17 @@ private enum PiAgentAdapterSelfTestError: Error, CustomStringConvertible {
     }
 }
 
-private func runPiIntegrationLifecycleSelfTest() throws {
+private func runOMPIntegrationLifecycleSelfTest() throws {
     let manager = FileManager.default
     let temporaryRoot = manager.temporaryDirectory.appendingPathComponent(
-        "threadhelm-pi-adapter-self-test-\(UUID().uuidString)",
+        "threadhelm-omp-adapter-self-test-\(UUID().uuidString)",
         isDirectory: true
     )
     defer { try? manager.removeItem(at: temporaryRoot) }
 
     let unrelatedURL = temporaryRoot
         .appendingPathComponent(
-            ".pi/agent/extensions/user-owned-extension",
+            ".omp/agent/extensions/user-owned-extension",
             isDirectory: true
         )
         .appendingPathComponent("extension.json")
@@ -100,20 +100,20 @@ private func runPiIntegrationLifecycleSelfTest() throws {
     let unrelatedContent = #"{"name":"user-owned-extension","enabled":false}"#
     try Data(unrelatedContent.utf8).write(to: unrelatedURL)
 
-    let adapter = PiAgentAdapter(discovery: {
+    let adapter = OMPAgentAdapter(discovery: {
         AgentDiscovery(
             isInstalled: true,
-            version: "0.84.1",
+            version: "17.3.2",
             compatibility: .unknown
         )
     }, executablePath: { "/tmp/ThreadHelm" })
 
     let collisionRoot = temporaryRoot.appendingPathComponent(
-        "pi-unowned-collision",
+        "omp-unowned-collision",
         isDirectory: true
     )
     let collisionDirectory = collisionRoot.appendingPathComponent(
-        ".pi/agent/extensions/threadhelm-state-observer",
+        ".omp/agent/extensions/threadhelm-state-observer",
         isDirectory: true
     )
     let collisionScript = collisionDirectory.appendingPathComponent("index.ts")
@@ -125,7 +125,7 @@ private func runPiIntegrationLifecycleSelfTest() throws {
     try collisionContent.write(to: collisionScript)
     let collisionScope = AgentIntegrationScope.isolated(at: collisionRoot)
     guard adapter.integrationStatus(in: collisionScope) == .needsRepair else {
-        throw PiAgentAdapterSelfTestError.failed("unowned collision status")
+        throw OMPAgentAdapterSelfTestError.failed("unowned collision status")
     }
     for operation in [
         { try adapter.repairIntegration(in: collisionScope) },
@@ -133,19 +133,19 @@ private func runPiIntegrationLifecycleSelfTest() throws {
     ] {
         do {
             _ = try operation()
-            throw PiAgentAdapterSelfTestError.failed("unowned collision was modified")
-        } catch PiExtensionConfigurationError.notOwned {
+            throw OMPAgentAdapterSelfTestError.failed("unowned collision was modified")
+        } catch OMPExtensionConfigurationError.notOwned {
         }
     }
     guard try Data(contentsOf: collisionScript) == collisionContent else {
-        throw PiAgentAdapterSelfTestError.failed("unowned collision was not preserved")
+        throw OMPAgentAdapterSelfTestError.failed("unowned collision was not preserved")
     }
     let scope = AgentIntegrationScope.isolated(at: temporaryRoot)
     let unavailableRoot = temporaryRoot.appendingPathComponent(
-        "pi-unavailable",
+        "omp-unavailable",
         isDirectory: true
     )
-    let unavailableAdapter = PiAgentAdapter(discovery: {
+    let unavailableAdapter = OMPAgentAdapter(discovery: {
         AgentDiscovery(
             isInstalled: false,
             version: nil,
@@ -160,8 +160,8 @@ private func runPiIntegrationLifecycleSelfTest() throws {
     ) == .unchanged,
     !manager.fileExists(atPath: unavailableRoot.path)
     else {
-        throw PiAgentAdapterSelfTestError.failed(
-            "unavailable Pi must not write integration files"
+        throw OMPAgentAdapterSelfTestError.failed(
+            "unavailable OMP must not write integration files"
         )
     }
 
@@ -172,12 +172,12 @@ private func runPiIntegrationLifecycleSelfTest() throws {
           try String(contentsOf: unrelatedURL, encoding: .utf8)
               == unrelatedContent
     else {
-        throw PiAgentAdapterSelfTestError.failed(
+        throw OMPAgentAdapterSelfTestError.failed(
             "install/status/idempotency or unrelated extension preservation"
         )
     }
 
-    let directoryURL = try PiExtensionConfiguration.extensionDirectoryURL(
+    let directoryURL = try OMPExtensionConfiguration.extensionDirectoryURL(
         in: scope
     )
     let scriptURL = directoryURL.appendingPathComponent("index.ts")
@@ -186,7 +186,7 @@ private func runPiIntegrationLifecycleSelfTest() throws {
           try adapter.repairIntegration(in: scope) == .repaired,
           adapter.integrationStatus(in: scope) == .installed
     else {
-        throw PiAgentAdapterSelfTestError.failed("partial corruption repair")
+        throw OMPAgentAdapterSelfTestError.failed("partial corruption repair")
     }
 
     guard try adapter.uninstallIntegration(in: scope) == .uninstalled,
@@ -195,7 +195,7 @@ private func runPiIntegrationLifecycleSelfTest() throws {
           try String(contentsOf: unrelatedURL, encoding: .utf8)
               == unrelatedContent
     else {
-        throw PiAgentAdapterSelfTestError.failed(
+        throw OMPAgentAdapterSelfTestError.failed(
             "uninstall idempotency or unrelated extension preservation"
         )
     }
@@ -204,14 +204,14 @@ private func runPiIntegrationLifecycleSelfTest() throws {
         _ = try adapter.installIntegration(
             in: .isolated(at: manager.homeDirectoryForCurrentUser)
         )
-        throw PiAgentAdapterSelfTestError.failed("live home write was allowed")
+        throw OMPAgentAdapterSelfTestError.failed("live home write was allowed")
     } catch AgentIntegrationError.liveConfigurationWriteDenied {
     }
 }
 
-private func runPiStateOnlyContractSelfTest() throws {
+private func runOMPStateOnlyContractSelfTest() throws {
     let now = Date(timeIntervalSince1970: 1_786_532_400)
-    let adapter = PiAgentAdapter(
+    let adapter = OMPAgentAdapter(
         discovery: {
             AgentDiscovery(
                 isInstalled: false,
@@ -220,8 +220,8 @@ private func runPiStateOnlyContractSelfTest() throws {
             )
         },
         readEvents: {
-            [piSelfTestEvent(
-                eventID: "pi-running",
+            [ompSelfTestEvent(
+                eventID: "omp-running",
                 eventType: "agent_start",
                 observedAt: now,
                 monotonicNanoseconds: 10,
@@ -235,7 +235,7 @@ private func runPiStateOnlyContractSelfTest() throws {
     let observation = try adapter.observe()
     guard observation.snapshots.count == 1,
           let snapshot = observation.snapshots.first,
-          snapshot.identity.agentID == .pi,
+          snapshot.identity.agentID == .omp,
           snapshot.attentionReason == .none,
           snapshot.actionability == .viewOnly,
           snapshot.workingDirectory == nil,
@@ -244,14 +244,14 @@ private func runPiStateOnlyContractSelfTest() throws {
           !adapter.open(session: snapshot).independentlyConfirmedIdentity,
           adapter.diagnostics().health == .unavailable
     else {
-        throw PiAgentAdapterSelfTestError.failed("state-only open/diagnostics")
+        throw OMPAgentAdapterSelfTestError.failed("state-only open/diagnostics")
     }
 
-    let generatedFiles = PiExtensionConfiguration.generatedFilesForSelfTest()
+    let generatedFiles = OMPExtensionConfiguration.generatedFilesForSelfTest()
     let generatedText = generatedFiles["index.ts"]?.lowercased() ?? ""
     let forbiddenFragments = [
-        "pi.sendusermessage",
-        "pi.sendmessage",
+        "omp.sendusermessage",
+        "omp.sendmessage",
         "registertool",
         "registercommand",
         "ctx.newsession",
@@ -270,7 +270,7 @@ private func runPiStateOnlyContractSelfTest() throws {
     if let forbidden = forbiddenFragments.first(where: {
         generatedText.contains($0)
     }) {
-        throw PiAgentAdapterSelfTestError.failed(
+        throw OMPAgentAdapterSelfTestError.failed(
             "generated extension contains forbidden fragment \(forbidden)"
         )
     }
@@ -279,53 +279,46 @@ private func runPiStateOnlyContractSelfTest() throws {
           generatedFiles[".threadhelm-owner"]
             == "threadhelm-managed-state-observer-v1\n",
           generatedText.contains("export default function"),
-          generatedText.contains("pi.on(\"session_start\""),
-          generatedText.contains("pi.on(\"agent_settled\""),
-          generatedText.contains("pi.on(\"session_compact\""),
+          generatedText.contains("omp.on(\"session_start\""),
+          generatedText.contains("omp.on(\"agent_end\""),
+          generatedText.contains("event.willcontinue"),
+          generatedText.contains("task_failure"),
+          !generatedText.contains("agent_settled"),
+          generatedText.contains("omp.on(\"session_compact\""),
           generatedText.contains("--agent-hook"),
           generatedText.contains("node:child_process"),
           !generatedText.contains("threadhelmagenteventsocketemit")
     else {
-        throw PiAgentAdapterSelfTestError.failed(
-            "generated extension must use the installed Pi extension API"
+        throw OMPAgentAdapterSelfTestError.failed(
+            "generated extension must use the installed OMP extension API"
         )
     }
 
     guard AgentTransportContract.maximumSerializedBytes == 64 * 1_024,
           AgentTransportContract.synchronousTimeout == 0.25
     else {
-        throw PiAgentAdapterSelfTestError.failed("transport constants")
+        throw OMPAgentAdapterSelfTestError.failed("transport constants")
     }
 }
 
-private func runPiGeneratedExtensionLoadSelfTest() throws {
+private func runOMPGeneratedExtensionLoadSelfTest() throws {
     let manager = FileManager.default
     let temporaryRoot = manager.temporaryDirectory.appendingPathComponent(
-        "threadhelm-pi-extension-load-self-test-\(UUID().uuidString)",
+        "threadhelm-omp-extension-load-self-test-\(UUID().uuidString)",
         isDirectory: true
     )
     defer { try? manager.removeItem(at: temporaryRoot) }
 
-    guard let piExecutable = locatePiExecutable() else {
-        throw PiAgentAdapterSelfTestError.failed(
-            "installed Pi executable is required for extension load test"
+    guard let ompExecutable = locateOMPExecutable() else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "installed OMP executable is required for extension load test"
         )
     }
-    let piModuleURL = piExecutable
-        .resolvingSymlinksInPath()
-        .deletingLastPathComponent()
-        .appendingPathComponent("index.js")
-    guard manager.fileExists(atPath: piModuleURL.path) else {
-        throw PiAgentAdapterSelfTestError.failed(
-            "installed Pi module entry is unavailable"
-        )
-    }
-
-    let adapter = PiAgentAdapter(
+    let adapter = OMPAgentAdapter(
         discovery: {
             AgentDiscovery(
                 isInstalled: true,
-                version: "0.84.1",
+                version: "17.3.2",
                 compatibility: .unknown
             )
         },
@@ -333,10 +326,13 @@ private func runPiGeneratedExtensionLoadSelfTest() throws {
     )
     let scope = AgentIntegrationScope.isolated(at: temporaryRoot)
     guard try adapter.installIntegration(in: scope) == .installed else {
-        throw PiAgentAdapterSelfTestError.failed(
-            "isolated Pi extension was not installed"
+        throw OMPAgentAdapterSelfTestError.failed(
+            "isolated OMP extension was not installed"
         )
     }
+    let scriptURL = try OMPExtensionConfiguration.extensionDirectoryURL(
+        in: scope
+    ).appendingPathComponent("index.ts")
 
     let projectURL = temporaryRoot.appendingPathComponent(
         "empty-project",
@@ -346,109 +342,106 @@ private func runPiGeneratedExtensionLoadSelfTest() throws {
         at: projectURL,
         withIntermediateDirectories: true
     )
-    let runnerURL = temporaryRoot.appendingPathComponent("load-extension.mjs")
-    let runner = #"""
-    import { pathToFileURL } from "node:url";
-
-    const [agentDir, cwd, modulePath] = process.argv.slice(2);
-    const { discoverAndLoadExtensions } = await import(
-      pathToFileURL(modulePath).href
-    );
-    const result = await discoverAndLoadExtensions([], cwd, agentDir);
-    const expected = [
-      "agent_end",
-      "agent_settled",
-      "agent_start",
-      "session_compact",
-      "session_shutdown",
-      "session_start",
-      "tool_call",
-      "tool_result"
-    ];
-    if (result.errors.length !== 0 || result.extensions.length !== 1) {
-      process.exit(10);
-    }
-    const extension = result.extensions[0];
-    const handlers = [...extension.handlers.keys()].sort();
-    if (JSON.stringify(handlers) !== JSON.stringify(expected)) {
-      process.exit(11);
-    }
-    if ([...extension.handlers.values()].some((items) => items.length !== 1)) {
-      process.exit(12);
-    }
-    if (
-      extension.tools.size !== 0 ||
-      extension.commands.size !== 0 ||
-      extension.shortcuts.size !== 0 ||
-      extension.flags.size !== 0 ||
-      extension.messageRenderers.size !== 0 ||
-      (extension.entryRenderers?.size ?? 0) !== 0
-    ) {
-      process.exit(13);
-    }
-    process.stdout.write("pi-extension-load-ok");
-    """#
-    try Data(runner.utf8).write(to: runnerURL, options: .atomic)
-
     let process = Process()
+    let input = Pipe()
     let output = Pipe()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.executableURL = ompExecutable
+    process.currentDirectoryURL = projectURL
     process.arguments = [
-        "node",
-        runnerURL.path,
-        temporaryRoot.appendingPathComponent(".pi/agent").path,
-        projectURL.path,
-        piModuleURL.path,
+        "--mode", "rpc",
+        "--no-session",
+        "--no-tools",
+        "--no-skills",
+        "--no-lsp",
+        "--no-pty",
+        "--extension", scriptURL.path,
     ]
+    var environment = ProcessInfo.processInfo.environment
+    environment["HOME"] = temporaryRoot.path
+    environment["PI_CODING_AGENT_DIR"] = temporaryRoot
+        .appendingPathComponent(".omp/agent").path
+    process.environment = environment
+    process.standardInput = input
     process.standardOutput = output
     process.standardError = output
     try process.run()
+    try input.fileHandleForWriting.write(
+        contentsOf: Data("{\"id\":\"threadhelm\",\"type\":\"get_state\"}\n".utf8)
+    )
+    try input.fileHandleForWriting.close()
     let capture = captureProcessOutput(
         process: process,
         output: output.fileHandleForReading,
-        timeout: 5,
-        maximumOutputBytes: 16_384
+        timeout: 10,
+        terminationGracePeriod: 2,
+        maximumOutputBytes: 65_536
     )
+    let text = String(data: capture.data, encoding: .utf8) ?? ""
+    let frames: [[String: Any]] = text
+        .split(whereSeparator: \.isNewline)
+        .compactMap { line in
+            guard let object = try? JSONSerialization.jsonObject(
+                with: Data(line.utf8)
+            ) else { return nil }
+            return object as? [String: Any]
+        }
+    let sawReady = frames.contains { frame in
+        frame["type"] as? String == "ready"
+    }
+    let sawSuccessfulStateResponse = frames.contains { frame in
+        frame["id"] as? String == "threadhelm"
+            && frame["type"] as? String == "response"
+            && frame["command"] as? String == "get_state"
+            && frame["success"] as? Bool == true
+    }
+    let sawExtensionError = frames.contains { frame in
+        frame["type"] as? String == "extension_error"
+    }
     guard capture.termination == .exited,
           process.terminationStatus == 0,
-          capture.data == Data("pi-extension-load-ok".utf8)
+          sawReady,
+          sawSuccessfulStateResponse,
+          !sawExtensionError
     else {
-        throw PiAgentAdapterSelfTestError.failed(
-            "generated index.ts did not load as a state-only Pi extension"
+        throw OMPAgentAdapterSelfTestError.failed(
+            "generated index.ts did not load in isolated OMP RPC mode "
+                + "(termination=\(capture.termination), status=\(process.terminationStatus), "
+                + "ready=\(sawReady), response=\(sawSuccessfulStateResponse), "
+                + "extensionError=\(sawExtensionError))"
         )
     }
 }
 
-private func runPiEventReductionSelfTest() throws {
+private func runOMPEventReductionSelfTest() throws {
     let now = Date(timeIntervalSince1970: 1_786_532_500)
-    let agentEnd = piSelfTestEvent(
-        eventID: "pi-agent-end",
+    let agentEnd = ompSelfTestEvent(
+        eventID: "omp-agent-end",
         eventType: "agent_end",
         observedAt: now,
         monotonicNanoseconds: 20,
         executionState: .running,
         attentionReason: .none
     )
-    let settledFailure = piSelfTestEvent(
-        eventID: "pi-settled-failure",
-        eventType: "agent_settled",
+    let terminalFailure = ompSelfTestEvent(
+        eventID: "omp-terminal-failure",
+        eventType: "agent_end",
         observedAt: now.addingTimeInterval(1),
         monotonicNanoseconds: 30,
         executionState: .failed,
         attentionReason: .taskFailure,
         evidenceQuality: .inferred
     )
-    let olderTool = piSelfTestEvent(
-        eventID: "pi-tool-old",
+    let olderTool = ompSelfTestEvent(
+        eventID: "omp-tool-old",
         eventType: "tool_result",
         observedAt: now.addingTimeInterval(-10),
         monotonicNanoseconds: 10,
         executionState: .running,
         attentionReason: .none
     )
-    let duplicateFailure = piSelfTestEvent(
-        eventID: "pi-settled-failure",
-        eventType: "agent_settled",
+    let duplicateFailure = ompSelfTestEvent(
+        eventID: "omp-terminal-failure",
+        eventType: "agent_end",
         observedAt: now.addingTimeInterval(1),
         monotonicNanoseconds: 30,
         executionState: .failed,
@@ -457,7 +450,7 @@ private func runPiEventReductionSelfTest() throws {
     )
     let reduction = AgentEventReducer.reduce(events: [
         agentEnd,
-        settledFailure,
+        terminalFailure,
         olderTool,
         duplicateFailure,
     ])
@@ -469,8 +462,8 @@ private func runPiEventReductionSelfTest() throws {
           reduction.attentionItems.count == 1,
           reduction.attentionItems.first?.isInterrupting == true
     else {
-        throw PiAgentAdapterSelfTestError.failed(
-            "duplicate/out-of-order settled failure reduction"
+        throw OMPAgentAdapterSelfTestError.failed(
+            "duplicate/out-of-order terminal failure reduction"
         )
     }
 
@@ -478,13 +471,13 @@ private func runPiEventReductionSelfTest() throws {
     guard agentEndOnly.snapshots.first?.executionState == .running,
           agentEndOnly.attentionItems.isEmpty
     else {
-        throw PiAgentAdapterSelfTestError.failed(
+        throw OMPAgentAdapterSelfTestError.failed(
             "agent_end must not be terminal"
         )
     }
 
-    let shutdown = piSelfTestEvent(
-        eventID: "pi-shutdown",
+    let shutdown = ompSelfTestEvent(
+        eventID: "omp-shutdown",
         eventType: "session_shutdown",
         observedAt: now.addingTimeInterval(2),
         monotonicNanoseconds: 40,
@@ -497,16 +490,16 @@ private func runPiEventReductionSelfTest() throws {
           shutdownReduction.snapshots.first?.freshness.staleReason != nil,
           shutdownReduction.attentionItems.isEmpty
     else {
-        throw PiAgentAdapterSelfTestError.failed("shutdown/stale cleanup")
+        throw OMPAgentAdapterSelfTestError.failed("shutdown/stale cleanup")
     }
 
     let envelope = AgentTransportEnvelope(
-        agentID: .pi,
-        adapterVersion: PiAgentDefaults.adapterVersion,
-        nativeSessionCandidate: "pi-envelope-session",
-        eventID: "pi-envelope-failure",
+        agentID: .omp,
+        adapterVersion: OMPAgentDefaults.adapterVersion,
+        nativeSessionCandidate: "omp-envelope-session",
+        eventID: "omp-envelope-failure",
         sequence: 5,
-        eventType: "agent_settled",
+        eventType: "agent_end",
         monotonicNanoseconds: 50,
         redactedPayload: [
             "state": "failed",
@@ -516,24 +509,24 @@ private func runPiEventReductionSelfTest() throws {
             "freshness": "fresh",
         ]
     )
-    guard let parsed = piAgentEvent(from: envelope, observedAt: now),
-          parsed.identity.nativeID == "pi-envelope-session",
+    guard let parsed = ompAgentEvent(from: envelope, observedAt: now),
+          parsed.identity.nativeID == "omp-envelope-session",
           parsed.executionState == .failed,
           parsed.attentionReason == .taskFailure,
           parsed.actionability == .viewOnly,
           parsed.workingDirectory == nil,
           parsed.activitySummary == nil
     else {
-        throw PiAgentAdapterSelfTestError.failed("transport envelope parsing")
+        throw OMPAgentAdapterSelfTestError.failed("transport envelope parsing")
     }
 }
 
-private func runPiTransportContractSelfTest() throws {
+private func runOMPTransportContractSelfTest() throws {
     let envelope = AgentTransportEnvelope(
-        agentID: .pi,
-        adapterVersion: PiAgentDefaults.adapterVersion,
-        nativeSessionCandidate: "pi-transport-session",
-        eventID: "pi-transport-event",
+        agentID: .omp,
+        adapterVersion: OMPAgentDefaults.adapterVersion,
+        nativeSessionCandidate: "omp-transport-session",
+        eventID: "omp-transport-event",
         sequence: nil,
         eventType: "tool_call",
         monotonicNanoseconds: 60,
@@ -558,16 +551,16 @@ private func runPiTransportContractSelfTest() throws {
           malformed.vendorResponse.isEmpty,
           slow.vendorResponse.isEmpty
     else {
-        throw PiAgentAdapterSelfTestError.failed(
+        throw OMPAgentAdapterSelfTestError.failed(
             "offline/slow/malformed fail-open transport"
         )
     }
 
     let sensitive = AgentTransportEnvelope(
-        agentID: .pi,
-        adapterVersion: PiAgentDefaults.adapterVersion,
-        nativeSessionCandidate: "pi-transport-session",
-        eventID: "pi-sensitive-event",
+        agentID: .omp,
+        adapterVersion: OMPAgentDefaults.adapterVersion,
+        nativeSessionCandidate: "omp-transport-session",
+        eventID: "omp-sensitive-event",
         sequence: nil,
         eventType: "tool_result",
         monotonicNanoseconds: 61,
@@ -579,13 +572,13 @@ private func runPiTransportContractSelfTest() throws {
     guard let encoding = try? AgentTransportEncoder.encode(sensitive),
           encoding.wasReducedToMetadata
     else {
-        throw PiAgentAdapterSelfTestError.failed(
+        throw OMPAgentAdapterSelfTestError.failed(
             "sensitive transport fields must become metadata-only"
         )
     }
 }
 
-private func piSelfTestEvent(
+private func ompSelfTestEvent(
     eventID: String,
     eventType: String,
     observedAt: Date,
@@ -598,8 +591,8 @@ private func piSelfTestEvent(
     workingDirectory: String? = nil
 ) -> AgentEvent {
     AgentEvent(
-        identity: AgentSessionIdentity(agentID: .pi, nativeID: "pi-session-1"),
-        adapterVersion: PiAgentDefaults.adapterVersion,
+        identity: AgentSessionIdentity(agentID: .omp, nativeID: "omp-session-1"),
+        adapterVersion: OMPAgentDefaults.adapterVersion,
         eventID: eventID,
         sequence: nil,
         eventType: eventType,
@@ -613,10 +606,10 @@ private func piSelfTestEvent(
             observedAt: observedAt,
             expiresAt: stale
                 ? observedAt
-                : observedAt.addingTimeInterval(PiAgentDefaults.staleAfter),
-            staleReason: stale ? "pi-session-shutdown-or-stale" : nil
+                : observedAt.addingTimeInterval(OMPAgentDefaults.staleAfter),
+            staleReason: stale ? "omp-session-shutdown-or-stale" : nil
         ),
-        title: "Pi self-test",
+        title: "OMP self-test",
         activitySummary: nil,
         workingDirectory: workingDirectory
     )

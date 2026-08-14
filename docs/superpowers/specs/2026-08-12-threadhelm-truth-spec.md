@@ -8,7 +8,7 @@ Baseline: `f7cb4843eea3aa5aae9ee6045092c007f7cd9452`
 
 ## Purpose
 
-The fixture package is the source of truth for normalizing Codex, Claude Code, Cursor, ZCode, and Pi. It records what was observed, what ThreadHelm should show, and what remains unsupported or unknown. It is not permission to install integrations or mutate live agent configuration.
+The fixture package is the source of truth for normalizing Codex, Claude Code, Cursor, ZCode, and OMP. It records what was observed, what ThreadHelm should show, and what remains unsupported or unknown. It is not permission to install integrations or mutate live agent configuration.
 
 ## Replay contract
 
@@ -45,7 +45,7 @@ The same rule applies to future hook transport and diagnostics: only allowlisted
 - Completion is `reviewReady` and non-interrupting by default.
 - A terminal failure is `taskFailure` and interrupting.
 - A stale or inferred snapshot must say so; it cannot silently override fresher official/native evidence.
-- For Pi, `agent_end` alone is not completion because retry or compaction may follow. `agent_settled`, shutdown, or a documented expiry is needed.
+- For OMP, `agent_end.willContinue=true` remains running. A terminal `agent_end` becomes task failure only when the final assistant message has `stopReason=error`; other terminal outcomes become review-ready. Shutdown or documented expiry cleans up non-terminal snapshots.
 - For ZCode, the lack of SessionEnd requires Stop/process/expiry reconciliation; no synthetic SessionEnd may be invented.
 - A missing native identity changes actionability and return quality, not necessarily the observed task state.
 
@@ -78,10 +78,10 @@ Aggregate five-agent numbers are supplementary and cannot hide a weak adapter.
 
 Actionability is one of in-app action, exact native return, native app focus, project-location fallback, or view-only. The future UI must announce which class is available. If a stronger path fails, the returned result changes to the actual fallback class; it must not preserve an earlier success label.
 
-Only Claude Code has a verified in-app permission/question/plan response path in this baseline. Codex opens its native thread for input. Cursor and ZCode remain native-surface-only in the first adapter. Pi is strictly state-only and cannot call approval, message injection, cancellation, navigation, or session-mutation APIs.
+Only Claude Code has a verified in-app permission/question/plan response path in this baseline. Codex opens its native thread for input. Cursor and ZCode remain native-surface-only in the first adapter. OMP is strictly state-only and cannot call approval, message injection, cancellation, navigation, or session-mutation APIs.
 
-For return classification in this baseline, Codex deep-link dispatch and Claude `--resume` dispatch both remain `unknown`; neither is exact success without a separate destination identity check. Claude may return `exactSession` only after a matching live process plus process-start identity is located at the exact terminal tab. Cursor and ZCode never return exact in this baseline. Pi's exact-return capability is `unsupported`, and every Pi open result is `unavailable`.
+For return classification in this baseline, Codex deep-link dispatch and Claude `--resume` dispatch both remain `unknown`; neither is exact success without a separate destination identity check. Claude may return `exactSession` only after a matching live process plus process-start identity is located at the exact terminal tab. Cursor and ZCode never return exact in this baseline. OMP's exact-return capability is `unsupported`, and every OMP open result is `unavailable`.
 
 ## Version and configuration boundary
 
-These truth labels apply only to Codex 0.145.0, Claude Code 2.1.226, Cursor Desktop 3.15.6 plus Agent CLI 2026.04.14-ee4b43a, ZCode 3.7.6 (build 3.7.6.4691), and Pi 0.84.1 on the captured Mac. `validated` requires an exact match for every declared component. A missing component, a partial match, or any drift is `unvalidated` and cannot inherit the pinned version's capability claims. Discovery is read-only. In particular, it must not create the absent ZCode user CLI configuration or edit existing Claude, Cursor, or Pi integration files.
+These truth labels apply only to Codex 0.145.0, Claude Code 2.1.226, Cursor Desktop 3.15.6 plus Agent CLI 2026.04.14-ee4b43a, ZCode 3.7.6 (build 3.7.6.4691), and OMP 17.3.2 on the captured Mac. `validated` requires an exact match for every declared component. A missing component, a partial match, or any drift is `unvalidated` and cannot inherit the pinned version's capability claims. Discovery is read-only. In particular, it must not create the absent ZCode user CLI configuration or edit existing Claude, Cursor, or OMP integration files.

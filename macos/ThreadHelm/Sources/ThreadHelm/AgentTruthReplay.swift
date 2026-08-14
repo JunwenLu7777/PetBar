@@ -658,6 +658,8 @@ private struct AgentTruthSignalNormalizer {
             || signal.contains("task failure")
             || signal.contains("task error")
             || signal.contains("terminal error")
+            || (signal.contains("agent_end with willcontinue=false")
+                && signal.contains("stopreason=error"))
         {
             return .taskFailure
         }
@@ -666,6 +668,8 @@ private struct AgentTruthSignalNormalizer {
             || signal.contains("normal terminal lifecycle outcome")
             || signal.contains("classified successful")
             || signal.contains("verified successful outcome")
+            || (signal.contains("agent_end with willcontinue=false")
+                && signal.contains("no assistant error"))
         {
             return .completion
         }
@@ -707,7 +711,7 @@ private struct AgentTruthSignalNormalizer {
         case .appFallback, .workingDirectoryFallback, .unsupported:
             return true
         case .returnUnknown:
-            return agentID == .cursor || agentID == .zcode || agentID == .pi
+            return agentID == .cursor || agentID == .zcode || agentID == .omp
         default:
             return false
         }
@@ -782,8 +786,8 @@ private struct AgentTruthSignalNormalizer {
                 signal: signal,
                 observedAt: observedAt
             )
-        case .pi:
-            return try piEvents(
+        case .omp:
+            return try ompEvents(
                 semantic: semantic,
                 scenarioID: scenarioID,
                 signal: signal,
@@ -987,7 +991,7 @@ private struct AgentTruthSignalNormalizer {
         return try adapter.observe().events
     }
 
-    private func piEvents(
+    private func ompEvents(
         semantic: TruthSignalSemantic,
         scenarioID: String,
         signal: String,
@@ -1000,10 +1004,10 @@ private struct AgentTruthSignalNormalizer {
             eventType = "session_start"
             state = .idle
         case .taskFailure:
-            eventType = "agent_settled"
+            eventType = "agent_end"
             state = .failed
         case .completion:
-            eventType = "agent_settled"
+            eventType = "agent_end"
             state = .completed
         default:
             if signal.contains("agent_end") {
@@ -1021,7 +1025,7 @@ private struct AgentTruthSignalNormalizer {
             && signal.contains("absent")
         let evidence = evidenceQuality(semantic: semantic, signal: signal)
         let envelope = AgentTransportEnvelope(
-            agentID: .pi,
+            agentID: .omp,
             adapterVersion: adapterVersion,
             nativeSessionCandidate: missingIdentity ? nil : Self.nativeSessionID,
             eventID: "\(scenarioID)-event",
@@ -1037,10 +1041,10 @@ private struct AgentTruthSignalNormalizer {
                 "freshness": "fresh",
             ]
         )
-        guard let event = piAgentEvent(from: envelope, observedAt: observedAt)
+        guard let event = ompAgentEvent(from: envelope, observedAt: observedAt)
         else {
             throw AgentTruthReplayError.invalidFixture(
-                "\(scenarioID) 不能归一化 Pi 事件"
+                "\(scenarioID) 不能归一化 OMP 事件"
             )
         }
         return [event]
@@ -1127,7 +1131,7 @@ private struct AgentTruthSignalNormalizer {
             switch agentID {
             case .codex, .cursor, .zcode: return .openNativeApp
             case .claudeCode: return .openWorkingDirectory
-            case .pi: return .viewOnly
+            case .omp: return .viewOnly
             default: return .viewOnly
             }
         }
@@ -1141,7 +1145,7 @@ private struct AgentTruthSignalNormalizer {
             return .openExactNativeSession
         case .cursor, .zcode:
             return .openNativeApp
-        case .pi:
+        case .omp:
             return .viewOnly
         default:
             return .viewOnly
@@ -1177,7 +1181,7 @@ private struct AgentTruthSignalNormalizer {
         case .returnUnknown:
             switch agentID {
             case .codex, .claudeCode: return .nativeState
-            case .cursor, .pi: return .officialAPI
+            case .cursor, .omp: return .officialAPI
             case .zcode: return .processObservation
             default: return .unknown
             }
@@ -1206,7 +1210,7 @@ private struct AgentTruthSignalNormalizer {
             switch agentID {
             case .codex: return .nativeState
             case .claudeCode: return .officialAPI
-            case .cursor, .zcode, .pi: return .officialHook
+            case .cursor, .zcode, .omp: return .officialHook
             default: return .unknown
             }
         case .discovery, .stale, .offline:
@@ -1227,7 +1231,7 @@ private struct AgentTruthSignalNormalizer {
             invokedExactTarget = true
             confirmed = true
         case .returnUnknown:
-            if agentID == .pi {
+            if agentID == .omp {
                 result = .unavailable
                 invokedExactTarget = false
             } else {
@@ -1252,7 +1256,7 @@ private struct AgentTruthSignalNormalizer {
             switch agentID {
             case .claudeCode: result = .workingDirectoryFallback
             case .codex, .cursor, .zcode: result = .appFocused
-            case .pi: result = .unavailable
+            case .omp: result = .unavailable
             default: result = .unavailable
             }
             invokedExactTarget = false

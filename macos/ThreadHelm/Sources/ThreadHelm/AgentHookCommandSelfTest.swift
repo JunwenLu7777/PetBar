@@ -59,27 +59,29 @@ func runAgentHookCommandSelfTest() {
         failAgentHookCommandSelfTest("ordinary Cursor tool failure")
     }
 
-    guard let pi = agentHookEnvelope(
-        agentID: .pi,
-        eventType: "agent_settled",
-        input: .object(raw),
-        monotonicNanoseconds: 44
-    ), pi.redactedPayload["state"] == "failed",
-       pi.redactedPayload["attentionReason"] == "taskFailure",
-       pi.redactedPayload["actionability"] == "viewOnly"
-    else {
-        failAgentHookCommandSelfTest("Pi state-only mapping")
-    }
-
-    guard let intermediatePi = agentHookEnvelope(
-        agentID: .pi,
+    guard let omp = agentHookEnvelope(
+        agentID: .omp,
         eventType: "agent_end",
         input: .object(raw),
+        monotonicNanoseconds: 44
+    ), omp.redactedPayload["state"] == "failed",
+       omp.redactedPayload["attentionReason"] == "taskFailure",
+       omp.redactedPayload["actionability"] == "viewOnly"
+    else {
+        failAgentHookCommandSelfTest("OMP state-only mapping")
+    }
+
+    var continuing = raw
+    continuing["outcome"] = "continuing"
+    guard let intermediateOMP = agentHookEnvelope(
+        agentID: .omp,
+        eventType: "agent_end",
+        input: .object(continuing),
         monotonicNanoseconds: 45
-    ), intermediatePi.redactedPayload["state"] == "running",
-       intermediatePi.redactedPayload["attentionReason"] == "none",
+    ), intermediateOMP.redactedPayload["state"] == "running",
+       intermediateOMP.redactedPayload["attentionReason"] == "none",
        agentHookEnvelope(
-           agentID: .pi,
+           agentID: .omp,
            eventType: "permission",
            input: .object(raw)
        ) == nil,
@@ -89,7 +91,7 @@ func runAgentHookCommandSelfTest() {
            input: .malformed
        ) == nil
     else {
-        failAgentHookCommandSelfTest("Pi intermediate/unsupported/malformed")
+        failAgentHookCommandSelfTest("OMP intermediate/unsupported/malformed")
     }
 
     guard let oversized = agentHookEnvelope(

@@ -61,10 +61,10 @@ func runAgentAttentionFeedbackSelfTest() {
           snapshot.totals(for: .claudeCode).count(.unnecessary) == 1,
           snapshot.totals(for: .cursor).count(.wrongState) == 1,
           snapshot.totals(for: .zcode).count(.wrongSession) == 1,
-          snapshot.totals(for: .pi).rawCount == 0,
+          snapshot.totals(for: .omp).rawCount == 0,
           attentionFeedbackDiagnosticText(snapshot).contains("样本不足"),
           attentionFeedbackDiagnosticText(snapshot).contains("codex 1"),
-          attentionFeedbackDiagnosticText(snapshot).contains("pi 0")
+          attentionFeedbackDiagnosticText(snapshot).contains("omp 0")
     else {
         failAgentAttentionFeedbackSelfTest("raw local totals")
     }
