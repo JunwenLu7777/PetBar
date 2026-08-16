@@ -515,22 +515,45 @@ func perform(
 > path/errno/mode 的裸枚举，先做**零行为变化的诊断增强**再推一次，一轮就拿到确切答案，
 > 而根因既不是评审推断的、也不是实施者推断的。**不要盲改。**
 
-### 10.4 已知遗留（均判定为不阻塞）
+### 10.4 遗留项及处理结果（截至 2026-08-16）
 
-1. **single-flight 合并会吸收集成后的重探测**：若集成完成时正有一次未抑制的刷新在飞，
-   suppress 刷新被并入，快照可能落下写盘前的旧状态，按钮短暂回到「一键安装」，
-   最长一个周期（300s）自愈。不成环——被最小间隔挡住。
-   改法：合并时记一个「需跟进刷新」标记，在飞完成后再串一次探测。
-2. **互斥期间点击被静默吞掉**：某个 Agent 配置中时，其他行按钮仍显示可点，
-   点击被 `isPerformingIntegration` 吞掉且无反馈。
-3. **CLI `--agent <id>` 未做**（§8 Q3），§7 对应验收项悬空。
-4. **`performAgentIntegration` 里 `activeVersion` 的回退未复用
-   `agentAutoIntegrationBackoffVersion(for:)`**，缺一级 `versionComponents` 回退。
-   当前所有生产构造下两者外延等价，属隐患非现实 bug。
-5. **`THREADHELM_REQUIRE_OMP` 严格开关**：若 `locateOMPExecutable` 因 PATH 异常在
-   装了 OMP 的机器上误判为 nil，扩展加载验证会静默降级为 skip。建议加严格开关。
-6. **12% 空载 CPU**（既有，与本计划无关）：60 秒空闲窗口实测，最可疑是每 0.5 秒的
-   `agentHookDropTimer`（`AppDelegate.swift:989`）。集成状态探测整轮只要 27ms，
-   本计划的 5 分钟定时器在该窗口内最多贡献 0.3%。
+1. **已修复 single-flight 合并会吸收集成后的重探测**：`refreshAgentRuntimeStatuses`
+   在合并请求时记录 follow-up，并在当前刷新落地后串行执行一轮真正的新探测；
+   等 follow-up 完成后才释放合并请求的 completion。
+2. **已修复互斥期间点击被静默吞掉**：集成状态按 Agent 记录；同一 Agent 的重复触发
+   保持「正在配置…」，其他 Agent 显示「另一个 Agent 正在配置，请稍候」。
+3. **已修复 CLI `--agent <id>`**：`--agent-integrations` 支持可选目标 Agent，
+   `status/install/repair/uninstall` 均传递目标；不传时保持原有全量行为。
+4. **原记录已过期**：`activeVersion` 的两条路径在本节写入前已复用
+   `agentAutoIntegrationBackoffVersion(for:)`，其定义含 `versionComponents` 回退。
+5. **已修复 `THREADHELM_REQUIRE_OMP` 严格开关**：设置为 `1` 时，生成扩展的
+   OMP 加载自测找不到 OMP 会显式失败；未设置时保留 CI 上的可见 skip。
+6. **空载 CPU：状态相关，安静空载下未复现**（既有，与本计划无关）。两次同口径
+   （`ps -o time=` 60 秒差值）采样：
+
+   | 时机 | 结果 |
+   | :--- | :--- |
+   | 进程启动约 8 分钟 | 60 秒内消耗 **7.18 秒** CPU ≈ 12% |
+   | 稳定运行后 | 累计 CPU 时间未跨到下一整秒，`ps %cpu = 0.2`，按整秒精度上界 <1.7% |
+
+   7.18 秒**不是** `ps` 取整能解释的，那次 12% 是真实发生的，只是与状态相关
+   （启动期工作，或采样窗内恰有 hook / agent 流量）。一次安静窗口的复测只能说明
+   「安静空载下不复现」，**不能反证**原观测。
+
+   `agentHookDropTimer`（每 0.5 秒，`AppDelegate.swift:989`）仍是首要嫌疑，但
+   没有稳定复现就没有靶子，**不做猜测性优化**。下次要查，应先在启动后立即采样、
+   并记录当时的 hook 投递速率。
+
+7. **CI `macos-14` 镜像有移除期限**：官方公告（actions/runner-images#13518）
+   2026-07-06 起弃用、**2026-11-02 完全停止支持**。它是 `arm64-apple-macos12.3`
+   唯一的老 Foundation 覆盖（那个 `mkdtemp` 未定义行为只在它上面暴露过），
+   所以不能一红就删。弃用期内的排队延迟与 brownout 不是回归。
+   期限前需决定替代方案，细节见 `.github/workflows/validate.yml` 顶部注释。
+
+8. ~~分支保护的 required checks 需核对~~ **已核对，无影响**：改成矩阵后 check 名
+   由 `threadhelm-macos` 变为 `threadhelm-macos (macos-14, Xcode_15.4)` 等两个，
+   但 `main` 当前未启用分支保护（`gh api …/branches/main/protection` 返回
+   404 Branch not protected），没有钉住旧名的 required check。
+   将来若启用分支保护，要按新的 check 名配置。
 
 Phase 1 单独上线即可消除 §1.2 的核心痛点（用户不必再开终端）；Phase 2 属于体验增强，不应阻塞 Phase 1。
