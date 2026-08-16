@@ -52,6 +52,58 @@ private struct FailingManagedAdapter: AgentAdapter {
     }
 }
 
+/// 与 `FailingManagedAdapter` 的区别：它**先真正落盘再失败**。
+/// 只有这样，回滚断言才可能变红——如果备份作用域被改坏（为空、或漏掉本
+/// Agent），垃圾内容就会留在盘上，字节级断言随即失败。
+private struct WritingThenFailingManagedAdapter: AgentAdapter {
+    static let managedRelativePath = ".writing-failure/threadhelm.json"
+    static let agentID = AgentID(rawValue: "writingTransactionFailure")
+
+    let metadata = AgentMetadata(
+        id: WritingThenFailingManagedAdapter.agentID,
+        displayName: "Writing Transaction Failure",
+        shortName: "WriteFailure",
+        iconResourceName: "ProviderIcon-test",
+        fallbackSymbolName: "exclamationmark.triangle",
+        brandColor: AgentColorComponents(red: 1, green: 0, blue: 0),
+        versionSource: "self-test",
+        identityPolicy: "self-test",
+        capabilities: AgentCapabilitySet(supported: [.managedIntegration])
+    )
+
+    var managedIntegrationRelativePaths: [String] {
+        [WritingThenFailingManagedAdapter.managedRelativePath]
+    }
+
+    func discover() -> AgentDiscovery {
+        AgentDiscovery(
+            isInstalled: true,
+            version: "self-test",
+            compatibility: .validated
+        )
+    }
+
+    func integrationStatus(
+        in scope: AgentIntegrationScope
+    ) -> AgentIntegrationStatus {
+        .notInstalled
+    }
+
+    func installIntegration(
+        in scope: AgentIntegrationScope
+    ) throws -> AgentIntegrationOperationResult {
+        let url = scope.rootDirectory.appendingPathComponent(
+            WritingThenFailingManagedAdapter.managedRelativePath
+        )
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(#"{"owner":"half-written-garbage"}"#.utf8).write(to: url)
+        throw IntegrationManagerSelfTestError.expectedFailure
+    }
+}
+
 func runAgentIntegrationManagerSelfTest() {
     let fileManager = FileManager.default
     let root = fileManager.temporaryDirectory.appendingPathComponent(
@@ -181,9 +233,211 @@ func runAgentIntegrationManagerSelfTest() {
                 isDirectory: true
             )
         )
+        try runSingleAgentTargetedSelfTest(
+            root: root.appendingPathComponent(
+                "single-agent-target",
+                isDirectory: true
+            )
+        )
+        try runSingleAgentTargetedRollbackSelfTest(
+            root: root.appendingPathComponent(
+                "single-agent-target-rollback",
+                isDirectory: true
+            )
+        )
         runIntegrationCLIParsingSelfTest(root: root)
     } catch {
         failIntegrationManagerSelfTest("unexpected error: \(error)")
+    }
+}
+
+private func runSingleAgentTargetedSelfTest(root: URL) throws {
+    let fileManager = FileManager.default
+    try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+    let fixtures = try makeIntegrationManagerFixtures(at: root)
+    let registry = makeIntegrationManagerRegistry()
+    let manager = AgentIntegrationManager(registry: registry)
+    let scope = AgentIntegrationScope.isolated(at: root)
+
+    let cursorReport = try manager.perform(.install, targetAgentID: .cursor, in: scope)
+    guard cursorReport.operation == .install,
+          cursorReport.backupID != nil,
+          cursorReport.agents.count == 1,
+          cursorReport.agents.first?.agentID == .cursor,
+          cursorReport.agents.first?.result == .installed,
+          cursorReport.agents.first?.statusAfter == .installed,
+          try Data(contentsOf: fixtures.claudeURL) == fixtures.originalClaude,
+          try Data(contentsOf: fixtures.zcodeURL) == fixtures.originalZCode,
+          try Data(contentsOf: fixtures.ompUnrelatedURL) == fixtures.unrelatedOMP,
+          !fileManager.fileExists(atPath: fixtures.ompManagedDirectory.path)
+    else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "single-agent targeted install did not isolate modification to Cursor"
+        )
+    }
+
+    let cursorRepeat = try manager.perform(.install, targetAgentID: .cursor, in: scope)
+    guard cursorRepeat.agents.first?.result == .unchanged else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "single-agent targeted repeat install must return unchanged"
+        )
+    }
+
+    let driftedManager = AgentIntegrationManager(
+        registry: makeIntegrationManagerRegistry(compatibility: .unvalidated)
+    )
+    let driftedScope = AgentIntegrationScope.isolated(at: root.appendingPathComponent("drifted", isDirectory: true))
+    try fileManager.createDirectory(at: driftedScope.rootDirectory, withIntermediateDirectories: true)
+    let unvalidatedReport = try driftedManager.perform(
+        AgentIntegrationOperation.install,
+        targetAgentID: AgentID.cursor,
+        in: driftedScope
+    )
+    guard unvalidatedReport.agents.first?.result == .unchanged else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "single-agent unvalidated target install must return unchanged"
+        )
+    }
+
+    guard !fileManager.fileExists(
+        atPath: driftedScope.rootDirectory
+            .appendingPathComponent(".cursor/hooks.json").path
+    ) else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "unvalidated target must not create vendor configuration"
+        )
+    }
+
+    let emptyRegistry = AgentRegistry(adapters: [])
+    let emptyManager = AgentIntegrationManager(registry: emptyRegistry)
+    do {
+        _ = try emptyManager.perform(.install, targetAgentID: .cursor, in: scope)
+        throw IntegrationManagerSelfTestError.assertion(
+            "single-agent with missing adapter must throw error"
+        )
+    } catch is AgentIntegrationManagerError {
+        // Expected
+    }
+}
+
+/// 定向失败回滚：备份范围已收敛到单个 Agent，因此失败回滚也必须只还原该
+/// Agent 的受管路径，且其他 Agent 的宿主配置全程字节不变。
+private func runSingleAgentTargetedRollbackSelfTest(root: URL) throws {
+    let fileManager = FileManager.default
+    try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+
+    let claudeURL = root.appendingPathComponent(".claude/settings.json")
+    try fileManager.createDirectory(
+        at: claudeURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    let claudeOriginal = Data(#"{"model":"targeted-rollback-bystander"}"#.utf8)
+    try claudeOriginal.write(to: claudeURL)
+
+    let failureURL = root.appendingPathComponent(
+        WritingThenFailingManagedAdapter.managedRelativePath
+    )
+    try fileManager.createDirectory(
+        at: failureURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    let failureOriginal = Data(#"{"owner":"targeted-rollback-original"}"#.utf8)
+    try failureOriginal.write(to: failureURL)
+
+    let installed = {
+        AgentDiscovery(
+            isInstalled: true,
+            version: "self-test",
+            compatibility: .validated
+        )
+    }
+    let registry = AgentRegistry(adapters: [
+        ClaudeCodeAgentAdapter(
+            readCollection: { .displaying([]) },
+            discovery: installed
+        ),
+        WritingThenFailingManagedAdapter(),
+    ])
+    let manager = AgentIntegrationManager(registry: registry)
+    let failureAgentID = WritingThenFailingManagedAdapter.agentID
+
+    do {
+        _ = try manager.perform(
+            .install,
+            targetAgentID: failureAgentID,
+            in: .isolated(at: root)
+        )
+        throw IntegrationManagerSelfTestError.assertion(
+            "targeted install on a failing adapter must throw"
+        )
+    } catch let error as AgentIntegrationManagerError {
+        guard error.didRollback, error.agentID == failureAgentID else {
+            throw IntegrationManagerSelfTestError.assertion(
+                "targeted rollback must report didRollback and the failing agent"
+            )
+        }
+    }
+
+    // 该 adapter 会先写入垃圾再抛错，所以这条断言只有在回滚真的发生、
+    // 且备份作用域确实包含了目标 Agent 时才成立。
+    guard try Data(contentsOf: failureURL) == failureOriginal else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "targeted rollback must restore the target agent byte-for-byte"
+        )
+    }
+    guard try Data(contentsOf: claudeURL) == claudeOriginal else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "targeted rollback must leave other agents untouched"
+        )
+    }
+
+    // 封死"备份作用域过宽"这一侧：清单里记录的路径必须恰好是目标 Agent 的
+    // 受管路径，绝不能把其他 Agent 的配置一起纳入备份与回滚范围。
+    try assertTargetedBackupScope(
+        root: root,
+        expectedRelativePaths: [
+            WritingThenFailingManagedAdapter.managedRelativePath,
+        ]
+    )
+}
+
+/// 读取本次运行留下的备份清单，断言其覆盖范围。
+private func assertTargetedBackupScope(
+    root: URL,
+    expectedRelativePaths: [String]
+) throws {
+    let fileManager = FileManager.default
+    let backupRoot = root
+        .appendingPathComponent(
+            "Library/Application Support/ThreadHelm/Integration Backups",
+            isDirectory: true
+        )
+    let backups = try fileManager.contentsOfDirectory(
+        at: backupRoot,
+        includingPropertiesForKeys: nil
+    )
+    guard backups.count == 1 else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "targeted run must leave exactly one backup, found \(backups.count)"
+        )
+    }
+    let manifestURL = backups[0].appendingPathComponent("manifest.json")
+    guard
+        let manifest = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: manifestURL)
+        ) as? [String: Any],
+        let items = manifest["items"] as? [[String: Any]]
+    else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "targeted backup manifest is unreadable"
+        )
+    }
+    let recorded = Set(items.compactMap { $0["relativePath"] as? String })
+    guard recorded == Set(expectedRelativePaths) else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "targeted backup scope must cover exactly the target agent paths; "
+                + "expected \(Set(expectedRelativePaths)), got \(recorded)"
+        )
     }
 }
 

@@ -71,6 +71,7 @@ struct AgentIntegrationManager {
 
     func perform(
         _ operation: AgentIntegrationOperation,
+        targetAgentID: AgentID? = nil,
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationRunReport {
         guard operation == .install
@@ -85,15 +86,24 @@ struct AgentIntegrationManager {
             )
         }
 
+        if let targetAgentID, registry.adapter(for: targetAgentID) == nil {
+            throw AgentIntegrationManagerError(
+                operation: operation,
+                agentID: targetAgentID,
+                reason: "未找到指定的 Agent：\(targetAgentID.rawValue)",
+                didRollback: false
+            )
+        }
+
         let backupStore = AgentIntegrationBackupStore(scope: scope)
-        let relativePaths = managedRelativePaths()
+        let relativePaths = managedRelativePaths(for: targetAgentID)
         let backup: AgentIntegrationBackup
         do {
             backup = try backupStore.create(relativePaths: relativePaths)
         } catch {
             throw AgentIntegrationManagerError(
                 operation: operation,
-                agentID: nil,
+                agentID: targetAgentID,
                 reason: error.localizedDescription,
                 didRollback: false
             )
@@ -101,8 +111,9 @@ struct AgentIntegrationManager {
 
         var records: [AgentIntegrationRunRecord] = []
         var activeAgentID: AgentID?
+        let candidateAgentIDs = targetAgentID.map { [$0] } ?? registry.agentIDs
         do {
-            for agentID in registry.agentIDs {
+            for agentID in candidateAgentIDs {
                 guard let adapter = registry.adapter(for: agentID) else {
                     continue
                 }
@@ -193,9 +204,10 @@ struct AgentIntegrationManager {
         }
     }
 
-    private func managedRelativePaths() -> [String] {
+    private func managedRelativePaths(for targetAgentID: AgentID? = nil) -> [String] {
         var seen: Set<String> = []
-        return registry.agentIDs.flatMap { agentID -> [String] in
+        let candidateIDs = targetAgentID.map { [$0] } ?? registry.agentIDs
+        return candidateIDs.flatMap { agentID -> [String] in
             registry.adapter(for: agentID)?.managedIntegrationRelativePaths
                 ?? []
         }.filter { seen.insert($0).inserted }
