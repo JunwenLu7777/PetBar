@@ -102,6 +102,7 @@ verify_app_self_tests() {
     '--self-test-client-contract|client-contract-self-test:'
     '--self-test-threadhelm-edition|threadhelm-edition-self-test:'
     '--self-test-dynamic-island|dynamic-island:'
+    '--self-test-agent-integration-manager|agent-integration-manager-self-test:'
   )
   for check in "${checks[@]}"; do
     flag="${check%%|*}"

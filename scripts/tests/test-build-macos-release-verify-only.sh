@@ -71,6 +71,7 @@ case \"\${1:-}\" in
   --self-test-client-contract) echo 'client-contract-self-test: pass' ;;
   --self-test-threadhelm-edition) echo 'threadhelm-edition-self-test: pass' ;;
   --self-test-dynamic-island) echo 'dynamic-island: pass' ;;
+  --self-test-agent-integration-manager) echo 'agent-integration-manager-self-test: pass' ;;
   *) exit 64 ;;
 esac
 "

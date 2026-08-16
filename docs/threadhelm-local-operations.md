@@ -60,6 +60,14 @@ BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 
 该基线里 Codex 精确返回仍是 `unknown`；Claude Code 只有同时匹配会话、活进程和 process-start identity 才可能是 exact，否则降为 `unknown`；Cursor 与 ZCode 不宣称 exact；OMP 的精确返回能力是 `unsupported`，打开结果只能是 `unavailable`。发布脚本会执行同一回放，并把真值夹具纳入 release 输入时间；夹具更新后旧 ZIP 会被判为 stale。
 
+受管集成的逻辑契约可以单独验证，不受其他适配器自测影响：
+
+```bash
+"$BIN" --self-test-agent-integration-manager
+```
+
+它覆盖安装、修复、卸载生命周期、备份与恢复、失败回滚、单 Agent 定向作用域与定向回滚、固定版本门禁和命令行边界。同一批断言也会在 `--self-test-task-progress` 中运行，但那条链会先跑一批与集成无关的适配器自测，任何一条失败都会在集成自测之前退出。
+
 ## 检查、安装、修复和卸载集成
 
 用户可在 ThreadHelm 的 **Agents 详情页** 直接点击对应已验证 Agent 的 `[ 一键安装 ]` 或 `[ 立即修复 ]` 按钮触发受管集成安装；也可通过终端命令行进行批量运维。

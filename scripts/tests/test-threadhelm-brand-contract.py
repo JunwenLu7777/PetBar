@@ -115,6 +115,7 @@ assert self_test_flags == {
     "--self-test-claude-hook",
     "--self-test-dynamic-island",
     "--self-test-client-contract",
+    "--self-test-agent-integration-manager",
 }
 for flag in self_test_flags:
     assert flag in validate_workflow, f"CI does not run {flag}"

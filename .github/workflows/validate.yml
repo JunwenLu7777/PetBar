@@ -52,6 +52,7 @@ jobs:
           "$BIN" --self-test-claude-hook | grep -F 'claude-hook-self-test:'
           "$BIN" --self-test-client-contract | grep -F 'agent-transport=64KiB+250ms+metadata-only+fail-open'
           "$BIN" --self-test-dynamic-island | grep -F 'presentation=dynamic-island-only'
+          "$BIN" --self-test-agent-integration-manager | grep -F 'agent-integration-manager-self-test:'
           "$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents | grep -F 'agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged'
       - name: Run script regression tests
         run: |

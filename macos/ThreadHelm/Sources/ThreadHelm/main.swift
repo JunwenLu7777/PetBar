@@ -68,6 +68,18 @@ if CommandLine.arguments.contains("--self-test-task-progress") {
     runTaskProgressSelfTest()
 }
 
+// 受管集成的逻辑自测也挂在 --self-test-task-progress 上，但那条链会先跑
+// 一批与集成无关的适配器自测；任何一条失败都会在集成自测之前 exit(1)。
+// 这个独立入口保证集成契约始终可以被单独验证。
+if CommandLine.arguments.contains("--self-test-agent-integration-manager") {
+    runAgentIntegrationManagerSelfTest()
+    print(
+        "agent-integration-manager-self-test: lifecycle+backup+restore+rollback"
+            + "+targeted-scope+targeted-rollback+version-gate+cli-boundary"
+    )
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--self-test-threadhelm-edition") {
     runThreadHelmEditionSelfTest()
 }
