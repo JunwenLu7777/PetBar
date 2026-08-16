@@ -443,12 +443,21 @@ private final class AgentEventSocketSelfTest {
                 .appendingPathComponent("threadhelm-event-socket.XXXXXX")
                 .utf8CString
         )
-        guard let directoryPath = template.withUnsafeMutableBufferPointer({
-            mkdtemp($0.baseAddress)
-        }) else {
+        // mkdtemp 原地改写并返回传入的那个指针，它指向 template 的缓冲区，
+        // 只在闭包内有效。把指针带出闭包再 String(cString:) 是未定义行为：
+        // 本机碰巧还能读到正确字节，CI runner 上读到空串，于是
+        // URL(fileURLWithPath: "") 解析成当前工作目录，socket 被建到了
+        // 仓库检出根目录下——那里是 0755，随即被 owner-only 检查拒绝。
+        // 字符串必须在闭包内就地构造。
+        let directoryPath = template.withUnsafeMutableBufferPointer {
+            buffer -> String? in
+            guard let created = mkdtemp(buffer.baseAddress) else { return nil }
+            return String(cString: created)
+        }
+        guard let directoryPath, !directoryPath.isEmpty else {
             throw fail("mktemp")
         }
-        let directoryURL = URL(fileURLWithPath: String(cString: directoryPath))
+        let directoryURL = URL(fileURLWithPath: directoryPath)
         defer {
             try? FileManager.default.removeItem(at: directoryURL)
         }
