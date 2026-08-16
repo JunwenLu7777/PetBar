@@ -519,16 +519,18 @@ final class DynamicIslandAgentHealthViewController:
         let title: String
         let detail: String
         let color: NSColor
+        // 在 Optional<Bool> 上直接匹配 true/false/nil 只有较新的 Swift 认作穷尽，
+        // CI runner 的编译器会要求补 .some(_)。先解包再分支，任何版本都成立。
         switch eventChannelAvailable {
-        case true:
+        case .some(let isAvailable) where isAvailable:
             title = "本地事件通道正常"
             detail = "实时事件可用；本地轮询继续作为兜底"
             color = DynamicIslandPalette.green
-        case false:
+        case .some:
             title = "本地事件通道已降级"
             detail = "实时事件暂不可用；本地轮询仍会继续工作"
             color = DynamicIslandPalette.amber
-        case nil:
+        case .none:
             title = "本地事件通道检查中"
             detail = "尚未拿到通道状态；本地轮询仍会继续工作"
             color = DynamicIslandPalette.secondaryText
