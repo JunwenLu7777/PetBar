@@ -12,18 +12,27 @@ func runOMPAgentAdapterSelfTest() {
         try runOMPDelayedVersionDiscoverySelfTest()
         try runOMPIntegrationLifecycleSelfTest()
         try runOMPStateOnlyContractSelfTest()
-        try runOMPGeneratedExtensionLoadSelfTest()
+        let extensionLoad = try runOMPGeneratedExtensionLoadSelfTest()
         try runOMPEventReductionSelfTest()
         try runOMPTransportContractSelfTest()
         print(
             "omp-agent-adapter-self-test: lifecycle=install+repeat+status+repair+repeat-uninstall+partial+preserve+live-home-guard "
-                + "state-only=open-unavailable+no-control-fields+installed-jiti-load "
+                + "state-only=open-unavailable+no-control-fields+"
+                + "installed-jiti-load=\(extensionLoad.rawValue) "
                 + "events=offline+slow+malformed+duplicate+out-of-order+shutdown-stale"
         )
     } catch {
         fputs("omp-agent-adapter-self-test failed: \(error)\n", stderr)
         exit(1)
     }
+}
+
+/// 生成的扩展是否真的在本机 OMP 运行时里被加载过。
+/// 这条断言需要一个真实安装的 OMP，CI runner 上通常没有——那里既不该当成
+/// 通过，也不该当成失败，只能如实报告"未覆盖"。
+enum OMPExtensionLoadCoverage: String {
+    case verified
+    case skippedNoLocalOMP = "skipped-no-local-omp"
 }
 
 private func runOMPDelayedVersionDiscoverySelfTest() throws {
@@ -319,7 +328,9 @@ private func runOMPStateOnlyContractSelfTest() throws {
     }
 }
 
-private func runOMPGeneratedExtensionLoadSelfTest() throws {
+private func runOMPGeneratedExtensionLoadSelfTest() throws
+    -> OMPExtensionLoadCoverage
+{
     let manager = FileManager.default
     let temporaryRoot = manager.temporaryDirectory.appendingPathComponent(
         "threadhelm-omp-extension-load-self-test-\(UUID().uuidString)",
@@ -327,10 +338,15 @@ private func runOMPGeneratedExtensionLoadSelfTest() throws {
     )
     defer { try? manager.removeItem(at: temporaryRoot) }
 
+    // 没装 OMP 就没有可加载扩展的运行时。把这当失败会让任何没有 OMP 的
+    // 环境（CI runner）永远红，且红的原因与被测代码无关；如实报告未覆盖，
+    // 并在摘要里留痕，比假装通过或假装失败都诚实。
     guard let ompExecutable = locateOMPExecutable() else {
-        throw OMPAgentAdapterSelfTestError.failed(
-            "installed OMP executable is required for extension load test"
+        fputs(
+            "omp-agent-adapter-self-test: 未发现本机 OMP，跳过生成扩展的加载验证\n",
+            stderr
         )
+        return .skippedNoLocalOMP
     }
     let adapter = OMPAgentAdapter(
         discovery: {
@@ -448,6 +464,7 @@ private func runOMPGeneratedExtensionLoadSelfTest() throws {
                 + "; last output: \(diagnostic.isEmpty ? "<empty>" : String(diagnostic))"
         )
     }
+    return .verified
 }
 
 private func runOMPEventReductionSelfTest() throws {
