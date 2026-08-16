@@ -702,7 +702,15 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
         card.frame = bounds.insetBy(dx: 4, dy: 2)
         iconBadge.frame = NSRect(x: 12, y: 32, width: 36, height: 36)
         iconView.frame = NSRect(x: 20, y: 40, width: 20, height: 20)
-        let rightX = max(500, card.bounds.width - 290)
+        // 右列从卡片右边缘反推，而不是用一个固定下限。原来的 max(500, …) 在
+        // 实际渲染宽度（卡片约 758pt）下会让 500+270 超出卡片 12pt，所有右对齐
+        // 文本都贴边溢出被裁；瞬态文案更长，裁得更明显。
+        let rightColumnWidth: CGFloat = 270
+        let rightInset: CGFloat = 12
+        let rightX = max(
+            200,
+            card.bounds.width - rightColumnWidth - rightInset
+        )
         let leftWidth = max(180, rightX - 76)
         nameField.frame = NSRect(x: 60, y: 74, width: leftWidth, height: 18)
         versionField.frame = NSRect(x: 60, y: 55, width: leftWidth, height: 17)
