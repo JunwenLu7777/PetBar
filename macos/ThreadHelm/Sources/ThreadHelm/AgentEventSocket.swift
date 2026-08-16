@@ -330,21 +330,66 @@ private enum AgentEventSocketFileSystem {
                 throw AgentEventSocketError.directoryCreationFailed
             }
             guard chmod(directoryURL.path, S_IRWXU) == 0 else {
+                reportSocketDirectoryRejection(
+                    directoryURL,
+                    predicate: "chmod",
+                    errorNumber: errno
+                )
                 throw AgentEventSocketError.directoryPermissionFailed
             }
         } else if !isDirectory.boolValue {
             throw AgentEventSocketError.directoryCreationFailed
         }
         var statBuffer = stat()
-        guard lstat(directoryURL.path, &statBuffer) == 0,
-              (statBuffer.st_mode & S_IFMT) == S_IFDIR,
+        guard lstat(directoryURL.path, &statBuffer) == 0 else {
+            reportSocketDirectoryRejection(
+                directoryURL,
+                predicate: "lstat",
+                errorNumber: errno
+            )
+            throw AgentEventSocketError.directoryPermissionFailed
+        }
+        guard (statBuffer.st_mode & S_IFMT) == S_IFDIR,
               statBuffer.st_uid == geteuid(),
               (statBuffer.st_mode & S_IRWXU) == S_IRWXU,
               (statBuffer.st_mode & S_IRWXG) == 0,
               (statBuffer.st_mode & S_IRWXO) == 0
         else {
+            reportSocketDirectoryRejection(
+                directoryURL,
+                predicate: "mode/owner",
+                errorNumber: nil,
+                stat: statBuffer
+            )
             throw AgentEventSocketError.directoryPermissionFailed
         }
+    }
+
+    /// 只在拒绝路径上输出，不改变任何判定。
+    ///
+    /// 原来六个谓词共用一个不带上下文的 `directoryPermissionFailed`，
+    /// 失败时既看不出是哪一条不满足，也看不出目录当时是什么状态——在本机通过、
+    /// 只有 CI runner 失败时，这等于没有线索。
+    private static func reportSocketDirectoryRejection(
+        _ directoryURL: URL,
+        predicate: String,
+        errorNumber: Int32?,
+        stat statBuffer: stat? = nil
+    ) {
+        var message = "agent-event-socket: 拒绝目录 \(directoryURL.path)"
+            + " 谓词=\(predicate)"
+        if let errorNumber {
+            message += " errno=\(errorNumber)(\(String(cString: strerror(errorNumber))))"
+        }
+        if let statBuffer {
+            message += String(
+                format: " mode=%o uid=%u euid=%u",
+                statBuffer.st_mode,
+                statBuffer.st_uid,
+                geteuid()
+            )
+        }
+        fputs(message + "\n", stderr)
     }
 
     static func removeStaleSocket(at url: URL, ownedBy userID: uid_t) throws {
