@@ -32,6 +32,44 @@ enum AgentIntegrationRowAction: Equatable {
 /// `.idle`；此计时器只用于防止任何异常路径把行永久锁在禁用态。
 private let agentIntegrationConfiguringWatchdogDelay: TimeInterval = 20.0
 private let agentIntegrationTransientResetDelay: TimeInterval = 3.0
+/// 首次开启自动集成时，二次确认的等待窗口。超时自动撤销，避免误触后一直
+/// 停在待确认态。
+private let autoIntegrationConfirmWindow: TimeInterval = 8.0
+
+/// 自动集成开关的渲染决策。抽成纯函数，理由同 `agentIntegrationRowAction`：
+/// 让自测能在不驱动 AppKit 的前提下断言"首次开启必须二次确认"。
+enum AgentAutoIntegrationControl: Equatable {
+    case off(title: String, tooltip: String)
+    case awaitingConfirmation(title: String, tooltip: String)
+    case on(title: String, tooltip: String)
+}
+
+func agentAutoIntegrationControl(
+    isEnabled: Bool,
+    hasConfirmed: Bool,
+    isAwaitingConfirmation: Bool
+) -> AgentAutoIntegrationControl {
+    if isEnabled {
+        return .on(
+            title: "自动集成：开启",
+            tooltip: "已开启：检测到新安装的已验证 Agent 时自动写入其受管配置"
+        )
+    }
+    if isAwaitingConfirmation {
+        return .awaitingConfirmation(
+            title: "再点一次确认",
+            tooltip: "开启后 ThreadHelm 会在后台自动写入已验证 Agent 的厂商配置"
+                + "（如 ~/.claude/settings.json），并在写入前保存本机恢复点。"
+                + "再点一次确认开启。"
+        )
+    }
+    return .off(
+        title: "自动集成：关闭",
+        tooltip: hasConfirmed
+            ? "点击开启：检测到新安装的已验证 Agent 时自动集成"
+            : "点击开启：会先请你确认一次，之后才会自动写入厂商配置（默认关闭）"
+    )
+}
 
 func agentIntegrationRowAction(
     status: AgentRuntimeStatus,
@@ -108,21 +146,31 @@ final class DynamicIslandAgentHealthViewController:
         size: 11,
         weight: .regular
     )
+    private let autoIntegrationButton = DynamicIslandButton(
+        title: "自动集成：关闭",
+        style: .secondary
+    )
     private let tableScrollView = NSScrollView()
     private let tableView = NSTableView()
 
     private var statuses: [AgentRuntimeStatus] = []
     private let validationProfiles = builtInAgentValidationProfiles()
     private var eventChannelAvailable: Bool?
+    private var isAutoIntegrationEnabled = false
+    private var hasConfirmedAutoIntegration = false
+    private var isAwaitingAutoIntegrationConfirmation = false
+    private var autoIntegrationConfirmTimer: Timer?
     private var transientStates: [AgentID: AgentIntegrationRowTransientState] = [:]
     private var transientResetTimers: [AgentID: Timer] = [:]
     var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
+    var onToggleAutoIntegration: ((Bool) -> Void)?
 
     deinit {
         for timer in transientResetTimers.values {
             timer.invalidate()
         }
         transientResetTimers.removeAll()
+        autoIntegrationConfirmTimer?.invalidate()
     }
 
     override func viewDidDisappear() {
@@ -132,6 +180,10 @@ final class DynamicIslandAgentHealthViewController:
         }
         transientResetTimers.removeAll()
         transientStates.removeAll()
+        // 面板关闭即撤销未完成的确认，确认必须是一次连续的显式动作。
+        autoIntegrationConfirmTimer?.invalidate()
+        autoIntegrationConfirmTimer = nil
+        isAwaitingAutoIntegrationConfirmation = false
     }
 
     func setTransientState(
@@ -191,6 +243,39 @@ final class DynamicIslandAgentHealthViewController:
         }
     }
 
+    func performToggleAutoIntegrationForSelfTest() {
+        _ = view
+        handleAutoIntegrationToggle()
+    }
+
+    func isAutoIntegrationEnabledForSelfTest() -> Bool {
+        isAutoIntegrationEnabled
+    }
+
+    /// 模拟确认窗口超时（8 秒计时器到点）走的那条撤销路径。
+    func expireAutoIntegrationConfirmationForSelfTest() {
+        _ = view
+        autoIntegrationConfirmTimer?.invalidate()
+        autoIntegrationConfirmTimer = nil
+        isAwaitingAutoIntegrationConfirmation = false
+        renderAutoIntegrationStatus()
+    }
+
+    /// 面板关闭走的那条撤销路径。
+    func dismissAutoIntegrationConfirmationForSelfTest() {
+        _ = view
+        viewDidDisappear()
+    }
+
+    func autoIntegrationControlForSelfTest() -> AgentAutoIntegrationControl {
+        _ = view
+        return agentAutoIntegrationControl(
+            isEnabled: isAutoIntegrationEnabled,
+            hasConfirmed: hasConfirmedAutoIntegration,
+            isAwaitingConfirmation: isAwaitingAutoIntegrationConfirmation
+        )
+    }
+
     private func scheduleTransientReset(for agentID: AgentID, delay: TimeInterval) {
         let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             guard let self else { return }
@@ -210,6 +295,7 @@ final class DynamicIslandAgentHealthViewController:
         channelCard.addSubview(channelDot)
         channelCard.addSubview(channelTitleField)
         channelCard.addSubview(channelDetailField)
+        channelCard.addSubview(autoIntegrationButton)
         view.addSubview(tableScrollView)
 
         titleField.stringValue = "Agents / Integrations"
@@ -221,6 +307,10 @@ final class DynamicIslandAgentHealthViewController:
         channelDot.wantsLayer = true
         channelDot.layer?.cornerRadius = 5
         channelDetailField.textColor = DynamicIslandPalette.secondaryText
+
+        autoIntegrationButton.target = self
+        autoIntegrationButton.action = #selector(handleAutoIntegrationToggle)
+        renderAutoIntegrationStatus()
 
         tableView.headerView = nil
         tableView.rowHeight = 104
@@ -257,10 +347,17 @@ final class DynamicIslandAgentHealthViewController:
         )
         channelDot.frame = NSRect(x: 14, y: 21, width: 10, height: 10)
         channelTitleField.frame = NSRect(x: 36, y: 27, width: 240, height: 17)
+        let autoButtonWidth: CGFloat = 130
+        autoIntegrationButton.frame = NSRect(
+            x: max(280, channelCard.bounds.width - autoButtonWidth - 12),
+            y: 12,
+            width: autoButtonWidth,
+            height: 28
+        )
         channelDetailField.frame = NSRect(
             x: 36,
             y: 8,
-            width: max(1, channelCard.bounds.width - 50),
+            width: max(1, autoIntegrationButton.frame.minX - 44),
             height: 16
         )
         tableScrollView.frame = NSRect(
@@ -272,9 +369,76 @@ final class DynamicIslandAgentHealthViewController:
         tableView.tableColumns.first?.width = tableScrollView.contentSize.width
     }
 
+    @objc private func handleAutoIntegrationToggle() {
+        autoIntegrationConfirmTimer?.invalidate()
+        autoIntegrationConfirmTimer = nil
+
+        if isAutoIntegrationEnabled {
+            // 关闭无需确认。
+            isAutoIntegrationEnabled = false
+            isAwaitingAutoIntegrationConfirmation = false
+            renderAutoIntegrationStatus()
+            onToggleAutoIntegration?(false)
+            return
+        }
+
+        // 首次开启必须二次确认：这条路径会让 ThreadHelm 在无人值守时写入
+        // 厂商配置，单击不足以构成同意。
+        if !hasConfirmedAutoIntegration, !isAwaitingAutoIntegrationConfirmation {
+            isAwaitingAutoIntegrationConfirmation = true
+            renderAutoIntegrationStatus()
+            autoIntegrationConfirmTimer = Timer.scheduledTimer(
+                withTimeInterval: autoIntegrationConfirmWindow,
+                repeats: false
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.isAwaitingAutoIntegrationConfirmation = false
+                self.autoIntegrationConfirmTimer = nil
+                self.renderAutoIntegrationStatus()
+            }
+            return
+        }
+
+        isAwaitingAutoIntegrationConfirmation = false
+        isAutoIntegrationEnabled = true
+        hasConfirmedAutoIntegration = true
+        renderAutoIntegrationStatus()
+        onToggleAutoIntegration?(true)
+    }
+
+    private func renderAutoIntegrationStatus() {
+        switch agentAutoIntegrationControl(
+            isEnabled: isAutoIntegrationEnabled,
+            hasConfirmed: hasConfirmedAutoIntegration,
+            isAwaitingConfirmation: isAwaitingAutoIntegrationConfirmation
+        ) {
+        case .on(let title, let tooltip):
+            autoIntegrationButton.setDisplayTitle(title)
+            autoIntegrationButton.setVisualStyle(.primary)
+            autoIntegrationButton.toolTip = tooltip
+            autoIntegrationButton.setAccessibilityLabel("自动集成开关，当前已开启")
+        case .awaitingConfirmation(let title, let tooltip):
+            autoIntegrationButton.setDisplayTitle(title)
+            autoIntegrationButton.setVisualStyle(.destructive)
+            autoIntegrationButton.toolTip = tooltip
+            autoIntegrationButton.setAccessibilityLabel("自动集成开关，等待确认开启")
+        case .off(let title, let tooltip):
+            autoIntegrationButton.setDisplayTitle(title)
+            autoIntegrationButton.setVisualStyle(.secondary)
+            autoIntegrationButton.toolTip = tooltip
+            autoIntegrationButton.setAccessibilityLabel("自动集成开关，当前已关闭")
+        }
+    }
+
     func apply(_ snapshot: ActivityDashboardSnapshot) {
         _ = view
         eventChannelAvailable = snapshot.agentEventChannelAvailable
+        isAutoIntegrationEnabled = snapshot.isAutoIntegrationEnabled
+        hasConfirmedAutoIntegration = snapshot.hasConfirmedAutoIntegration
+        if isAutoIntegrationEnabled {
+            isAwaitingAutoIntegrationConfirmation = false
+        }
+        renderAutoIntegrationStatus()
         statuses = (snapshot.agentStatuses.isEmpty
             ? agentRuntimeStatusPlaceholders()
             : snapshot.agentStatuses).sorted {

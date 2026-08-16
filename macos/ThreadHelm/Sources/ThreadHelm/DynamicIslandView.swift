@@ -864,6 +864,7 @@ final class DynamicIslandRootViewController: NSViewController {
     var onSourceFilterChange: ((TaskSourceFilter) -> Void)?
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
     var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
+    var onToggleAutoIntegration: ((Bool) -> Void)?
     var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onSelectedTaskKeyChange: ((String?) -> Void)?
@@ -907,6 +908,9 @@ final class DynamicIslandRootViewController: NSViewController {
         }
         workspaceController.onPerformIntegration = { [weak self] agentID, op in
             self?.onPerformIntegration?(agentID, op)
+        }
+        workspaceController.onToggleAutoIntegration = { [weak self] enabled in
+            self?.onToggleAutoIntegration?(enabled)
         }
         workspaceController.onOpenTask = { [weak self] item in
             self?.onOpenTask?(item) ?? .failed
@@ -1471,6 +1475,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     var onSourceFilterChange: ((TaskSourceFilter) -> Void)?
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
     var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
+    var onToggleAutoIntegration: ((Bool) -> Void)?
     var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onSelectedTaskKeyChange: ((String?) -> Void)?
@@ -1605,6 +1610,9 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         agentHealthController.onPerformIntegration = { [weak self] agentID, op in
             self?.onPerformIntegration?(agentID, op)
         }
+        agentHealthController.onToggleAutoIntegration = { [weak self] enabled in
+            self?.onToggleAutoIntegration?(enabled)
+        }
         quotaController.onSelectProvider = { [weak self] provider in
             self?.onQuotaProviderChange?(provider)
         }
@@ -1613,6 +1621,14 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         }
         childContainer.wantsLayer = true
         childContainer.layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    func performToggleAutoIntegrationForSelfTest() {
+        agentHealthController.performToggleAutoIntegrationForSelfTest()
+    }
+
+    func isAutoIntegrationEnabledForSelfTest() -> Bool {
+        agentHealthController.isAutoIntegrationEnabledForSelfTest()
     }
 
     func setAgentIntegrationTransientState(
@@ -1624,6 +1640,18 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
 
     func agentIntegrationActionSummariesForSelfTest() -> [String] {
         agentHealthController.integrationActionSummariesForSelfTest()
+    }
+
+    func agentAutoIntegrationControlForSelfTest() -> AgentAutoIntegrationControl {
+        agentHealthController.autoIntegrationControlForSelfTest()
+    }
+
+    func expireAgentAutoIntegrationConfirmationForSelfTest() {
+        agentHealthController.expireAutoIntegrationConfirmationForSelfTest()
+    }
+
+    func dismissAgentAutoIntegrationConfirmationForSelfTest() {
+        agentHealthController.dismissAutoIntegrationConfirmationForSelfTest()
     }
 
     override func viewDidLayout() {

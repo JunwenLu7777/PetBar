@@ -10,7 +10,7 @@
 ## 运行时数据
 
 - ThreadHelm 读取本机 Codex app-server 提供的周额度，以及 `rateLimitResetCredits` 中的可用重置次数与到期时间；并通过已安装的 Claude CLI `/usage` 读取 Claude Code 的 5h、周额度与 Fable 周额度。
-- 本机集成管理只支持 Codex、Claude Code、Cursor、ZCode 和 OMP。用户可通过 Agents 页面 GUI 按钮一键安装或修复已验证版本的受管集成，也可使用终端命令行。Codex 集成固定为 `notManaged`，其 install/repair/uninstall 路径不会写 Codex 配置；Claude、Cursor、ZCode 或 OMP 未安装或版本未验证时，不会为该 Agent 凭空创建或改写受管配置。
+- 本机集成管理只支持 Codex、Claude Code、Cursor、ZCode 和 OMP。用户可通过 Agents 页面 GUI 按钮一键安装或修复已验证版本的受管集成，也可使用终端命令行。自动集成新检测到的 Agent 功能**默认关闭**；开启需要在 Agents 页面点击开关并再次点击确认，确认前不会自动写入任何厂商配置。开启后仅针对版本已通过真值验证的受管 Agent，在后台每 5 分钟探测一次，发现未集成时自动写入对应受管配置，并在写入前保存本机恢复点；写入失败会自动回滚。同一 Agent 与版本的自动尝试之间有最小间隔，连续失败还会进入 5 分钟、15 分钟、60 分钟的指数退避。Codex 集成固定为 `notManaged`，其任何路径均不会写 Codex 配置；Claude、Cursor、ZCode 或 OMP 未安装或版本未验证时，不会为该 Agent 凭空创建或改写受管配置。
 - Claude Code 只在 `~/.claude/settings.json` 管理自己的 `PermissionRequest` Hook；Cursor 只在 `~/.cursor/hooks.json` 管理带所有权标记的生命周期 Hook；ZCode 只在 `~/.zcode/cli/config.json` 管理状态观察 Hook；OMP 只管理 `~/.omp/agent/extensions/threadhelm-state-observer/`。所有非 ThreadHelm 条目和显式禁用设置都会保留。
 - Claude 额度探针禁用工具、使用固定隔离会话和独立缓存目录，并清理探针自己生成的 transcript；ThreadHelm 不记录或展示探针原始终端输出。
 - 启用 Claude Code 权限确认 Hook 时，ThreadHelm 会在 `~/.claude/settings.json` 的 ThreadHelm HTTP Hook 条目中写入一个随机安装 token，并要求本机 `127.0.0.1:27841/threadhelm/claude/permission` 请求携带 `X-ThreadHelm-Hook-Token` header。该 token 只用于本机 Hook 请求鉴权，不写入 ThreadHelm 日志、不上传，也不会包含在返回给 Claude 的 Hook 响应中。Hook 服务只监听 `127.0.0.1`，单次请求正文上限为 256 KiB，待处理请求队列上限为 16 个。

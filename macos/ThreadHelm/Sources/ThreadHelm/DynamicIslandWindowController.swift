@@ -19,6 +19,7 @@ final class DynamicIslandWindowController {
     var onRefresh: (() -> Void)?
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
     var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
+    var onToggleAutoIntegration: ((Bool) -> Void)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onTaskDetailOpened: ((TaskProgressItem) -> Void)?
 
@@ -97,6 +98,9 @@ final class DynamicIslandWindowController {
         }
         rootController.onPerformIntegration = { [weak self] agentID, op in
             self?.onPerformIntegration?(agentID, op)
+        }
+        rootController.onToggleAutoIntegration = { [weak self] enabled in
+            self?.onToggleAutoIntegration?(enabled)
         }
         rootController.onOpenTask = { [weak self] item in
             self?.onOpenTask?(item) ?? .failed

@@ -50,6 +50,143 @@ func makeThreadHelmDockIcon(bundle: Bundle = .main) -> NSImage? {
     return image
 }
 
+struct AgentAutoIntegrationBackoffKey: Hashable {
+    let agentID: AgentID
+    let version: String
+}
+
+/// 一次集成操作的记账结论。抽成独立类型是为了让"结果如何影响退避"这条
+/// 规则可以被单独断言——它曾经把不收敛的成功记成成功，直接导致无界写盘循环。
+enum AgentIntegrationAccountingOutcome: Equatable {
+    /// 真正收敛：清失败计数。
+    case succeeded
+    /// 版本门禁跳过。不写盘，但要退避，否则每个周期都会重试同一个未验证版本。
+    case skippedUnvalidated
+    /// 抛错，或写入报告成功但重新探测未收敛。
+    case failed
+}
+
+/// - Parameter statusAfter: 操作后**重新探测**到的状态。报告 `.installed` 但
+///   这里不是 `.installed`，说明写入与状态探测判断不一致，必须按失败记账。
+func agentIntegrationAccountingOutcome(
+    result: AgentIntegrationOperationResult?,
+    statusAfter: AgentIntegrationStatus?,
+    threw: Bool
+) -> AgentIntegrationAccountingOutcome {
+    if threw { return .failed }
+    if result == .unchanged {
+        // `.unchanged` 有两个来源：版本门禁跳过，以及配置其实已就位的幂等
+        // no-op。后者是成功语义，记成失败会让真正需要的自动集成被退避压制。
+        return statusAfter == .installed ? .succeeded : .skippedUnvalidated
+    }
+    if result == .installed || result == .repaired {
+        return statusAfter == .installed ? .succeeded : .failed
+    }
+    return .failed
+}
+
+struct AgentAutoIntegrationCandidate: Equatable {
+    let agentID: AgentID
+    let version: String
+}
+
+/// 自动集成的候选选取。双门禁、候选过滤与"一轮只处理一个"都在这里，
+/// 便于自测在不驱动 AppKit 与磁盘的前提下断言。
+func agentAutoIntegrationCandidate(
+    statuses: [AgentRuntimeStatus],
+    isEnabled: Bool,
+    hasConfirmed: Bool,
+    canAttempt: (AgentID, String) -> Bool
+) -> AgentAutoIntegrationCandidate? {
+    guard isEnabled, hasConfirmed else { return nil }
+    for status in statuses {
+        guard status.discovery.isInstalled,
+              status.discovery.compatibility == .validated,
+              status.integrationStatus == .notInstalled
+        else {
+            continue
+        }
+        let version = agentAutoIntegrationBackoffVersion(for: status)
+        guard canAttempt(status.metadata.id, version) else { continue }
+        // 一轮只处理一个：全局互斥本就串行，其余候选交给下一个刷新周期。
+        return AgentAutoIntegrationCandidate(
+            agentID: status.metadata.id,
+            version: version
+        )
+    }
+    return nil
+}
+
+/// 退避键里的版本。所有路径必须共用这一个实现，否则记账键与门禁键会错开。
+func agentAutoIntegrationBackoffVersion(for status: AgentRuntimeStatus) -> String {
+    status.discovery.version
+        ?? status.discovery.versionComponents.first?.value
+        ?? "default"
+}
+
+/// 自动集成的节流门。
+///
+/// 关键设计：**每一次自动尝试都记时间戳，无论成败**。只按失败退避是不够的——
+/// 写入报告 `.installed`、但随后重新探测仍是 `.notInstalled`（适配器写入与状态
+/// 探测判断不一致，或外部进程把配置改了回去）时，成功会立即销账，而成功又会
+/// 触发下一轮评估，于是形成没有任何延迟的写盘循环。最小间隔让这条路径也有界。
+final class AgentAutoIntegrationBackoffGate {
+    /// 无论上一次结果如何，同一 (agentID, version) 两次自动尝试之间的下限。
+    /// 与刷新周期同量级即可，目的是让不收敛的"成功"也无法紧密重试。
+    static let minimumAttemptInterval: TimeInterval = 300
+
+    private let lock = NSLock()
+    private var failureCounts: [AgentAutoIntegrationBackoffKey: Int] = [:]
+    private var lastAttemptTimestamps: [AgentAutoIntegrationBackoffKey: Date] = [:]
+    private let now: () -> Date
+
+    init(now: @escaping () -> Date = Date.init) {
+        self.now = now
+    }
+
+    func canAttempt(agentID: AgentID, version: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = AgentAutoIntegrationBackoffKey(agentID: agentID, version: version)
+        guard let last = lastAttemptTimestamps[key] else { return true }
+        let failureDelay: TimeInterval
+        switch failureCounts[key] ?? 0 {
+        case 0: failureDelay = 0
+        case 1: failureDelay = 300       // 5 min
+        case 2: failureDelay = 900       // 15 min
+        default: failureDelay = 3600     // 60 min
+        }
+        let delay = max(failureDelay, Self.minimumAttemptInterval)
+        return now().timeIntervalSince(last) >= delay
+    }
+
+    /// 每次自动尝试**发起时**调用，是最小间隔的唯一来源。
+    func recordAttempt(agentID: AgentID, version: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        lastAttemptTimestamps[
+            AgentAutoIntegrationBackoffKey(agentID: agentID, version: version)
+        ] = now()
+    }
+
+    func recordFailure(agentID: AgentID, version: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = AgentAutoIntegrationBackoffKey(agentID: agentID, version: version)
+        failureCounts[key, default: 0] += 1
+        lastAttemptTimestamps[key] = now()
+    }
+
+    /// 只清失败计数，**保留最近尝试时间**——否则不收敛的成功会立刻解锁重试。
+    func recordSuccess(agentID: AgentID, version: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        failureCounts.removeValue(
+            forKey: AgentAutoIntegrationBackoffKey(agentID: agentID, version: version)
+        )
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let quotaClient = CodexQuotaClient()
     private let claudeQuotaClient = ClaudeQuotaClient()
@@ -79,7 +216,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var refreshTimer: Timer?
     private var taskProgressTimer: Timer?
     private var windowStackRefreshTimer: Timer?
+    private var agentHealthRefreshTimer: Timer?
     private var isPerformingIntegration = false
+    private let autoIntegrationDefaultsKey = "dev.threadhelm.agent-auto-integration.enabled"
+    /// 一次性确认。开关本身可以随时开关，但在用户显式确认过"会写入厂商配置"
+    /// 之前，自动路径一律不落盘。
+    private let autoIntegrationConfirmedDefaultsKey =
+        "dev.threadhelm.agent-auto-integration.confirmed"
+    private let autoIntegrationBackoffGate = AgentAutoIntegrationBackoffGate()
+    private var agentRuntimeRefreshGate = TaskProgressRefreshGate()
+    private var pendingAgentRuntimeRefreshCompletions: [() -> Void] = []
     private let integrationSerialQueue = DispatchQueue(label: "dev.threadhelm.agent-integration-serial")
     private let taskProgressReaderStore = TaskProgressRefreshReaderStore()
     private var refreshingQuotaProviders = Set<QuotaProvider>()
@@ -146,8 +292,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startClaudePermissionHook()
         agentEventChannelAvailable = startAgentEventSocket()
         startAgentHookDropInbox()
+        let isAutoIntegrationEnabledInitial = UserDefaults.standard.bool(
+            forKey: autoIntegrationDefaultsKey
+        )
+        let hasConfirmedAutoIntegrationInitial = UserDefaults.standard.bool(
+            forKey: autoIntegrationConfirmedDefaultsKey
+        )
         dashboardStore.update { snapshot in
             snapshot.agentEventChannelAvailable = agentEventChannelAvailable
+            snapshot.isAutoIntegrationEnabled = isAutoIntegrationEnabledInitial
+            snapshot.hasConfirmedAutoIntegration =
+                hasConfirmedAutoIntegrationInitial
             snapshot.agentStatuses = agentRuntimeStatusPlaceholders(
                 registry: agentRegistry
             )
@@ -187,6 +342,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ) { [weak self] _ in
             self?.refreshTaskProgress()
         }
+        agentHealthRefreshTimer = Timer.scheduledTimer(
+            withTimeInterval: agentHealthRefreshInterval,
+            repeats: true
+        ) { [weak self] _ in
+            self?.refreshAgentRuntimeStatuses()
+        }
     }
 
     func applicationShouldHandleReopen(
@@ -217,6 +378,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshTimer?.invalidate()
         taskProgressTimer?.invalidate()
         windowStackRefreshTimer?.invalidate()
+        agentHealthRefreshTimer?.invalidate()
+        agentHealthRefreshTimer = nil
         if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)
         }
@@ -804,13 +967,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             },
             performIntegration: { [weak self] agentID, operation in
                 self?.performAgentIntegration(for: agentID, operation: operation)
+            },
+            toggleAutoIntegration: { [weak self] enabled in
+                self?.toggleAutoIntegration(enabled)
             }
         ).bind(to: controller)
     }
 
+    /// UI 只在用户完成二次确认后才会用 `enabled == true` 调到这里，
+    /// 但门禁不依赖 UI：确认标记同样落在 defaults 上，并由
+    /// `evaluateAutoIntegration` 独立复核。
+    private func toggleAutoIntegration(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: autoIntegrationDefaultsKey)
+        if enabled {
+            UserDefaults.standard.set(
+                true,
+                forKey: autoIntegrationConfirmedDefaultsKey
+            )
+        }
+        dashboardStore.update {
+            $0.isAutoIntegrationEnabled = enabled
+            $0.hasConfirmedAutoIntegration = UserDefaults.standard.bool(
+                forKey: self.autoIntegrationConfirmedDefaultsKey
+            )
+        }
+        if enabled {
+            evaluateAutoIntegration(on: dashboardStore.snapshot.agentStatuses)
+        }
+    }
+
     private func performAgentIntegration(
         for agentID: AgentID,
-        operation: AgentIntegrationOperation
+        operation: AgentIntegrationOperation,
+        version: String? = nil,
+        completion: (() -> Void)? = nil
     ) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -840,12 +1030,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     DispatchQueue.main.async { [weak self] in
                         guard let self else { return }
                         self.isPerformingIntegration = false
+                        let activeVersion = version
+                            ?? self.dashboardStore.snapshot.agentStatuses
+                                .first(where: { $0.metadata.id == agentID })
+                                .map(agentAutoIntegrationBackoffVersion(for:))
+                            ?? "default"
+                        let outcome = agentIntegrationAccountingOutcome(
+                            result: result,
+                            statusAfter: record?.statusAfter,
+                            threw: false
+                        )
+                        self.recordAutoIntegrationOutcome(
+                            outcome,
+                            agentID: agentID,
+                            version: activeVersion
+                        )
                         if result == .unchanged {
                             // 版本门禁未通过时 perform 静默返回 .unchanged，
                             // 绝不能当成功处理。但 .unchanged 还有第二个来源：
                             // 状态已过期、配置其实已就位时的幂等 no-op —— 两者
                             // 要给出不同的提示，否则会误导用户去查版本。
-                            let message = record?.statusAfter == .installed
+                            let message = outcome == .succeeded
                                 ? "已是最新，无需操作"
                                 : "版本未验证，已跳过"
                             self.dynamicIslandController?
@@ -853,17 +1058,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                     .noop(message),
                                     for: agentID
                                 )
+                            completion?()
                             return
                         }
+                        // 记账已在上方按 agentIntegrationAccountingOutcome 完成：
+                        // 报告 .installed 但重新探测未收敛的情况会被记为失败，
+                        // 否则退避被销账、成功又立刻触发下一轮评估，形成写盘循环。
+                        //
                         // .installed / .repaired 以及任何非预期结果都重新探测真实状态，
                         // 并在刷新落地后显式解除 .configuring —— 不依赖快照比较，
                         // 因为 dashboardStore.update 在快照相等时会静默跳过通知。
-                        self.refreshAgentRuntimeStatuses { [weak self] in
+                        // 这次刷新由集成操作自身触发，绝不能再回头驱动自动集成，
+                        // 否则 evaluate → perform → refresh → evaluate 会自我循环。
+                        self.refreshAgentRuntimeStatuses(
+                            suppressAutoIntegration: true
+                        ) { [weak self] in
                             self?.dynamicIslandController?
                                 .setAgentIntegrationTransientState(
                                     .idle,
                                     for: agentID
                                 )
+                            completion?()
                         }
                     }
                 } catch {
@@ -879,14 +1094,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     DispatchQueue.main.async { [weak self] in
                         guard let self else { return }
                         self.isPerformingIntegration = false
+                        let activeVersion = version
+                            ?? self.dashboardStore.snapshot.agentStatuses
+                                .first(where: { $0.metadata.id == agentID })
+                                .map(agentAutoIntegrationBackoffVersion(for:))
+                            ?? "default"
+                        self.recordAutoIntegrationOutcome(
+                            agentIntegrationAccountingOutcome(
+                                result: nil,
+                                statusAfter: nil,
+                                threw: true
+                            ),
+                            agentID: agentID,
+                            version: activeVersion
+                        )
                         self.dynamicIslandController?.setAgentIntegrationTransientState(
                             .failed(message),
                             for: agentID
                         )
+                        completion?()
                     }
                 }
             }
         }
+    }
+
+    private func recordAutoIntegrationOutcome(
+        _ outcome: AgentIntegrationAccountingOutcome,
+        agentID: AgentID,
+        version: String
+    ) {
+        switch outcome {
+        case .succeeded:
+            autoIntegrationBackoffGate.recordSuccess(
+                agentID: agentID,
+                version: version
+            )
+        case .skippedUnvalidated, .failed:
+            autoIntegrationBackoffGate.recordFailure(
+                agentID: agentID,
+                version: version
+            )
+        }
+    }
+
+    private func evaluateAutoIntegration(on statuses: [AgentRuntimeStatus]) {
+        // 双门禁：显式开关 + 一次性确认。缺任何一个都不得写厂商配置。
+        // 这里独立复核 defaults，不依赖 UI 状态。
+        guard let candidate = agentAutoIntegrationCandidate(
+            statuses: statuses,
+            isEnabled: UserDefaults.standard.bool(
+                forKey: autoIntegrationDefaultsKey
+            ),
+            hasConfirmed: UserDefaults.standard.bool(
+                forKey: autoIntegrationConfirmedDefaultsKey
+            ),
+            canAttempt: { [autoIntegrationBackoffGate] agentID, version in
+                autoIntegrationBackoffGate.canAttempt(
+                    agentID: agentID,
+                    version: version
+                )
+            }
+        ) else {
+            return
+        }
+        // 发起即记时间戳：最小间隔必须覆盖"成功但不收敛"的路径，
+        // 不能只依赖失败记账。
+        autoIntegrationBackoffGate.recordAttempt(
+            agentID: candidate.agentID,
+            version: candidate.version
+        )
+        performAgentIntegration(
+            for: candidate.agentID,
+            operation: .install,
+            version: candidate.version
+        )
     }
 
     private func refreshDashboard() {
@@ -910,12 +1192,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
     }
 
+    /// 只在主线程调用。三个触发源（启动与手动刷新、5 分钟定时器、集成操作完成）
+    /// 共用一次探测：并发刷新会重复 fork 版本探测子进程，且两次
+    /// `dashboardStore.update` 是 last-writer-wins，慢的旧结果可能覆盖新结果。
+    ///
+    /// - Parameter suppressAutoIntegration: 由集成操作自身触发的刷新必须置为
+    ///   true，否则 evaluate → perform → refresh → evaluate 会自我循环。
     /// - Parameter completion: 在主线程、`dashboardStore` 更新之后回调。
     ///   注意 `dashboardStore.update` 在快照未变化时会静默跳过观察者通知，
     ///   因此需要感知"刷新已完成"的调用方必须用这个回调，而不是等待快照下发。
     private func refreshAgentRuntimeStatuses(
+        suppressAutoIntegration: Bool = false,
         completion: (() -> Void)? = nil
     ) {
+        guard let generation = agentRuntimeRefreshGate.begin() else {
+            // 已有刷新在飞：合并本次请求，等那一次落地后一起回调，
+            // 不再另起一轮探测。
+            if let completion {
+                pendingAgentRuntimeRefreshCompletions.append(completion)
+            }
+            return
+        }
         let registry = agentRegistry
         let previousStatuses = dashboardStore.snapshot.agentStatuses
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -939,6 +1236,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     completion?()
                     return
                 }
+                guard self.agentRuntimeRefreshGate.complete(
+                    generation: generation
+                ) else {
+                    // 代次不匹配说明这一轮已被取代，丢弃陈旧结果，
+                    // 不写快照也不驱动自动集成。
+                    completion?()
+                    return
+                }
                 self.dashboardStore.update { snapshot in
                     snapshot.agentStatuses = agentRuntimeStatusesWithActivity(
                         withIntegration,
@@ -948,7 +1253,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     snapshot.agentEventChannelAvailable =
                         self.agentEventChannelAvailable
                 }
+                if !suppressAutoIntegration {
+                    self.evaluateAutoIntegration(on: withIntegration)
+                }
+                let pending = self.pendingAgentRuntimeRefreshCompletions
+                self.pendingAgentRuntimeRefreshCompletions = []
                 completion?()
+                for pendingCompletion in pending {
+                    pendingCompletion()
+                }
             }
         }
     }
@@ -1145,21 +1458,25 @@ struct DynamicIslandDashboardActionBinding {
     let refreshDashboard: () -> Void
     let selectQuotaProvider: (QuotaProvider) -> Void
     let performIntegration: (AgentID, AgentIntegrationOperation) -> Void
+    let toggleAutoIntegration: (Bool) -> Void
 
     init(
         refreshDashboard: @escaping () -> Void,
         selectQuotaProvider: @escaping (QuotaProvider) -> Void,
-        performIntegration: @escaping (AgentID, AgentIntegrationOperation) -> Void = { _, _ in }
+        performIntegration: @escaping (AgentID, AgentIntegrationOperation) -> Void = { _, _ in },
+        toggleAutoIntegration: @escaping (Bool) -> Void = { _ in }
     ) {
         self.refreshDashboard = refreshDashboard
         self.selectQuotaProvider = selectQuotaProvider
         self.performIntegration = performIntegration
+        self.toggleAutoIntegration = toggleAutoIntegration
     }
 
     func bind(to controller: DynamicIslandWindowController) {
         controller.onRefresh = refreshDashboard
         controller.onQuotaProviderChange = selectQuotaProvider
         controller.onPerformIntegration = performIntegration
+        controller.onToggleAutoIntegration = toggleAutoIntegration
     }
 }
 

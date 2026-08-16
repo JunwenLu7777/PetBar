@@ -29,8 +29,332 @@ func runTaskProgressSelfTest() -> Never {
     runClaudeDesktopTaskDiscoverySelfTest()
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
-    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-desktop=local-session+view-only; claude-agents-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2")
+    runDiscoveryCacheAndAutoIntegrationBackoffSelfTest()
+    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-desktop=local-session+view-only; claude-agents-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
     exit(0)
+}
+
+private func runDiscoveryCacheAndAutoIntegrationBackoffSelfTest() {
+    var simulatedTime = Date()
+    var probeCount = 0
+    let cache = LocalAgentDiscoveryCache(
+        agentID: .claudeCode,
+        ttl: 300,
+        now: { simulatedTime },
+        discover: {
+            probeCount += 1
+            return AgentDiscovery(
+                isInstalled: true,
+                version: "v\(probeCount)",
+                compatibility: .validated
+            )
+        }
+    )
+
+    let d1 = cache.read()
+    guard probeCount == 1, d1.version == "v1" else {
+        fputs("LocalAgentDiscoveryCache initial read failed\n", stderr)
+        exit(1)
+    }
+
+    simulatedTime = simulatedTime.addingTimeInterval(100)
+    let d2 = cache.read()
+    guard probeCount == 1, d2.version == "v1" else {
+        fputs("LocalAgentDiscoveryCache TTL cache hit failed\n", stderr)
+        exit(1)
+    }
+
+    simulatedTime = simulatedTime.addingTimeInterval(201)
+    let d3 = cache.read()
+    guard probeCount == 2, d3.version == "v2" else {
+        fputs("LocalAgentDiscoveryCache TTL expiration re-probe failed\n", stderr)
+        exit(1)
+    }
+
+    cache.invalidate()
+    let d4 = cache.read()
+    guard probeCount == 3, d4.version == "v3" else {
+        fputs("LocalAgentDiscoveryCache invalidate failed\n", stderr)
+        exit(1)
+    }
+
+    var backoffTime = Date()
+    let backoff = AgentAutoIntegrationBackoffGate(now: { backoffTime })
+
+    guard backoff.canAttempt(agentID: .cursor, version: "1.0.0") else {
+        fputs("BackoffGate initial canAttempt failed\n", stderr)
+        exit(1)
+    }
+
+    backoff.recordFailure(agentID: .cursor, version: "1.0.0")
+    guard !backoff.canAttempt(agentID: .cursor, version: "1.0.0") else {
+        fputs("BackoffGate failure 1 delay failed\n", stderr)
+        exit(1)
+    }
+    backoffTime = backoffTime.addingTimeInterval(301)
+    guard backoff.canAttempt(agentID: .cursor, version: "1.0.0") else {
+        fputs("BackoffGate failure 1 expiry failed\n", stderr)
+        exit(1)
+    }
+
+    backoff.recordFailure(agentID: .cursor, version: "1.0.0")
+    backoffTime = backoffTime.addingTimeInterval(400)
+    guard !backoff.canAttempt(agentID: .cursor, version: "1.0.0") else {
+        fputs("BackoffGate failure 2 delay failed\n", stderr)
+        exit(1)
+    }
+    backoffTime = backoffTime.addingTimeInterval(501)
+    guard backoff.canAttempt(agentID: .cursor, version: "1.0.0") else {
+        fputs("BackoffGate failure 2 expiry failed\n", stderr)
+        exit(1)
+    }
+
+    // 第三次及以后封顶在 60 分钟。
+    backoff.recordFailure(agentID: .cursor, version: "1.0.0")
+    backoffTime = backoffTime.addingTimeInterval(3000)
+    guard !backoff.canAttempt(agentID: .cursor, version: "1.0.0") else {
+        fputs("BackoffGate failure 3 cap delay failed\n", stderr)
+        exit(1)
+    }
+    backoffTime = backoffTime.addingTimeInterval(601)
+    guard backoff.canAttempt(agentID: .cursor, version: "1.0.0") else {
+        fputs("BackoffGate failure 3 cap expiry failed\n", stderr)
+        exit(1)
+    }
+
+    guard backoff.canAttempt(agentID: .cursor, version: "1.0.1") else {
+        fputs("BackoffGate version change reset failed\n", stderr)
+        exit(1)
+    }
+
+    // 关键回归：成功销账**不得**解除最小间隔。否则"报告成功但状态没收敛"
+    // 会立刻允许重试，而成功又会触发下一轮评估 —— 形成无延迟写盘循环。
+    let loopGate = AgentAutoIntegrationBackoffGate(now: { backoffTime })
+    loopGate.recordAttempt(agentID: .omp, version: "17.3.2")
+    loopGate.recordSuccess(agentID: .omp, version: "17.3.2")
+    guard !loopGate.canAttempt(agentID: .omp, version: "17.3.2") else {
+        fputs("BackoffGate minimum interval must survive recordSuccess\n", stderr)
+        exit(1)
+    }
+    backoffTime = backoffTime.addingTimeInterval(
+        AgentAutoIntegrationBackoffGate.minimumAttemptInterval + 1
+    )
+    guard loopGate.canAttempt(agentID: .omp, version: "17.3.2") else {
+        fputs("BackoffGate minimum interval expiry failed\n", stderr)
+        exit(1)
+    }
+
+    // 缓存 TTL 必须严格短于刷新周期，否则定时器唤醒时缓存常常刚好还没过期，
+    // 该 Agent 的实际探测间隔退化成两个周期。
+    guard agentDiscoveryCacheTTL < agentHealthRefreshInterval else {
+        fputs("discovery cache TTL must be shorter than the refresh interval\n", stderr)
+        exit(1)
+    }
+
+    runAutoIntegrationAccountingSelfTest()
+    runAutoIntegrationCandidateSelfTest()
+}
+
+/// 结果 → 退避记账的映射。这是曾经导致无界写盘循环的那条规则本体。
+private func runAutoIntegrationAccountingSelfTest() {
+    func check(
+        _ label: String,
+        _ actual: AgentIntegrationAccountingOutcome,
+        _ expected: AgentIntegrationAccountingOutcome
+    ) {
+        guard actual == expected else {
+            fputs(
+                "auto-integration accounting \(label): expected \(expected), got \(actual)\n",
+                stderr
+            )
+            exit(1)
+        }
+    }
+
+    // 抛错永远是失败，即使带着结果字段。
+    check(
+        "throw",
+        agentIntegrationAccountingOutcome(
+            result: .installed,
+            statusAfter: .installed,
+            threw: true
+        ),
+        .failed
+    )
+    // 关键回归：写入报告成功、但重新探测未收敛 —— 必须记失败。
+    // 记成功会清掉失败计数，而成功又会触发下一轮评估，形成无延迟写盘循环。
+    check(
+        "installed but not converged",
+        agentIntegrationAccountingOutcome(
+            result: .installed,
+            statusAfter: .notInstalled,
+            threw: false
+        ),
+        .failed
+    )
+    check(
+        "repaired but still drifted",
+        agentIntegrationAccountingOutcome(
+            result: .repaired,
+            statusAfter: .needsRepair,
+            threw: false
+        ),
+        .failed
+    )
+    check(
+        "installed and converged",
+        agentIntegrationAccountingOutcome(
+            result: .installed,
+            statusAfter: .installed,
+            threw: false
+        ),
+        .succeeded
+    )
+    // 幂等 no-op 是成功语义，记成失败会让真正需要的自动集成被退避压制。
+    check(
+        "idempotent no-op",
+        agentIntegrationAccountingOutcome(
+            result: .unchanged,
+            statusAfter: .installed,
+            threw: false
+        ),
+        .succeeded
+    )
+    // 版本门禁跳过：不写盘，但要退避，否则每个周期都重试同一个未验证版本。
+    check(
+        "version gate skip",
+        agentIntegrationAccountingOutcome(
+            result: .unchanged,
+            statusAfter: .notInstalled,
+            threw: false
+        ),
+        .skippedUnvalidated
+    )
+    check(
+        "missing result",
+        agentIntegrationAccountingOutcome(
+            result: nil,
+            statusAfter: .installed,
+            threw: false
+        ),
+        .failed
+    )
+}
+
+/// 自动集成的候选选取：双门禁、候选过滤、一轮只处理一个、退避门被真正咨询。
+private func runAutoIntegrationCandidateSelfTest() {
+    func status(
+        _ agentID: AgentID,
+        installed: Bool,
+        compatibility: AgentCompatibility,
+        integrationStatus: AgentIntegrationStatus?
+    ) -> AgentRuntimeStatus {
+        AgentRuntimeStatus(
+            metadata: builtInAgentMetadata().first { $0.id == agentID }!,
+            discovery: AgentDiscovery(
+                isInstalled: installed,
+                version: installed ? "9.9.9" : nil,
+                compatibility: compatibility
+            ),
+            integrationStatus: integrationStatus,
+            diagnostics: AgentDiagnostics(
+                health: .healthy,
+                summary: "self-test",
+                counters: [:]
+            ),
+            activeSessionCount: 0,
+            attentionCount: 0
+        )
+    }
+
+    func fail(_ message: String) -> Never {
+        fputs("auto-integration candidate \(message)\n", stderr)
+        exit(1)
+    }
+
+    let ready = status(
+        .cursor,
+        installed: true,
+        compatibility: .validated,
+        integrationStatus: .notInstalled
+    )
+    let alsoReady = status(
+        .omp,
+        installed: true,
+        compatibility: .validated,
+        integrationStatus: .notInstalled
+    )
+    // 门禁必须收到与记账一致的版本键，否则退避会记到另一个键上而形同虚设。
+    let always: (AgentID, String) -> Bool = { _, version in
+        guard version == "9.9.9" else {
+            fputs(
+                "auto-integration candidate must consult the backoff gate with "
+                    + "the accounting version key, got \(version)\n",
+                stderr
+            )
+            exit(1)
+        }
+        return true
+    }
+
+    // 双门禁：任一缺失都不得产生候选。
+    guard agentAutoIntegrationCandidate(
+        statuses: [ready], isEnabled: false, hasConfirmed: true, canAttempt: always
+    ) == nil else {
+        fail("must not run while disabled")
+    }
+    guard agentAutoIntegrationCandidate(
+        statuses: [ready], isEnabled: true, hasConfirmed: false, canAttempt: always
+    ) == nil else {
+        fail("must not run before the one-time confirmation")
+    }
+
+    // 候选过滤：未安装、未验证、已集成都不该被选中。
+    for (label, rejected) in [
+        ("not installed", status(.cursor, installed: false, compatibility: .validated, integrationStatus: .notInstalled)),
+        ("unvalidated", status(.cursor, installed: true, compatibility: .unvalidated, integrationStatus: .notInstalled)),
+        ("unknown compatibility", status(.cursor, installed: true, compatibility: .unknown, integrationStatus: .notInstalled)),
+        ("already installed", status(.cursor, installed: true, compatibility: .validated, integrationStatus: .installed)),
+        ("needs repair", status(.cursor, installed: true, compatibility: .validated, integrationStatus: .needsRepair)),
+        ("disabled by user", status(.cursor, installed: true, compatibility: .validated, integrationStatus: .disabled)),
+        ("check failed", status(.cursor, installed: true, compatibility: .validated, integrationStatus: .checkFailed)),
+        ("no integration status", status(.cursor, installed: true, compatibility: .validated, integrationStatus: nil)),
+    ] {
+        guard agentAutoIntegrationCandidate(
+            statuses: [rejected], isEnabled: true, hasConfirmed: true, canAttempt: always
+        ) == nil else {
+            fail("must not select \(label)")
+        }
+    }
+
+    // 正常命中，且一轮只返回一个候选。
+    guard let picked = agentAutoIntegrationCandidate(
+        statuses: [ready, alsoReady],
+        isEnabled: true,
+        hasConfirmed: true,
+        canAttempt: always
+    ), picked == AgentAutoIntegrationCandidate(agentID: .cursor, version: "9.9.9")
+    else {
+        fail("must select the first eligible agent only")
+    }
+
+    // 退避门必须被真正咨询：拒绝首个候选时应跳到下一个。
+    guard let skipped = agentAutoIntegrationCandidate(
+        statuses: [ready, alsoReady],
+        isEnabled: true,
+        hasConfirmed: true,
+        canAttempt: { agentID, _ in agentID != .cursor }
+    ), skipped.agentID == .omp else {
+        fail("must honour the backoff gate")
+    }
+    guard agentAutoIntegrationCandidate(
+        statuses: [ready, alsoReady],
+        isEnabled: true,
+        hasConfirmed: true,
+        canAttempt: { _, _ in false }
+    ) == nil else {
+        fail("must yield nothing when every candidate is backed off")
+    }
 }
 
 private func runClaudeDesktopTaskDiscoverySelfTest() {

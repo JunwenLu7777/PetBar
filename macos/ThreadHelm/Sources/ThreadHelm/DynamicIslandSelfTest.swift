@@ -1314,6 +1314,12 @@ private func assertDynamicIslandTaskWorkspace() {
         baseSnapshot: agentHealthSnapshot
     )
 
+    assertDynamicIslandAutoIntegrationConsent(workspace: workspace)
+    assertDynamicIslandAutoIntegrationConfirmationCancellation(
+        workspace: workspace,
+        baseSnapshot: agentHealthSnapshot
+    )
+
     workspace.setSourceFilterForSelfTest(.claudeCode)
     workspace.apply(
         snapshot: ActivityDashboardSnapshot(taskCollection: collection),
@@ -1422,6 +1428,109 @@ private func assertDynamicIslandTaskWorkspace() {
     else {
         fputs("dynamic island task hover hide self-test failed\n", stderr)
         exit(1)
+    }
+}
+
+/// 独立块：自动集成必须默认关闭，且首次开启必须经过二次确认。
+/// 这条路径会让 ThreadHelm 在无人值守时写入厂商配置，单击不构成同意。
+private func assertDynamicIslandAutoIntegrationConsent(
+    workspace: DynamicIslandWorkspaceViewController
+) {
+    func fail(_ message: String) -> Never {
+        fputs("dynamic island auto-integration consent failed: \(message)\n", stderr)
+        exit(1)
+    }
+
+    guard !workspace.isAutoIntegrationEnabledForSelfTest(),
+          case .off = workspace.agentAutoIntegrationControlForSelfTest()
+    else {
+        fail("默认必须关闭")
+    }
+
+    // 第一次点击只进入待确认，绝不能直接开启。
+    workspace.performToggleAutoIntegrationForSelfTest()
+    guard !workspace.isAutoIntegrationEnabledForSelfTest() else {
+        fail("首次单击不得直接开启，必须先进入待确认")
+    }
+    guard case .awaitingConfirmation = workspace
+        .agentAutoIntegrationControlForSelfTest()
+    else {
+        fail("首次单击后应处于待确认态")
+    }
+
+    // 第二次点击才真正开启。
+    workspace.performToggleAutoIntegrationForSelfTest()
+    guard workspace.isAutoIntegrationEnabledForSelfTest(),
+          case .on = workspace.agentAutoIntegrationControlForSelfTest()
+    else {
+        fail("二次确认后应开启")
+    }
+
+    // 关闭不需要确认。
+    workspace.performToggleAutoIntegrationForSelfTest()
+    guard !workspace.isAutoIntegrationEnabledForSelfTest(),
+          case .off = workspace.agentAutoIntegrationControlForSelfTest()
+    else {
+        fail("关闭不应需要确认")
+    }
+
+    // 已确认过之后，再次开启不再重复确认。
+    workspace.performToggleAutoIntegrationForSelfTest()
+    guard workspace.isAutoIntegrationEnabledForSelfTest(),
+          case .on = workspace.agentAutoIntegrationControlForSelfTest()
+    else {
+        fail("确认应当只需要一次")
+    }
+
+    workspace.performToggleAutoIntegrationForSelfTest()
+    guard !workspace.isAutoIntegrationEnabledForSelfTest() else {
+        fail("最终应恢复关闭态")
+    }
+}
+
+/// 独立块：待确认态的两条撤销路径。确认必须是一次连续的显式动作——
+/// 误触后不能一直挂着，面板关掉再打开也不能沿用上一次的半个确认。
+private func assertDynamicIslandAutoIntegrationConfirmationCancellation(
+    workspace: DynamicIslandWorkspaceViewController,
+    baseSnapshot: ActivityDashboardSnapshot
+) {
+    func fail(_ message: String) -> Never {
+        fputs(
+            "dynamic island auto-integration confirmation cancellation failed: \(message)\n",
+            stderr
+        )
+        exit(1)
+    }
+
+    // 每条撤销路径都从"全新未确认"起步，避免受上一个断言块的确认标记影响。
+    for (label, cancel) in [
+        (
+            "8 秒超时",
+            workspace.expireAgentAutoIntegrationConfirmationForSelfTest
+        ),
+        (
+            "面板关闭",
+            workspace.dismissAgentAutoIntegrationConfirmationForSelfTest
+        ),
+    ] {
+        var freshSnapshot = baseSnapshot
+        freshSnapshot.isAutoIntegrationEnabled = false
+        freshSnapshot.hasConfirmedAutoIntegration = false
+        workspace.apply(snapshot: freshSnapshot, state: .expanded(.agents))
+
+        workspace.performToggleAutoIntegrationForSelfTest()
+        guard case .awaitingConfirmation = workspace
+            .agentAutoIntegrationControlForSelfTest()
+        else {
+            fail("\(label)：首击后应进入待确认")
+        }
+
+        cancel()
+        guard !workspace.isAutoIntegrationEnabledForSelfTest(),
+              case .off = workspace.agentAutoIntegrationControlForSelfTest()
+        else {
+            fail("\(label)：撤销后必须回到关闭态且未开启")
+        }
     }
 }
 
