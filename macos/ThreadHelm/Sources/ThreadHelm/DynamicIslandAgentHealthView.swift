@@ -8,6 +8,80 @@
 import AppKit
 import Foundation
 
+enum AgentIntegrationRowTransientState: Equatable {
+    case idle
+    case configuring
+    case noop(String)
+    case failed(String)
+}
+
+enum AgentIntegrationRowEmphasis: Equatable {
+    case normal
+    case warning
+    case error
+}
+
+/// 行内集成控件的渲染决策。抽成纯函数以便自测在不实例化 NSTableView 行视图的
+/// 前提下断言三态渲染与按钮可用性。
+enum AgentIntegrationRowAction: Equatable {
+    case button(title: String, operation: AgentIntegrationOperation?, isEnabled: Bool)
+    case text(String, tooltip: String?, emphasis: AgentIntegrationRowEmphasis)
+}
+
+/// `.configuring` 的兜底超时。正常路径由 AppDelegate 在操作结束时显式置回
+/// `.idle`；此计时器只用于防止任何异常路径把行永久锁在禁用态。
+private let agentIntegrationConfiguringWatchdogDelay: TimeInterval = 20.0
+private let agentIntegrationTransientResetDelay: TimeInterval = 3.0
+
+func agentIntegrationRowAction(
+    status: AgentRuntimeStatus,
+    transientState: AgentIntegrationRowTransientState
+) -> AgentIntegrationRowAction {
+    switch transientState {
+    case .configuring:
+        return .button(title: "正在配置…", operation: nil, isEnabled: false)
+    case .noop(let message):
+        return .text(message, tooltip: message, emphasis: .warning)
+    case .failed(let message):
+        // 行内 label 只有 270pt 且尾部截断，而回滚结论恰好拼在消息末尾，
+        // 长错误会把"原配置已恢复 / 自动恢复未完成"截掉——这正是用户最需要
+        // 知道的部分。完整文案同时放进 tooltip 兜底。
+        return .text(message, tooltip: message, emphasis: .error)
+    case .idle:
+        break
+    }
+
+    let readOnlyText = agentRuntimeIntegrationText(status)
+    let isValidated = status.discovery.compatibility == .validated
+
+    switch status.integrationStatus {
+    case .notInstalled where isValidated:
+        return .button(title: "一键安装", operation: .install, isEnabled: true)
+    case .needsRepair where isValidated:
+        return .button(title: "立即修复", operation: .repair, isEnabled: true)
+    case .notInstalled, .needsRepair:
+        return .text(
+            readOnlyText,
+            tooltip: "版本未经真值验证，暂不改写厂商配置",
+            emphasis: .normal
+        )
+    case .checkFailed:
+        return .text(
+            readOnlyText,
+            tooltip: "无法读取本地配置，写入不安全",
+            emphasis: .normal
+        )
+    case .disabled:
+        return .text(
+            readOnlyText,
+            tooltip: "已在厂商配置中显式停用",
+            emphasis: .normal
+        )
+    case .installed, .notManaged, .unsupportedVersion, .none:
+        return .text(readOnlyText, tooltip: nil, emphasis: .normal)
+    }
+}
+
 final class DynamicIslandAgentHealthViewController:
     NSViewController,
     NSTableViewDataSource,
@@ -40,6 +114,92 @@ final class DynamicIslandAgentHealthViewController:
     private var statuses: [AgentRuntimeStatus] = []
     private let validationProfiles = builtInAgentValidationProfiles()
     private var eventChannelAvailable: Bool?
+    private var transientStates: [AgentID: AgentIntegrationRowTransientState] = [:]
+    private var transientResetTimers: [AgentID: Timer] = [:]
+    var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
+
+    deinit {
+        for timer in transientResetTimers.values {
+            timer.invalidate()
+        }
+        transientResetTimers.removeAll()
+    }
+
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        for timer in transientResetTimers.values {
+            timer.invalidate()
+        }
+        transientResetTimers.removeAll()
+        transientStates.removeAll()
+    }
+
+    func setTransientState(
+        _ state: AgentIntegrationRowTransientState,
+        for agentID: AgentID
+    ) {
+        transientResetTimers[agentID]?.invalidate()
+        transientResetTimers[agentID] = nil
+        transientStates[agentID] = state
+
+        switch state {
+        case .noop, .failed:
+            scheduleTransientReset(
+                for: agentID,
+                delay: agentIntegrationTransientResetDelay
+            )
+        case .configuring:
+            // 兜底：正常路径由 AppDelegate 在操作结束时显式置回 .idle。
+            // 万一那条路径没走到（例如刷新回调丢失），也绝不能把行永久锁死。
+            scheduleTransientReset(
+                for: agentID,
+                delay: agentIntegrationConfiguringWatchdogDelay
+            )
+        case .idle:
+            break
+        }
+
+        tableView.reloadData()
+    }
+
+    /// 供自测断言行内集成控件的渲染结果，不实例化行视图。
+    /// 注意：**不得**并入 `rowSummariesForSelfTest()`，否则会破坏既有无障碍快照契约。
+    func integrationActionSummariesForSelfTest() -> [String] {
+        statuses.map { status in
+            let action = agentIntegrationRowAction(
+                status: status,
+                transientState: transientStates[status.metadata.id] ?? .idle
+            )
+            switch action {
+            case .button(let title, let operation, let isEnabled):
+                return [
+                    status.metadata.id.rawValue,
+                    "button",
+                    title,
+                    operation?.rawValue ?? "-",
+                    isEnabled ? "enabled" : "disabled",
+                ].joined(separator: "|")
+            case .text(let text, let tooltip, let emphasis):
+                return [
+                    status.metadata.id.rawValue,
+                    "text",
+                    text,
+                    tooltip ?? "-",
+                    String(describing: emphasis),
+                ].joined(separator: "|")
+            }
+        }
+    }
+
+    private func scheduleTransientReset(for agentID: AgentID, delay: TimeInterval) {
+        let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.transientStates[agentID] = .idle
+            self.transientResetTimers[agentID] = nil
+            self.tableView.reloadData()
+        }
+        transientResetTimers[agentID] = timer
+    }
 
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 820, height: 560))
@@ -120,6 +280,10 @@ final class DynamicIslandAgentHealthViewController:
             : snapshot.agentStatuses).sorted {
                 $0.metadata.id < $1.metadata.id
             }
+        // 注意：这里**不**清除 `.configuring`。快照刷新由额度/任务等多条无关链路
+        // 频繁触发，条件清除既可能提前解锁按钮，也可能在状态未收敛时永远清不掉。
+        // `.configuring` 的解除统一由 AppDelegate 在操作结束时显式驱动，
+        // 并由 setTransientState 的看门狗计时器兜底。
         renderChannelStatus()
         tableView.reloadData()
         view.needsLayout = true
@@ -137,9 +301,14 @@ final class DynamicIslandAgentHealthViewController:
     ) -> NSView? {
         guard statuses.indices.contains(row) else { return nil }
         let status = statuses[row]
+        let transientState = transientStates[status.metadata.id] ?? .idle
         return DynamicIslandAgentHealthRowView(
             status: status,
-            profile: validationProfile(for: status.metadata.id)
+            profile: validationProfile(for: status.metadata.id),
+            transientState: transientState,
+            onPerformIntegration: { [weak self] agentID, op in
+                self?.onPerformIntegration?(agentID, op)
+            }
         )
     }
 
@@ -223,14 +392,23 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
     private let healthDot = NSView()
     private let healthField = DynamicIslandAgentHealthLabel(size: 12, weight: .medium)
     private let integrationField = DynamicIslandAgentHealthLabel(size: 12, weight: .medium)
+    private let actionButton = DynamicIslandButton(title: "一键安装", style: .primary)
     private let activityField = DynamicIslandAgentHealthLabel(size: 11, weight: .regular)
     private let capabilityField = DynamicIslandAgentHealthLabel(size: 11, weight: .regular)
     private let limitationField = DynamicIslandAgentHealthLabel(size: 11, weight: .regular)
 
+    private let agentID: AgentID
+    private var targetOperation: AgentIntegrationOperation?
+    private let onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
+
     init(
         status: AgentRuntimeStatus,
-        profile: AgentValidationProfile
+        profile: AgentValidationProfile,
+        transientState: AgentIntegrationRowTransientState = .idle,
+        onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)? = nil
     ) {
+        self.agentID = status.metadata.id
+        self.onPerformIntegration = onPerformIntegration
         super.init(frame: .zero)
         addSubview(card)
         for subview in [
@@ -241,12 +419,16 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
             healthDot,
             healthField,
             integrationField,
+            actionButton,
             activityField,
             capabilityField,
             limitationField,
         ] {
             card.addSubview(subview)
         }
+
+        actionButton.target = self
+        actionButton.action = #selector(handleActionButtonClick)
 
         let brandColor = status.metadata.brandColor.color
         iconBadge.wantsLayer = true
@@ -279,10 +461,10 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
         healthDot.layer?.backgroundColor = healthColor.cgColor
         healthField.stringValue = status.diagnostics.summary
         healthField.textColor = healthColor
-        integrationField.stringValue = agentRuntimeIntegrationText(status)
-        integrationField.textColor = DynamicIslandPalette.secondaryText
         activityField.stringValue = "运行 \(status.activeSessionCount) · 需你 \(status.attentionCount)"
         activityField.textColor = DynamicIslandPalette.tertiaryText
+
+        configureIntegrationUI(status: status, transientState: transientState)
 
         let summary = agentRuntimeAccessibilitySummary(
             status,
@@ -290,6 +472,46 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
         )
         setAccessibilityLabel(status.metadata.displayName)
         setAccessibilityValue(summary)
+    }
+
+    private func configureIntegrationUI(
+        status: AgentRuntimeStatus,
+        transientState: AgentIntegrationRowTransientState
+    ) {
+        // 渲染决策全部来自纯函数，视图只负责把决策翻译成 AppKit 属性。
+        switch agentIntegrationRowAction(
+            status: status,
+            transientState: transientState
+        ) {
+        case .button(let title, let operation, let isEnabled):
+            actionButton.isHidden = false
+            actionButton.setDisplayTitle(title)
+            actionButton.setVisualStyle(.primary)
+            actionButton.isEnabled = isEnabled
+            integrationField.isHidden = true
+            integrationField.toolTip = nil
+            targetOperation = operation
+        case .text(let text, let tooltip, let emphasis):
+            actionButton.isHidden = true
+            actionButton.isEnabled = false
+            integrationField.isHidden = false
+            integrationField.stringValue = text
+            integrationField.toolTip = tooltip
+            targetOperation = nil
+            switch emphasis {
+            case .normal:
+                integrationField.textColor = DynamicIslandPalette.secondaryText
+            case .warning:
+                integrationField.textColor = DynamicIslandPalette.amber
+            case .error:
+                integrationField.textColor = DynamicIslandPalette.red
+            }
+        }
+    }
+
+    @objc private func handleActionButtonClick() {
+        guard let targetOperation else { return }
+        onPerformIntegration?(agentID, targetOperation)
     }
 
     @available(*, unavailable)
@@ -320,6 +542,12 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
             y: 52,
             width: 270,
             height: 19
+        )
+        actionButton.frame = NSRect(
+            x: card.bounds.width - 108,
+            y: 47,
+            width: 96,
+            height: 26
         )
         activityField.frame = NSRect(
             x: rightX,

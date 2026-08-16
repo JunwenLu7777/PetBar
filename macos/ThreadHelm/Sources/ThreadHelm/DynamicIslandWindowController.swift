@@ -18,6 +18,7 @@ final class DynamicIslandWindowController {
     var onRequestHide: (() -> Void)?
     var onRefresh: (() -> Void)?
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
+    var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onTaskDetailOpened: ((TaskProgressItem) -> Void)?
 
@@ -94,6 +95,9 @@ final class DynamicIslandWindowController {
         rootController.onQuotaProviderChange = { [weak self] provider in
             self?.onQuotaProviderChange?(provider)
         }
+        rootController.onPerformIntegration = { [weak self] agentID, op in
+            self?.onPerformIntegration?(agentID, op)
+        }
         rootController.onOpenTask = { [weak self] item in
             self?.onOpenTask?(item) ?? .failed
         }
@@ -121,6 +125,13 @@ final class DynamicIslandWindowController {
         ) { [weak self] _ in
             self?.expandedWindowDidResize()
         }
+    }
+
+    func setAgentIntegrationTransientState(
+        _ state: AgentIntegrationRowTransientState,
+        for agentID: AgentID
+    ) {
+        rootController.setAgentIntegrationTransientState(state, for: agentID)
     }
 
     deinit {

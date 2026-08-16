@@ -1309,6 +1309,11 @@ private func assertDynamicIslandTaskWorkspace() {
         exit(1)
     }
 
+    assertDynamicIslandAgentIntegrationActions(
+        workspace: workspace,
+        baseSnapshot: agentHealthSnapshot
+    )
+
     workspace.setSourceFilterForSelfTest(.claudeCode)
     workspace.apply(
         snapshot: ActivityDashboardSnapshot(taskCollection: collection),
@@ -1418,6 +1423,134 @@ private func assertDynamicIslandTaskWorkspace() {
         fputs("dynamic island task hover hide self-test failed\n", stderr)
         exit(1)
     }
+}
+
+/// 独立块：验证 Agents 行内集成控件的渲染矩阵与三态流转。
+/// 刻意不修改既有无障碍快照断言块，并额外反向断言按钮文案未混入行摘要。
+private func assertDynamicIslandAgentIntegrationActions(
+    workspace: DynamicIslandWorkspaceViewController,
+    baseSnapshot: ActivityDashboardSnapshot
+) {
+    func snapshot(
+        integrationStatuses: [AgentID: AgentIntegrationStatus]
+    ) -> ActivityDashboardSnapshot {
+        var updated = baseSnapshot
+        updated.agentStatuses = baseSnapshot.agentStatuses.map { status in
+            AgentRuntimeStatus(
+                metadata: status.metadata,
+                discovery: status.discovery,
+                integrationStatus: integrationStatuses[status.metadata.id],
+                diagnostics: status.diagnostics,
+                activeSessionCount: status.activeSessionCount,
+                attentionCount: status.attentionCount
+            )
+        }
+        return updated
+    }
+
+    func summary(for agentID: AgentID) -> String? {
+        workspace.agentIntegrationActionSummariesForSelfTest()
+            .first { $0.hasPrefix("\(agentID.rawValue)|") }
+    }
+
+    func fail(_ message: String) -> Never {
+        fputs("dynamic island agent integration action self-test failed: \(message)\n", stderr)
+        exit(1)
+    }
+
+    // Codex 已由上方断言证明为 validated；Cursor 已被证明为 unvalidated。
+    workspace.apply(
+        snapshot: snapshot(integrationStatuses: [
+            .codex: .notInstalled,
+            .claudeCode: .installed,
+            .cursor: .notInstalled,
+            .zcode: .disabled,
+            .omp: .checkFailed,
+        ]),
+        state: .expanded(.agents)
+    )
+
+    guard summary(for: .codex) == "codex|button|一键安装|install|enabled" else {
+        fail("validated + notInstalled 应渲染可用的一键安装按钮，实际：\(summary(for: .codex) ?? "nil")")
+    }
+    guard let claudeSummary = summary(for: .claudeCode),
+          claudeSummary.contains("|text|"),
+          claudeSummary.hasSuffix("|-|normal")
+    else {
+        fail("installed 应渲染无 tooltip 的只读文案，实际：\(summary(for: .claudeCode) ?? "nil")")
+    }
+    guard let cursorSummary = summary(for: .cursor),
+          cursorSummary.contains("|text|"),
+          cursorSummary.contains("版本未经真值验证，暂不改写厂商配置")
+    else {
+        fail("unvalidated + notInstalled 必须只读且带版本提示，实际：\(summary(for: .cursor) ?? "nil")")
+    }
+    guard let zcodeSummary = summary(for: .zcode),
+          zcodeSummary.contains("|text|"),
+          zcodeSummary.contains("已在厂商配置中显式停用")
+    else {
+        fail("disabled 必须只读且带停用提示，实际：\(summary(for: .zcode) ?? "nil")")
+    }
+    guard let ompSummary = summary(for: .omp),
+          ompSummary.contains("|text|"),
+          ompSummary.contains("无法读取本地配置，写入不安全")
+    else {
+        fail("checkFailed 必须只读且带不可写提示，实际：\(summary(for: .omp) ?? "nil")")
+    }
+
+    // needsRepair 分支
+    workspace.apply(
+        snapshot: snapshot(integrationStatuses: [.codex: .needsRepair]),
+        state: .expanded(.agents)
+    )
+    guard summary(for: .codex) == "codex|button|立即修复|repair|enabled" else {
+        fail("validated + needsRepair 应渲染立即修复按钮，实际：\(summary(for: .codex) ?? "nil")")
+    }
+
+    // 三态流转
+    workspace.setAgentIntegrationTransientState(.configuring, for: .codex)
+    guard summary(for: .codex) == "codex|button|正在配置…|-|disabled" else {
+        fail("configuring 必须禁用按钮且不携带操作，实际：\(summary(for: .codex) ?? "nil")")
+    }
+
+    workspace.setAgentIntegrationTransientState(
+        .noop("版本未验证，已跳过"),
+        for: .codex
+    )
+    guard summary(for: .codex)
+        == "codex|text|版本未验证，已跳过|版本未验证，已跳过|warning"
+    else {
+        fail("noop 必须渲染 warning 文案，实际：\(summary(for: .codex) ?? "nil")")
+    }
+
+    workspace.setAgentIntegrationTransientState(
+        .failed("配置失败：只读；自动恢复未完成"),
+        for: .codex
+    )
+    // 行内文案会被截断，因此完整消息（含回滚结论）必须同时出现在 tooltip 里。
+    guard summary(for: .codex)
+        == "codex|text|配置失败：只读；自动恢复未完成|配置失败：只读；自动恢复未完成|error"
+    else {
+        fail("failed 必须渲染 error 文案，且完整回滚结论要进 tooltip，实际：\(summary(for: .codex) ?? "nil")")
+    }
+
+    workspace.setAgentIntegrationTransientState(.idle, for: .codex)
+    guard summary(for: .codex) == "codex|button|立即修复|repair|enabled" else {
+        fail("idle 必须回到可操作按钮，实际：\(summary(for: .codex) ?? "nil")")
+    }
+
+    // 契约保护：按钮文案与临时状态一律不得进入无障碍行摘要。
+    let rowSummaries = workspace.agentHealthRowSummariesForSelfTest()
+    let forbidden = ["一键安装", "立即修复", "正在配置…", "版本未验证，已跳过", "配置失败"]
+    guard rowSummaries.count == 5,
+          rowSummaries.allSatisfy({ summary in
+              forbidden.allSatisfy { !summary.contains($0) }
+          })
+    else {
+        fail("按钮文案不得混入无障碍行摘要")
+    }
+
+    workspace.apply(snapshot: baseSnapshot, state: .expanded(.agents))
 }
 
 private func assertDynamicIslandQuotaWorkspace() {

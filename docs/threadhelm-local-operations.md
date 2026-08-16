@@ -62,6 +62,8 @@ BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 
 ## 检查、安装、修复和卸载集成
 
+用户可在 ThreadHelm 的 **Agents 详情页** 直接点击对应已验证 Agent 的 `[ 一键安装 ]` 或 `[ 立即修复 ]` 按钮触发受管集成安装；也可通过终端命令行进行批量运维。
+
 以下命令必须明确写 `--live` 才能接触真实主目录。没有 `--live` 时命令会拒绝执行；自动化测试使用 `--root` 加临时目录。
 
 ```bash

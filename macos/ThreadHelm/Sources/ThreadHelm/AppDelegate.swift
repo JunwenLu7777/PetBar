@@ -79,6 +79,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var refreshTimer: Timer?
     private var taskProgressTimer: Timer?
     private var windowStackRefreshTimer: Timer?
+    private var isPerformingIntegration = false
+    private let integrationSerialQueue = DispatchQueue(label: "dev.threadhelm.agent-integration-serial")
     private let taskProgressReaderStore = TaskProgressRefreshReaderStore()
     private var refreshingQuotaProviders = Set<QuotaProvider>()
     private var taskProgressRefreshGate = TaskProgressRefreshGate()
@@ -799,8 +801,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             },
             selectQuotaProvider: { [weak self] provider in
                 self?.selectQuotaProvider(provider)
+            },
+            performIntegration: { [weak self] agentID, operation in
+                self?.performAgentIntegration(for: agentID, operation: operation)
             }
         ).bind(to: controller)
+    }
+
+    private func performAgentIntegration(
+        for agentID: AgentID,
+        operation: AgentIntegrationOperation
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard !self.isPerformingIntegration else { return }
+            self.isPerformingIntegration = true
+            self.dynamicIslandController?.setAgentIntegrationTransientState(
+                .configuring,
+                for: agentID
+            )
+
+            self.integrationSerialQueue.async { [weak self] in
+                guard let self else { return }
+                let scope = AgentIntegrationScope(
+                    rootDirectory: FileManager.default.homeDirectoryForCurrentUser,
+                    permitsLiveConfigurationChanges: true
+                )
+                let manager = AgentIntegrationManager(registry: self.agentRegistry)
+                do {
+                    let report = try manager.perform(
+                        operation,
+                        targetAgentID: agentID,
+                        in: scope
+                    )
+                    let record = report.agents.first { $0.agentID == agentID }
+                    let result = record?.result
+
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.isPerformingIntegration = false
+                        if result == .unchanged {
+                            // 版本门禁未通过时 perform 静默返回 .unchanged，
+                            // 绝不能当成功处理。但 .unchanged 还有第二个来源：
+                            // 状态已过期、配置其实已就位时的幂等 no-op —— 两者
+                            // 要给出不同的提示，否则会误导用户去查版本。
+                            let message = record?.statusAfter == .installed
+                                ? "已是最新，无需操作"
+                                : "版本未验证，已跳过"
+                            self.dynamicIslandController?
+                                .setAgentIntegrationTransientState(
+                                    .noop(message),
+                                    for: agentID
+                                )
+                            return
+                        }
+                        // .installed / .repaired 以及任何非预期结果都重新探测真实状态，
+                        // 并在刷新落地后显式解除 .configuring —— 不依赖快照比较，
+                        // 因为 dashboardStore.update 在快照相等时会静默跳过通知。
+                        self.refreshAgentRuntimeStatuses { [weak self] in
+                            self?.dynamicIslandController?
+                                .setAgentIntegrationTransientState(
+                                    .idle,
+                                    for: agentID
+                                )
+                        }
+                    }
+                } catch {
+                    let message: String
+                    if let managerError = error as? AgentIntegrationManagerError {
+                        let rollbackNote = managerError.didRollback
+                            ? "原配置已恢复"
+                            : "自动恢复未完成"
+                        message = "配置失败：\(managerError.reason)；\(rollbackNote)"
+                    } else {
+                        message = "配置失败：\(error.localizedDescription)"
+                    }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.isPerformingIntegration = false
+                        self.dynamicIslandController?.setAgentIntegrationTransientState(
+                            .failed(message),
+                            for: agentID
+                        )
+                    }
+                }
+            }
+        }
     }
 
     private func refreshDashboard() {
@@ -824,7 +910,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
     }
 
-    private func refreshAgentRuntimeStatuses() {
+    /// - Parameter completion: 在主线程、`dashboardStore` 更新之后回调。
+    ///   注意 `dashboardStore.update` 在快照未变化时会静默跳过观察者通知，
+    ///   因此需要感知"刷新已完成"的调用方必须用这个回调，而不是等待快照下发。
+    private func refreshAgentRuntimeStatuses(
+        completion: (() -> Void)? = nil
+    ) {
         let registry = agentRegistry
         let previousStatuses = dashboardStore.snapshot.agentStatuses
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -844,7 +935,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 report: integrationReport
             )
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+                guard let self else {
+                    completion?()
+                    return
+                }
                 self.dashboardStore.update { snapshot in
                     snapshot.agentStatuses = agentRuntimeStatusesWithActivity(
                         withIntegration,
@@ -854,6 +948,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     snapshot.agentEventChannelAvailable =
                         self.agentEventChannelAvailable
                 }
+                completion?()
             }
         }
     }
@@ -1049,10 +1144,22 @@ private struct QuotaRefreshPayload {
 struct DynamicIslandDashboardActionBinding {
     let refreshDashboard: () -> Void
     let selectQuotaProvider: (QuotaProvider) -> Void
+    let performIntegration: (AgentID, AgentIntegrationOperation) -> Void
+
+    init(
+        refreshDashboard: @escaping () -> Void,
+        selectQuotaProvider: @escaping (QuotaProvider) -> Void,
+        performIntegration: @escaping (AgentID, AgentIntegrationOperation) -> Void = { _, _ in }
+    ) {
+        self.refreshDashboard = refreshDashboard
+        self.selectQuotaProvider = selectQuotaProvider
+        self.performIntegration = performIntegration
+    }
 
     func bind(to controller: DynamicIslandWindowController) {
         controller.onRefresh = refreshDashboard
         controller.onQuotaProviderChange = selectQuotaProvider
+        controller.onPerformIntegration = performIntegration
     }
 }
 

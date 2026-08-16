@@ -863,6 +863,7 @@ final class DynamicIslandRootViewController: NSViewController {
     var onTabChange: ((DynamicIslandTab) -> Void)?
     var onSourceFilterChange: ((TaskSourceFilter) -> Void)?
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
+    var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
     var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onSelectedTaskKeyChange: ((String?) -> Void)?
@@ -904,6 +905,9 @@ final class DynamicIslandRootViewController: NSViewController {
         workspaceController.onQuotaProviderChange = { [weak self] provider in
             self?.onQuotaProviderChange?(provider)
         }
+        workspaceController.onPerformIntegration = { [weak self] agentID, op in
+            self?.onPerformIntegration?(agentID, op)
+        }
         workspaceController.onOpenTask = { [weak self] item in
             self?.onOpenTask?(item) ?? .failed
         }
@@ -914,6 +918,13 @@ final class DynamicIslandRootViewController: NSViewController {
             self?.selectedTaskKey = key
             self?.onSelectedTaskKeyChange?(key)
         }
+    }
+
+    func setAgentIntegrationTransientState(
+        _ state: AgentIntegrationRowTransientState,
+        for agentID: AgentID
+    ) {
+        workspaceController.setAgentIntegrationTransientState(state, for: agentID)
     }
 
     func apply(
@@ -1459,6 +1470,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     var onTabChange: ((DynamicIslandTab) -> Void)?
     var onSourceFilterChange: ((TaskSourceFilter) -> Void)?
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
+    var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
     var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onSelectedTaskKeyChange: ((String?) -> Void)?
@@ -1590,6 +1602,9 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             self?.selectedTaskKey = key
             self?.onSelectedTaskKeyChange?(key)
         }
+        agentHealthController.onPerformIntegration = { [weak self] agentID, op in
+            self?.onPerformIntegration?(agentID, op)
+        }
         quotaController.onSelectProvider = { [weak self] provider in
             self?.onQuotaProviderChange?(provider)
         }
@@ -1598,6 +1613,17 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         }
         childContainer.wantsLayer = true
         childContainer.layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    func setAgentIntegrationTransientState(
+        _ state: AgentIntegrationRowTransientState,
+        for agentID: AgentID
+    ) {
+        agentHealthController.setTransientState(state, for: agentID)
+    }
+
+    func agentIntegrationActionSummariesForSelfTest() -> [String] {
+        agentHealthController.integrationActionSummariesForSelfTest()
     }
 
     override func viewDidLayout() {
