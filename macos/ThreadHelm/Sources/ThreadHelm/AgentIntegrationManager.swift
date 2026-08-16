@@ -48,13 +48,17 @@ struct AgentIntegrationManagerError: LocalizedError {
 struct AgentIntegrationManager {
     let registry: AgentRegistry
 
-    func status(in scope: AgentIntegrationScope) -> AgentIntegrationRunReport {
-        AgentIntegrationRunReport(
+    func status(
+        targetAgentID: AgentID? = nil,
+        in scope: AgentIntegrationScope
+    ) -> AgentIntegrationRunReport {
+        let candidateAgentIDs = targetAgentID.map { [$0] } ?? registry.agentIDs
+        return AgentIntegrationRunReport(
             operation: .status,
             backupID: nil,
             restoredBackupID: nil,
             rolledBack: false,
-            agents: registry.agentIDs.compactMap { agentID in
+            agents: candidateAgentIDs.compactMap { agentID in
                 guard let adapter = registry.adapter(for: agentID) else {
                     return nil
                 }
@@ -832,6 +836,7 @@ private func integrationPOSIXError(_ code: Int32) -> NSError {
 struct AgentIntegrationCLICommand {
     let operation: AgentIntegrationOperation
     let backupID: String?
+    let targetAgentID: AgentID?
     let scope: AgentIntegrationScope
 }
 
@@ -843,7 +848,10 @@ enum AgentIntegrationCLIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidArguments:
-            return "用法：--agent-integrations <status|install|repair|uninstall|restore BACKUP_ID> (--root ABSOLUTE_PATH|--live)"
+            // restore 刻意不列在接受 --agent 的那一组里：备份是跨 Agent 的，
+            // 按单个 Agent 恢复没有意义，解析器也会拒绝。
+            return "用法：--agent-integrations <status|install|repair|uninstall> [--agent ID] (--root ABSOLUTE_PATH|--live)"
+                + " 或 --agent-integrations restore BACKUP_ID (--root ABSOLUTE_PATH|--live)"
         case .explicitScopeRequired:
             return "必须明确指定隔离 --root 或真实本机 --live"
         case .liveRootMustUseLiveFlag:
@@ -863,7 +871,22 @@ enum AgentIntegrationCLI {
             throw AgentIntegrationCLIError.invalidArguments
         }
         let backupID = operation == .restore ? arguments[flag + 2] : nil
-        let scopeStart = operation == .restore ? flag + 3 : flag + 2
+        var scopeStart = operation == .restore ? flag + 3 : flag + 2
+        var targetAgentID: AgentID?
+        if arguments.indices.contains(scopeStart),
+           arguments[scopeStart] == "--agent"
+        {
+            guard arguments.indices.contains(scopeStart + 1),
+                  let parsedAgentID = AgentID.builtInOrder.first(where: {
+                      $0.rawValue == arguments[scopeStart + 1]
+                  }),
+                  operation != .restore
+            else {
+                throw AgentIntegrationCLIError.invalidArguments
+            }
+            targetAgentID = parsedAgentID
+            scopeStart += 2
+        }
         let trailing = Array(arguments.dropFirst(scopeStart))
         let scope: AgentIntegrationScope
         if trailing == ["--live"] {
@@ -892,8 +915,39 @@ enum AgentIntegrationCLI {
         return AgentIntegrationCLICommand(
             operation: operation,
             backupID: backupID,
+            targetAgentID: targetAgentID,
             scope: scope
         )
+    }
+
+    /// 从已解析的命令构造报告。
+    ///
+    /// 与 `runIfRequested` 分开是为了让自测能断言**分发的产物**：
+    /// 只断言解析结果和退出码是不够的——`targetAgentID` 被解析出来却在这里
+    /// 漏传，解析断言照样绿、退出码照样 0，而作用域已经悄悄放大到全部 Agent。
+    static func makeReport(
+        for command: AgentIntegrationCLICommand,
+        registry: AgentRegistry = .builtIn
+    ) throws -> AgentIntegrationRunReport {
+        let manager = AgentIntegrationManager(registry: registry)
+        switch command.operation {
+        case .status:
+            return manager.status(
+                targetAgentID: command.targetAgentID,
+                in: command.scope
+            )
+        case .install, .repair, .uninstall:
+            return try manager.perform(
+                command.operation,
+                targetAgentID: command.targetAgentID,
+                in: command.scope
+            )
+        case .restore:
+            guard let backupID = command.backupID else {
+                throw AgentIntegrationCLIError.invalidArguments
+            }
+            return try manager.restoreBackup(id: backupID, in: command.scope)
+        }
     }
 
     static func runIfRequested(
@@ -903,22 +957,7 @@ enum AgentIntegrationCLI {
         guard arguments.contains("--agent-integrations") else { return nil }
         do {
             let command = try parse(arguments: arguments)
-            let manager = AgentIntegrationManager(registry: registry)
-            let report: AgentIntegrationRunReport
-            switch command.operation {
-            case .status:
-                report = manager.status(in: command.scope)
-            case .install, .repair, .uninstall:
-                report = try manager.perform(command.operation, in: command.scope)
-            case .restore:
-                guard let backupID = command.backupID else {
-                    throw AgentIntegrationCLIError.invalidArguments
-                }
-                report = try manager.restoreBackup(
-                    id: backupID,
-                    in: command.scope
-                )
-            }
+            let report = try makeReport(for: command, registry: registry)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             let data = try encoder.encode(report)

@@ -1444,6 +1444,64 @@ private func runIntegrationCLIParsingSelfTest(root: URL) {
     else {
         failIntegrationManagerSelfTest("CLI requires explicit --root/--live")
     }
+    // 退出码为 0 说明不了什么：`--agent` 就算被解析后丢弃、仍然全量执行，
+    // 这条也照样绿。必须断言解析结果本身，以及作用域真的收窄到了一个 Agent。
+    let targeted = [
+        "ThreadHelm",
+        "--agent-integrations",
+        "status",
+        "--agent",
+        "omp",
+        "--root",
+        root.path,
+    ]
+    guard let parsed = try? AgentIntegrationCLI.parse(arguments: targeted),
+          parsed.targetAgentID == .omp,
+          parsed.operation == .status,
+          parsed.scope.rootDirectory.path == root.path
+    else {
+        failIntegrationManagerSelfTest("CLI --agent 未被解析成目标 Agent")
+    }
+    guard AgentIntegrationCLI.runIfRequested(arguments: targeted) == 0 else {
+        failIntegrationManagerSelfTest("CLI targeted status")
+    }
+    // 关键：断言**分发的产物**，而不是绕过 CLI 直接调 manager。
+    // 目标 Agent 若在分发处漏传，上面的解析断言和退出码都不会变红。
+    guard let targetedReport = try? AgentIntegrationCLI.makeReport(
+        for: parsed
+    ),
+        targetedReport.agents.count == 1,
+        targetedReport.agents.first?.agentID == .omp
+    else {
+        failIntegrationManagerSelfTest("CLI 分发必须把作用域收窄到目标 Agent")
+    }
+    guard let fullCommand = try? AgentIntegrationCLI.parse(arguments: [
+        "ThreadHelm", "--agent-integrations", "status", "--root", root.path,
+    ]),
+        let fullReport = try? AgentIntegrationCLI.makeReport(for: fullCommand),
+        fullReport.agents.count == AgentID.builtInOrder.count
+    else {
+        failIntegrationManagerSelfTest("不传目标时必须保持全量")
+    }
+
+    // 四种必须 fail-closed 的组合。任何一条被悄悄放行都比解析错误更危险：
+    // 它会让用户以为自己限定了范围，实际却在全量改写厂商配置。
+    for rejected in [
+        // 未知 Agent
+        ["ThreadHelm", "--agent-integrations", "status", "--agent", "nosuchagent", "--root", root.path],
+        // --agent 缺参数
+        ["ThreadHelm", "--agent-integrations", "status", "--agent", "--root", root.path],
+        // restore 不接受目标 Agent（备份是跨 Agent 的）
+        ["ThreadHelm", "--agent-integrations", "restore", "FAKE", "--agent", "omp", "--root", root.path],
+        // --agent 写在 scope 之后必须报错，不能被静默忽略
+        ["ThreadHelm", "--agent-integrations", "status", "--root", root.path, "--agent", "omp"],
+    ] {
+        guard (try? AgentIntegrationCLI.parse(arguments: rejected)) == nil else {
+            failIntegrationManagerSelfTest(
+                "CLI 必须拒绝：\(rejected.dropFirst().joined(separator: " "))"
+            )
+        }
+    }
 }
 
 private extension AgentIntegrationRunReport {
