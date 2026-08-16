@@ -1024,7 +1024,10 @@ private func localAgentVersion(executableURL: URL) -> String? {
     )
     guard capture.termination == .exited,
           let value = String(data: capture.data, encoding: .utf8)?
-            .split(whereSeparator: \Character.isNewline)
+            // 显式根的 key path 当函数用（\Character.isNewline）在 CI runner
+            // 的旧 Swift 上推断不出来，报 "key path value type 'Bool' cannot be
+            // converted to contextual type 'Bool'"。闭包在所有版本上都成立。
+            .split(whereSeparator: { $0.isNewline })
             .first?
             .trimmingCharacters(in: .whitespacesAndNewlines),
           !value.isEmpty
