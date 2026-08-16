@@ -12,6 +12,7 @@ func runOMPAgentAdapterSelfTest() {
         try runOMPDelayedVersionDiscoverySelfTest()
         try runOMPIntegrationLifecycleSelfTest()
         try runOMPStateOnlyContractSelfTest()
+        try runOMPStrictRequirementSelfTest()
         let extensionLoad = try runOMPGeneratedExtensionLoadSelfTest()
         try runOMPEventReductionSelfTest()
         try runOMPTransportContractSelfTest()
@@ -328,7 +329,31 @@ private func runOMPStateOnlyContractSelfTest() throws {
     }
 }
 
-private func runOMPGeneratedExtensionLoadSelfTest() throws
+private func runOMPStrictRequirementSelfTest() throws {
+    do {
+        _ = try runOMPGeneratedExtensionLoadSelfTest(
+            environment: ["THREADHELM_REQUIRE_OMP": "1"],
+            locateExecutable: { nil }
+        )
+    } catch let error as OMPAgentAdapterSelfTestError {
+        // 收窄到具体错误：宽泛的 catch 在未来有人往 guard 之前加入可抛的
+        // setup 时，会把无关错误吸收成"通过"。
+        guard error.description.contains("THREADHELM_REQUIRE_OMP") else {
+            throw OMPAgentAdapterSelfTestError.failed(
+                "严格模式应因缺少 OMP 而失败，实际错误：\(error)"
+            )
+        }
+        return
+    }
+    throw OMPAgentAdapterSelfTestError.failed(
+        "THREADHELM_REQUIRE_OMP must fail when OMP is unavailable"
+    )
+}
+
+private func runOMPGeneratedExtensionLoadSelfTest(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    locateExecutable: () -> URL? = { locateOMPExecutable() }
+) throws
     -> OMPExtensionLoadCoverage
 {
     let manager = FileManager.default
@@ -341,7 +366,12 @@ private func runOMPGeneratedExtensionLoadSelfTest() throws
     // 没装 OMP 就没有可加载扩展的运行时。把这当失败会让任何没有 OMP 的
     // 环境（CI runner）永远红，且红的原因与被测代码无关；如实报告未覆盖，
     // 并在摘要里留痕，比假装通过或假装失败都诚实。
-    guard let ompExecutable = locateOMPExecutable() else {
+    guard let ompExecutable = locateExecutable() else {
+        if environment["THREADHELM_REQUIRE_OMP"] == "1" {
+            throw OMPAgentAdapterSelfTestError.failed(
+                "THREADHELM_REQUIRE_OMP=1 but no OMP executable was found"
+            )
+        }
         fputs(
             "omp-agent-adapter-self-test: 未发现本机 OMP，跳过生成扩展的加载验证\n",
             stderr
