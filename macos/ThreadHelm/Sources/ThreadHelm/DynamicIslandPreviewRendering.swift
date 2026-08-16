@@ -37,6 +37,12 @@ enum DynamicIslandPreviewState: String, CaseIterable {
     case quotaStale = "quota-stale"
     case quotaFirstFailure = "quota-first-failure"
     case quotaUnavailable = "quota-unavailable"
+    /// 五个 Agent 的完整渲染矩阵：可安装、可修复、版本未验证、用户已停用、
+    /// 读取失败、以及不受管的 Codex。行内控件的 AppKit 翻译层（显隐、配色、
+    /// 按钮与文本列的相对位置）只有在这里才能被真正看见。
+    case agents
+    /// 自动集成开关的待确认态，外加行内的"正在配置…"与失败提示。
+    case agentsConfiguring = "agents-configuring"
 }
 
 func dynamicIslandPreviewStateNames() -> [String] {
@@ -65,6 +71,8 @@ func dynamicIslandPreviewSize(for state: DynamicIslandPreviewState) -> NSSize {
          .quotaFirstFailure,
          .quotaUnavailable:
         return dynamicIslandQuotaSize
+    case .agents, .agentsConfiguring:
+        return dynamicIslandTaskSize
     }
 }
 
@@ -117,7 +125,24 @@ private func dynamicIslandPreviewView(
         root.apply(snapshot: snapshot, state: presentationState)
         root.applyConfirmationPresentation(presentation)
     } else {
+        // 三种瞬态各占一行，外加待确认的自动集成开关，一张图看全。
+        // 必须在 apply 之前设置：瞬态只改字典，真正把行建出来的是 apply 里
+        // 那次 reloadData，顺序反过来表格会停在上一次的 0 行状态。
+        if state == .agentsConfiguring {
+            root.setAgentIntegrationTransientState(.configuring, for: .claudeCode)
+            root.setAgentIntegrationTransientState(
+                .failed("配置失败：文件只读；原配置已恢复"),
+                for: .zcode
+            )
+            root.setAgentIntegrationTransientState(
+                .noop("版本未验证，已跳过"),
+                for: .cursor
+            )
+        }
         root.apply(snapshot: snapshot, state: presentationState)
+        if state == .agentsConfiguring {
+            root.armAgentAutoIntegrationConfirmationForPreview()
+        }
     }
     root.view.frame = NSRect(
         origin: .zero,
@@ -150,7 +175,96 @@ private func dynamicIslandPreviewPresentationState(
          .quotaFirstFailure,
          .quotaUnavailable:
         return .expanded(.quota)
+    case .agents, .agentsConfiguring:
+        return .expanded(.agents)
     }
+}
+
+/// 覆盖 Agents 页每一条渲染分支的固定夹具。
+/// 刻意让五行落在五种不同的控件形态上，任何一种回归都能一眼看出来。
+private func dynamicIslandPreviewAgentStatuses() -> [AgentRuntimeStatus] {
+    func status(
+        _ agentID: AgentID,
+        installed: Bool,
+        compatibility: AgentCompatibility,
+        integrationStatus: AgentIntegrationStatus?,
+        version: String?,
+        health: AgentHealth,
+        summary: String
+    ) -> AgentRuntimeStatus? {
+        guard let metadata = builtInAgentMetadata().first(where: {
+            $0.id == agentID
+        }) else { return nil }
+        return AgentRuntimeStatus(
+            metadata: metadata,
+            discovery: AgentDiscovery(
+                isInstalled: installed,
+                version: version,
+                compatibility: compatibility
+            ),
+            integrationStatus: integrationStatus,
+            diagnostics: AgentDiagnostics(
+                health: health,
+                summary: summary,
+                counters: [:]
+            ),
+            activeSessionCount: agentID == .codex ? 2 : 0,
+            attentionCount: agentID == .claudeCode ? 1 : 0
+        )
+    }
+
+    return [
+        // 不受管：纯文本，永远不该出现按钮。
+        status(
+            .codex,
+            installed: true,
+            compatibility: .validated,
+            integrationStatus: .notManaged,
+            version: "0.145.0",
+            health: .healthy,
+            summary: "本机可用"
+        ),
+        // 已验证 + 未集成 → [ 一键安装 ]
+        status(
+            .claudeCode,
+            installed: true,
+            compatibility: .validated,
+            integrationStatus: .notInstalled,
+            version: "2.1.226",
+            health: .healthy,
+            summary: "本机可用"
+        ),
+        // 已验证 + 配置漂移 → [ 立即修复 ]
+        status(
+            .zcode,
+            installed: true,
+            compatibility: .validated,
+            integrationStatus: .needsRepair,
+            version: "3.7.6",
+            health: .degraded,
+            summary: "受管配置漂移"
+        ),
+        // 版本未验证 → 只读 + tooltip，绝不能给按钮
+        status(
+            .cursor,
+            installed: true,
+            compatibility: .unvalidated,
+            integrationStatus: .notInstalled,
+            version: "3.16.0",
+            health: .healthy,
+            summary: "本机可用"
+        ),
+        // 用户在厂商配置里显式停用 → 只读，尊重用户意图
+        status(
+            .omp,
+            installed: true,
+            compatibility: .validated,
+            integrationStatus: .disabled,
+            version: "17.3.2",
+            health: .healthy,
+            summary: "本机可用"
+        ),
+    ].compactMap { $0 }
 }
 
 private func dynamicIslandPreviewSnapshot(
@@ -224,7 +338,7 @@ private func dynamicIslandPreviewSnapshot(
     } else {
         availableProviders = QuotaProvider.allCases
     }
-    return ActivityDashboardSnapshot(
+    var snapshot = ActivityDashboardSnapshot(
         taskCollection: TaskProgressCollectionSnapshot.displaying(visibleTasks),
         quotaStates: state == .capsuleCodexExited
             ? [:]
@@ -236,6 +350,18 @@ private func dynamicIslandPreviewSnapshot(
         isTaskRefreshing: state == .quotaLoading,
         codexDesktopRunning: state != .capsuleCodexExited
     )
+    switch state {
+    case .agents, .agentsConfiguring:
+        snapshot.agentStatuses = dynamicIslandPreviewAgentStatuses()
+        snapshot.agentEventChannelAvailable = true
+        // 已确认过、但当前关闭：预览里由 agentsConfiguring 走待确认态，
+        // 所以这里保持未确认，让两张图分别覆盖"未确认"和"待确认"。
+        snapshot.isAutoIntegrationEnabled = false
+        snapshot.hasConfirmedAutoIntegration = false
+    default:
+        break
+    }
+    return snapshot
 }
 
 private func quotaStates(

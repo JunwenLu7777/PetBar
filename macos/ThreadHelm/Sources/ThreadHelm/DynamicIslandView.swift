@@ -931,6 +931,10 @@ final class DynamicIslandRootViewController: NSViewController {
         workspaceController.setAgentIntegrationTransientState(state, for: agentID)
     }
 
+    func armAgentAutoIntegrationConfirmationForPreview() {
+        workspaceController.armAgentAutoIntegrationConfirmationForPreview()
+    }
+
     func apply(
         snapshot: ActivityDashboardSnapshot,
         state: DynamicIslandPresentationState
@@ -1644,6 +1648,10 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
 
     func agentAutoIntegrationControlForSelfTest() -> AgentAutoIntegrationControl {
         agentHealthController.autoIntegrationControlForSelfTest()
+    }
+
+    func armAgentAutoIntegrationConfirmationForPreview() {
+        agentHealthController.armAutoIntegrationConfirmationForPreview()
     }
 
     func expireAgentAutoIntegrationConfirmationForSelfTest() {

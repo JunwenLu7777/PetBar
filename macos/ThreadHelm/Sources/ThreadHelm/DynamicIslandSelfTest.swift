@@ -1947,6 +1947,8 @@ private func assertDynamicIslandPreviewRendering() {
         "quota-stale",
         "quota-first-failure",
         "quota-unavailable",
+        "agents",
+        "agents-configuring",
     ]
     guard dynamicIslandPreviewStateNames() == expectedStates,
           DynamicIslandPreviewState(rawValue: "unknown") == nil
@@ -1974,6 +1976,8 @@ private func assertDynamicIslandPreviewRendering() {
         .quotaStale: dynamicIslandQuotaSize,
         .quotaFirstFailure: dynamicIslandQuotaSize,
         .quotaUnavailable: dynamicIslandQuotaSize,
+        .agents: dynamicIslandTaskSize,
+        .agentsConfiguring: dynamicIslandTaskSize,
     ]
     guard expectedSizes.allSatisfy({
         dynamicIslandPreviewSize(for: $0.key) == $0.value

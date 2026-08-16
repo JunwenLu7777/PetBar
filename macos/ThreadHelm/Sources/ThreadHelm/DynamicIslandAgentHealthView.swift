@@ -190,6 +190,9 @@ final class DynamicIslandAgentHealthViewController:
         _ state: AgentIntegrationRowTransientState,
         for agentID: AgentID
     ) {
+        // AppDelegate 可能在灵动岛从未展开过时就设置瞬态，先确保视图已加载，
+        // 否则下面的 reloadData 落在一个还没接 dataSource 的表上。
+        _ = view
         transientResetTimers[agentID]?.invalidate()
         transientResetTimers[agentID] = nil
         transientStates[agentID] = state
@@ -212,6 +215,8 @@ final class DynamicIslandAgentHealthViewController:
         }
 
         tableView.reloadData()
+        // 与 apply(_:) 保持一致，让后续布局把行视图重新建出来。
+        view.needsLayout = true
     }
 
     /// 供自测断言行内集成控件的渲染结果，不实例化行视图。
@@ -250,6 +255,15 @@ final class DynamicIslandAgentHealthViewController:
 
     func isAutoIntegrationEnabledForSelfTest() -> Bool {
         isAutoIntegrationEnabled
+    }
+
+    /// 供预览渲染把开关摆到待确认态，不触发任何回调、不落 defaults。
+    func armAutoIntegrationConfirmationForPreview() {
+        _ = view
+        isAwaitingAutoIntegrationConfirmation = true
+        autoIntegrationConfirmTimer?.invalidate()
+        autoIntegrationConfirmTimer = nil
+        renderAutoIntegrationStatus()
     }
 
     /// 模拟确认窗口超时（8 秒计时器到点）走的那条撤销路径。
