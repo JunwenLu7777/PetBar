@@ -1621,6 +1621,15 @@ private func assertDynamicIslandAgentIntegrationActions(
     guard summary(for: .codex) == "codex|button|正在配置…|-|disabled" else {
         fail("configuring 必须禁用按钮且不携带操作，实际：\(summary(for: .codex) ?? "nil")")
     }
+    workspace.setAgentIntegrationTransientState(
+        agentIntegrationBusyTransientState(),
+        for: .codex
+    )
+    guard summary(for: .codex)
+        == "codex|text|另一个 Agent 正在配置，请稍候|另一个 Agent 正在配置，请稍候|warning"
+    else {
+        fail("busy 状态必须渲染可见的等待提示，实际：\(summary(for: .codex) ?? "nil")")
+    }
 
     workspace.setAgentIntegrationTransientState(
         .noop("版本未验证，已跳过"),

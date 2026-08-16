@@ -217,7 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var taskProgressTimer: Timer?
     private var windowStackRefreshTimer: Timer?
     private var agentHealthRefreshTimer: Timer?
-    private var isPerformingIntegration = false
+    private var performingIntegrationAgentID: AgentID?
     private let autoIntegrationDefaultsKey = "dev.threadhelm.agent-auto-integration.enabled"
     /// 一次性确认。开关本身可以随时开关，但在用户显式确认过"会写入厂商配置"
     /// 之前，自动路径一律不落盘。
@@ -226,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let autoIntegrationBackoffGate = AgentAutoIntegrationBackoffGate()
     private var agentRuntimeRefreshGate = TaskProgressRefreshGate()
     private var pendingAgentRuntimeRefreshCompletions: [() -> Void] = []
+    private var pendingAgentRuntimeRefreshFollowUp = AgentRuntimeRefreshFollowUp()
     private let integrationSerialQueue = DispatchQueue(label: "dev.threadhelm.agent-integration-serial")
     private let taskProgressReaderStore = TaskProgressRefreshReaderStore()
     private var refreshingQuotaProviders = Set<QuotaProvider>()
@@ -1000,12 +1001,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for agentID: AgentID,
         operation: AgentIntegrationOperation,
         version: String? = nil,
+        userInitiated: Bool = true,
         completion: (() -> Void)? = nil
     ) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            guard !self.isPerformingIntegration else { return }
-            self.isPerformingIntegration = true
+            if let performingAgentID = self.performingIntegrationAgentID {
+                if performingAgentID == agentID {
+                    // 同一个 Agent 再次触发：重设 .configuring 而不是直接返回。
+                    // 看门狗超时把行复位成可点按钮后，用户再点这一行本来会被
+                    // 静默吞掉；重设顺带续上看门狗。
+                    self.dynamicIslandController?.setAgentIntegrationTransientState(
+                        .configuring,
+                        for: agentID
+                    )
+                } else if userInitiated {
+                    // 只有用户亲手点的才提示。自动集成撞上互斥时保持静默，
+                    // 否则会在无人交互的情况下往候选行上闪一条提示。
+                    self.dynamicIslandController?.setAgentIntegrationTransientState(
+                        agentIntegrationBusyTransientState(),
+                        for: agentID
+                    )
+                }
+                return
+            }
+            self.performingIntegrationAgentID = agentID
             self.dynamicIslandController?.setAgentIntegrationTransientState(
                 .configuring,
                 for: agentID
@@ -1029,7 +1049,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
                     DispatchQueue.main.async { [weak self] in
                         guard let self else { return }
-                        self.isPerformingIntegration = false
+                        self.performingIntegrationAgentID = nil
                         let activeVersion = version
                             ?? self.dashboardStore.snapshot.agentStatuses
                                 .first(where: { $0.metadata.id == agentID })
@@ -1093,7 +1113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     }
                     DispatchQueue.main.async { [weak self] in
                         guard let self else { return }
-                        self.isPerformingIntegration = false
+                        self.performingIntegrationAgentID = nil
                         let activeVersion = version
                             ?? self.dashboardStore.snapshot.agentStatuses
                                 .first(where: { $0.metadata.id == agentID })
@@ -1167,7 +1187,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         performAgentIntegration(
             for: candidate.agentID,
             operation: .install,
-            version: candidate.version
+            version: candidate.version,
+            userInitiated: false
         )
     }
 
@@ -1206,8 +1227,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         completion: (() -> Void)? = nil
     ) {
         guard let generation = agentRuntimeRefreshGate.begin() else {
-            // 已有刷新在飞：合并本次请求，等那一次落地后一起回调，
-            // 不再另起一轮探测。
+            // 已有刷新在飞：合并回调，并记一轮真正的后续探测，避免集成写盘
+            // 发生在当前探测之后时，旧快照把刚完成的状态覆盖一个周期。
+            pendingAgentRuntimeRefreshFollowUp.request(
+                suppressAutoIntegration: suppressAutoIntegration
+            )
             if let completion {
                 pendingAgentRuntimeRefreshCompletions.append(completion)
             }
@@ -1256,11 +1280,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if !suppressAutoIntegration {
                     self.evaluateAutoIntegration(on: withIntegration)
                 }
-                let pending = self.pendingAgentRuntimeRefreshCompletions
+                var completions = self.pendingAgentRuntimeRefreshCompletions
                 self.pendingAgentRuntimeRefreshCompletions = []
-                completion?()
-                for pendingCompletion in pending {
-                    pendingCompletion()
+                if let completion {
+                    completions.insert(completion, at: 0)
+                }
+                let followUp = self.pendingAgentRuntimeRefreshFollowUp.consume()
+                if let followUp {
+                    self.refreshAgentRuntimeStatuses(
+                        suppressAutoIntegration: followUp.suppressAutoIntegration
+                    ) {
+                        for completion in completions {
+                            completion()
+                        }
+                    }
+                } else {
+                    for completion in completions {
+                        completion()
+                    }
                 }
             }
         }
@@ -1542,6 +1579,29 @@ final class TaskProgressRefreshReaderStore {
         }
     }
 
+}
+
+struct AgentRuntimeRefreshFollowUpRequest {
+    let suppressAutoIntegration: Bool
+}
+
+struct AgentRuntimeRefreshFollowUp {
+    private var pendingSuppressAutoIntegration: Bool?
+
+    mutating func request(suppressAutoIntegration: Bool) {
+        pendingSuppressAutoIntegration =
+            (pendingSuppressAutoIntegration ?? true) && suppressAutoIntegration
+    }
+
+    mutating func consume() -> AgentRuntimeRefreshFollowUpRequest? {
+        guard let suppressAutoIntegration = pendingSuppressAutoIntegration else {
+            return nil
+        }
+        pendingSuppressAutoIntegration = nil
+        return AgentRuntimeRefreshFollowUpRequest(
+            suppressAutoIntegration: suppressAutoIntegration
+        )
+    }
 }
 
 struct TaskProgressRefreshGate {

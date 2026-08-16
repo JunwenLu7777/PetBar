@@ -521,6 +521,23 @@ private func runTaskProgressRefreshGateSelfTest() {
         fputs("task progress refresh gate accepted a stale completion\n", stderr)
         exit(1)
     }
+    var followUp = AgentRuntimeRefreshFollowUp()
+    guard followUp.consume() == nil else {
+        fputs("agent runtime refresh follow-up was initially pending\n", stderr)
+        exit(1)
+    }
+    followUp.request(suppressAutoIntegration: true)
+    followUp.request(suppressAutoIntegration: false)
+    guard followUp.consume()?.suppressAutoIntegration == false,
+          followUp.consume() == nil
+    else {
+        fputs("agent runtime refresh follow-up coalescing failed\n", stderr)
+        exit(1)
+    }
+    guard gate.complete(generation: freshGeneration) == false else {
+        fputs("task progress refresh gate completed twice\n", stderr)
+        exit(1)
+    }
 }
 
 private func runClaudeAgentsCommandTimeoutSelfTest() {

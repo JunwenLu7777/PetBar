@@ -71,6 +71,12 @@ func agentAutoIntegrationControl(
     )
 }
 
+func agentIntegrationBusyTransientState()
+    -> AgentIntegrationRowTransientState
+{
+    .noop("另一个 Agent 正在配置，请稍候")
+}
+
 func agentIntegrationRowAction(
     status: AgentRuntimeStatus,
     transientState: AgentIntegrationRowTransientState
