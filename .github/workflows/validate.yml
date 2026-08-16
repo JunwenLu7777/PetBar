@@ -7,9 +7,32 @@ on:
 
 jobs:
   threadhelm-macos:
-    runs-on: macos-14
+    # 两条腿测的是不同的东西，不要合并：
+    #   macos-14 是最老的 arm64 镜像，是 arm64-apple-macos12.3 部署目标能拿到的
+    #     唯一老 Foundation 覆盖。曾有一个未定义行为只在这条腿上暴露。
+    #   macos-15 与开发机同代，先一步发现新工具链上的问题。
+    #
+    # ⚠️ macos-14 镜像已于 2026-07-06 进入弃用期，2026-11-02 完全停止支持
+    #   （actions/runner-images#13518）。弃用期内可能出现排队延迟与定期 brownout：
+    #   那不是本仓库的回归，不要为它改代码。11-02 之前必须决定替代方案，
+    #   在此之前不要因为这条腿红就把它删掉——那等于丢掉旧 Foundation 的覆盖。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            xcode: Xcode_15.4
+          - runner: macos-15
+            xcode: Xcode_16.4
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      - name: Pin Xcode toolchain
+        run: |
+          XCODE_PATH="/Applications/${{ matrix.xcode }}.app/Contents/Developer"
+          test -d "$XCODE_PATH"
+          sudo xcode-select --switch "$XCODE_PATH"
+          xcodebuild -version
       - name: Resolve ThreadHelm version
         shell: bash
         run: |
@@ -79,7 +102,7 @@ jobs:
       - run: zsh -n macos/package/*.command macos/ThreadHelm/scripts/*.sh script/*.sh scripts/*.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.THREADHELM_RELEASE_ID }}
+          name: ${{ env.THREADHELM_RELEASE_ID }}-${{ matrix.runner }}
           if-no-files-found: error
           path: |
             dist/${{ env.THREADHELM_RELEASE_ID }}.zip
