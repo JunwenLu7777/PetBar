@@ -666,7 +666,9 @@ struct ZCodeAgentAdapter: AgentAdapter {
         metadata: AgentMetadata? = builtInAgentMetadata().first {
             $0.id == .zcode
         },
-        discovery: @escaping () -> AgentDiscovery = {
+        discovery: @escaping () -> AgentDiscovery = makeGenericAgentDiscoveryProvider(
+            agentID: .zcode
+        ) {
             zcodeLocalDiscovery(executableURL: locateZCodeExecutable())
         },
         readEnvelopeData: @escaping () throws -> [Data] = { [] },

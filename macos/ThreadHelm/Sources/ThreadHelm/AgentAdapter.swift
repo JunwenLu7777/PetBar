@@ -904,37 +904,102 @@ private func localAgentDiscovery(
     )
 }
 
-private final class LocalAgentDiscoveryCache {
-    private let lock = NSLock()
-    private let agentID: AgentID
-    private let executableLocator: () -> URL?
-    private var cached: AgentDiscovery?
+/// 发现结果缓存的默认存活时间。
+///
+/// 必须**严格小于** `agentHealthRefreshInterval`（300 秒）：时间戳记在探测发生的
+/// 时刻，比定时器唤醒晚一个派发延迟加前序 Agent 的探测耗时（5 个 Agent 顺序探测，
+/// 每个最坏 2 秒子进程超时）。若两者相等，下一轮唤醒时缓存往往刚好还差几秒才
+/// 过期，本轮探测直接落空，该 Agent 的实际刷新间隔退化成 600 秒。
+let agentDiscoveryCacheTTL: TimeInterval = 240
 
-    init(agentID: AgentID, executableLocator: @escaping () -> URL?) {
+/// Agent 健康与集成状态的后台刷新周期。
+let agentHealthRefreshInterval: TimeInterval = 300
+
+final class LocalAgentDiscoveryCache {
+    private let lock = NSLock()
+    let agentID: AgentID
+    let ttl: TimeInterval
+    private let now: () -> Date
+    private let discoverBlock: () -> AgentDiscovery
+    private var cached: AgentDiscovery?
+    private var cachedTimestamp: Date?
+
+    init(
+        agentID: AgentID,
+        ttl: TimeInterval = agentDiscoveryCacheTTL,
+        now: @escaping () -> Date = Date.init,
+        discover: @escaping () -> AgentDiscovery
+    ) {
         self.agentID = agentID
-        self.executableLocator = executableLocator
+        self.ttl = ttl
+        self.now = now
+        self.discoverBlock = discover
+    }
+
+    convenience init(
+        agentID: AgentID,
+        ttl: TimeInterval = agentDiscoveryCacheTTL,
+        now: @escaping () -> Date = Date.init,
+        executableLocator: @escaping () -> URL?
+    ) {
+        self.init(agentID: agentID, ttl: ttl, now: now) {
+            localAgentDiscovery(
+                agentID: agentID,
+                executableURL: executableLocator()
+            )
+        }
     }
 
     func read() -> AgentDiscovery {
         lock.lock()
         defer { lock.unlock() }
-        if let cached { return cached }
-        let discovery = localAgentDiscovery(
-            agentID: agentID,
-            executableURL: executableLocator()
-        )
+        let currentTime = now()
+        if let cached,
+           let cachedTimestamp,
+           currentTime.timeIntervalSince(cachedTimestamp) < ttl
+        {
+            return cached
+        }
+        let discovery = discoverBlock()
         cached = discovery
+        cachedTimestamp = currentTime
         return discovery
+    }
+
+    func invalidate() {
+        lock.lock()
+        defer { lock.unlock() }
+        cached = nil
+        cachedTimestamp = nil
     }
 }
 
-private func makeLocalAgentDiscoveryProvider(
+func makeLocalAgentDiscoveryProvider(
     agentID: AgentID,
+    ttl: TimeInterval = agentDiscoveryCacheTTL,
+    now: @escaping () -> Date = Date.init,
     _ executableLocator: @escaping () -> URL?
 ) -> () -> AgentDiscovery {
     let cache = LocalAgentDiscoveryCache(
         agentID: agentID,
+        ttl: ttl,
+        now: now,
         executableLocator: executableLocator
+    )
+    return { cache.read() }
+}
+
+func makeGenericAgentDiscoveryProvider(
+    agentID: AgentID,
+    ttl: TimeInterval = agentDiscoveryCacheTTL,
+    now: @escaping () -> Date = Date.init,
+    _ discover: @escaping () -> AgentDiscovery
+) -> () -> AgentDiscovery {
+    let cache = LocalAgentDiscoveryCache(
+        agentID: agentID,
+        ttl: ttl,
+        now: now,
+        discover: discover
     )
     return { cache.read() }
 }

@@ -21,7 +21,9 @@ struct OMPAgentAdapter: AgentAdapter {
         metadata: AgentMetadata? = builtInAgentMetadata().first {
             $0.id == .omp
         },
-        discovery: @escaping () -> AgentDiscovery = {
+        discovery: @escaping () -> AgentDiscovery = makeGenericAgentDiscoveryProvider(
+            agentID: .omp
+        ) {
             discoverLocalOMPAgent()
         },
         readEvents: @escaping () throws -> [AgentEvent] = { [] },

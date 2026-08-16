@@ -610,19 +610,39 @@ private func cursorHooksURL(
     try scope.managedURL(relativePath: ".cursor/hooks.json", for: access)
 }
 
-private func makeCursorDiscoveryProvider() -> () -> AgentDiscovery {
-    let cache = CursorDiscoveryCache()
+func makeCursorDiscoveryProvider(
+    ttl: TimeInterval = agentDiscoveryCacheTTL,
+    now: @escaping () -> Date = Date.init
+) -> () -> AgentDiscovery {
+    let cache = CursorDiscoveryCache(ttl: ttl, now: now)
     return { cache.read() }
 }
 
-private final class CursorDiscoveryCache {
+final class CursorDiscoveryCache {
     private let lock = NSLock()
+    let ttl: TimeInterval
+    private let now: () -> Date
     private var cached: AgentDiscovery?
+    private var cachedTimestamp: Date?
+
+    init(
+        ttl: TimeInterval = agentDiscoveryCacheTTL,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.ttl = ttl
+        self.now = now
+    }
 
     func read() -> AgentDiscovery {
         lock.lock()
         defer { lock.unlock() }
-        if let cached { return cached }
+        let currentTime = now()
+        if let cached,
+           let cachedTimestamp,
+           currentTime.timeIntervalSince(cachedTimestamp) < ttl
+        {
+            return cached
+        }
         let bundleURL = cursorBundleURL()
         let desktopVersion = cursorBundleVersion(bundleURL: bundleURL)
         let agentCLIURL = locateCursorCLIExecutable()
@@ -651,7 +671,15 @@ private final class CursorDiscoveryCache {
             components: components
         )
         cached = discovery
+        cachedTimestamp = currentTime
         return discovery
+    }
+
+    func invalidate() {
+        lock.lock()
+        defer { lock.unlock() }
+        cached = nil
+        cachedTimestamp = nil
     }
 
     private func cursorBundleURL() -> URL? {
