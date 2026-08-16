@@ -69,6 +69,24 @@ private func runOMPDelayedVersionDiscoverySelfTest() throws {
     }
 }
 
+/// 隔离 OMP RPC 自测前需要从环境中清除的厂商密钥变量。
+/// 保证自测既不读取用户真实凭据，也不会因本机是否导出密钥而结果漂移。
+private let ompSelfTestClearedProviderKeys = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "OPENROUTER_API_KEY",
+    "XAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "PI_API_KEY",
+]
+
 private enum OMPAgentAdapterSelfTestError: Error, CustomStringConvertible {
     case failed(String)
 
@@ -360,6 +378,18 @@ private func runOMPGeneratedExtensionLoadSelfTest() throws {
     environment["HOME"] = temporaryRoot.path
     environment["PI_CODING_AGENT_DIR"] = temporaryRoot
         .appendingPathComponent(".omp/agent").path
+    // 本用例把 HOME 指向临时目录，OMP 因此读不到用户的 models.yml；没有任何
+    // 可用模型时它会在加载扩展之前就以 status 1 退出（"No models available"），
+    // 使断言失败原因与扩展本身无关。这里注入占位密钥让 OMP 能完成启动。
+    //
+    // 同时清空所有已知厂商密钥，确保：
+    //   1. 结果不随开发者本机是否导出了真实密钥而漂移（自测必须可复现）；
+    //   2. 自测进程绝不可能拿到用户的真实凭据。
+    // `get_state` 是纯本地查询，占位密钥不会产生任何网络请求。
+    for key in ompSelfTestClearedProviderKeys {
+        environment.removeValue(forKey: key)
+    }
+    environment["ANTHROPIC_API_KEY"] = "threadhelm-self-test-placeholder"
     process.environment = environment
     process.standardInput = input
     process.standardOutput = output
@@ -403,11 +433,19 @@ private func runOMPGeneratedExtensionLoadSelfTest() throws {
           sawSuccessfulStateResponse,
           !sawExtensionError
     else {
+        // 只截断展示，便于区分"扩展本身有问题"与"OMP 根本没起来"
+        // （例如缺少可用模型、CLI 参数变更）这两类完全不同的失败。
+        let diagnostic = text
+            .split(whereSeparator: \.isNewline)
+            .suffix(6)
+            .joined(separator: " | ")
+            .prefix(600)
         throw OMPAgentAdapterSelfTestError.failed(
             "generated index.ts did not load in isolated OMP RPC mode "
                 + "(termination=\(capture.termination), status=\(process.terminationStatus), "
                 + "ready=\(sawReady), response=\(sawSuccessfulStateResponse), "
                 + "extensionError=\(sawExtensionError))"
+                + "; last output: \(diagnostic.isEmpty ? "<empty>" : String(diagnostic))"
         )
     }
 }
