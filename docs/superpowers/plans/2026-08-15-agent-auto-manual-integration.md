@@ -1,7 +1,8 @@
 # ThreadHelm Agent 手动一键集成 + 受控自动集成 实施计划 (RFC & Implementation Plan)
 
 - **Date**: 2026-08-15
-- **Status**: Ready for Review / Proposed
+- **Status**: Implemented（两期均已合入，CI 绿）。计划正文保留为立项时的原貌，
+  实际落地与偏差见 §10。
 - **Author**: Antigravity
 - **Target Subsystem**: `macos/ThreadHelm/Sources/ThreadHelm/`
   - `AgentIntegrationManager.swift`（逻辑与 CLI）
@@ -86,6 +87,9 @@ ThreadHelm 支持 5 个本地 Agent（Codex、Claude Code、Cursor、ZCode、OMP
    > **前置依赖（必须先做 §5.5）**：当前代码**没有**任何周期性的 Agent 状态刷新——`refreshAgentRuntimeStatuses()` 全仓库只有两个调用点：启动时（`AppDelegate.swift:153`）和用户手动刷新（`:807`）。现有 4 个 Timer（`:173` 窗口层级 / `:179` 额度 / `:182` 任务进度 / `:989` `agentHookDropTimer` hook 事件摄入）**没有一个**驱动 Agent 状态刷新。**且** Claude Code / Cursor / Codex 的 discovery 结果是进程级永久缓存（无 TTL），进程运行期间新装的 Agent `isInstalled` 恒为 `false`、`compatibility` 恒为 `.unknown`，重启前永远不会命中触发条件。
    >
    > 因此本目标**不能**"复用现有轮询"，必须先落地 §5.5 的刷新与缓存失效设计。若本期不做 §5.5，Goal 2 应降级为「仅在 App 启动时与用户手动刷新后判定」，并同步删改 §7 相应验收项。
+   >
+   > **落地结果：§5.5 已实现**（新增 300s 刷新 Timer、缓存 TTL 240s、`invalidate()`，
+   > 并统一了 5 个 Agent 的缓存语义）。Goal 2 未降级。见 §10。
 
 3. **🛡️ 生产级防御与异常恢复闭环**
    * 行级状态机（`idle → configuring → success / failed / noop`），点击瞬间禁用按钮防连击；
@@ -238,6 +242,8 @@ func perform(
 
 **CLI 层（可选，建议同期做）**：为 `--agent-integrations` 增加可选的 `--agent <id>`。若实现，必须放在 `--live`/`--root` 之前解析，且 `trailing` 的严格匹配逻辑（`:857-874`）需相应扩展；缺省不传时行为与今天完全一致。若本期不做，则 §7 中相关验收项一并删除。
 
+> **落地结果：未做。** §8 Q3 仍未决，§7 那条验收项至今悬空。
+
 ### 5.2 视图层：`DynamicIslandAgentHealthView.swift`
 
 现状约束（实施前必须理解，否则会踩坑）：
@@ -304,6 +310,10 @@ func perform(
 
 若本期不做 §5.5，则必须把 Goal 2 降级为「启动时 + 手动刷新时判定」，并删除 §7 中依赖周期性轮询的验收项。
 
+> **落地结果**：以上 4 条全部实现。TTL 定为 **240s**（必须**严格小于**刷新周期，
+> 理由与自测断言见 §10.1）。刷新另加了 single-flight + generation 门控——原计划漏了，
+> 三个触发源并发时会 last-writer-wins。
+
 ### 5.4 自动化测试：`DynamicIslandSelfTest.swift` & `AgentIntegrationManagerSelfTest.swift`
 
 > 仓库**没有 XCTest、没有 Package.swift、没有 .xcodeproj**（已确认 `grep -rl "import XCTest"` 为空）。所有自测都是 `main.swift` 分发的 CLI flag + `exit(1)`。
@@ -362,7 +372,12 @@ func perform(
 **自测（CLI flag）**
 
 - [ ] `macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-dynamic-island` 退出码 0。
-- [ ] `macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-task-progress` 退出码 0（这条才覆盖 `AgentIntegrationManagerSelfTest`）。
+- [ ] `macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-task-progress` 退出码 0。
+- [ ] `macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm --self-test-agent-integration-manager` 退出码 0。
+      **本期新增的独立入口**：集成契约原先只挂在 `--self-test-task-progress` 上，
+      被前面任何一条无关适配器自测挡住就跑不到（实际发生过）。新增 flag 必须同时登记在
+      `scripts/tests/test-threadhelm-brand-contract.py` 的期望集合、`.github/workflows/validate.yml`
+      和 `scripts/build-macos-release.sh` 里，否则契约测试会红。
 - [ ] `macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents` 通过 81 条真值场景（数字依据：`macos/ThreadHelm/Tests/Fixtures/Agents/index.json:21`）。
 
 **契约回归**
@@ -382,7 +397,7 @@ func perform(
 - [ ] **`.disabled` 不可写**：处于 `.disabled` 的 Agent 行**没有**任何操作按钮。
 - [ ] **`.checkFailed` 不可写**：该状态行没有操作按钮。
 
-**自动集成（仅在 §5.5 落地后适用；若本期不做 §5.5，删除本组，改为「启动时 + 手动刷新后」两条）**
+**自动集成（§5.5 已落地，本组全部生效）**
 
 - [ ] **缓存失效生效**：App 运行中安装一个新 Agent，等待一个刷新周期后，Agents 详情页 `isInstalled` / `compatibility` 从旧值更新为新值（不重启 App）。
 - [ ] **自动集成默认关闭**：全新配置下不开启开关，新装 `validated` Agent 后经过多个刷新周期，宿主配置字节级不变。
@@ -393,18 +408,21 @@ func perform(
 **文档**
 
 - [ ] `PRIVACY.md` 已补充 GUI 一键集成与自动集成的写入时机与开关默认值。
-- [ ] `docs/threadhelm-local-operations.md` 已同步新的 GUI 入口与（如实现）`--agent <id>` 参数。
+- [ ] `docs/threadhelm-local-operations.md` 已同步新的 GUI 入口、自动集成开关与二次确认、
+      以及 `--self-test-agent-integration-manager`。（`--agent <id>` 未实现，无需同步。）
 
 ---
 
 ## 8. 未决问题 (Open Questions)
 
-1. **本期是否包含 §5.5（刷新 Timer + 发现缓存失效）？** 这是 Goal 2 的硬依赖，也是本计划最大的工作量与风险点。
-   - **做**：Goal 2 完整实现，§7 自动集成 5 条验收全部生效。
-   - **不做**（建议先只做 Goal 1）：Goal 2 降级为「App 启动时 + 用户手动刷新后判定」，删除 §7「自动集成」整组，改为两条对应验收。
-2. 自动集成开关的落位：灵动岛设置面板还是 Agents 详情页顶部？本计划仅约定「默认关闭 + 一次性确认」，控件位置待定。
-3. 是否本期实现 CLI 的 `--agent <id>` 参数（§5.1 末）。不实现则删除 §7 中对应验收项。
-4. `.configuring` 态是否需要 spinner。`DynamicIslandButton` 无内建 loading 能力，加 `NSProgressIndicator` 属额外工作量，建议本期先用文案表达。
+1. ~~**本期是否包含 §5.5（刷新 Timer + 发现缓存失效）？**~~
+   **已决：做了。** Goal 2 完整实现，§7 自动集成组全部生效。
+2. ~~自动集成开关的落位~~
+   **已决：Agents 详情页顶部的通道卡片右侧。**
+3. **仍未决**：是否实现 CLI 的 `--agent <id>` 参数（§5.1 末）。本期**未做**，
+   §7 中对应验收项从未生效；要么补做，要么删掉那条，不要长期悬空。
+4. ~~`.configuring` 态是否需要 spinner~~
+   **已决：不加。** 用 `setDisplayTitle("正在配置…")` + `isEnabled = false` 表达。
 
 ---
 
@@ -417,5 +435,102 @@ func perform(
 
 **Phase 2 — 受控自动集成（依赖 Phase 1 + §5.5）**
 §5.5 刷新 Timer 与缓存失效 → 开关 + 一次性确认 → 退避 → §7「自动集成」组 → PRIVACY.md 补充自动写入时机。
+
+---
+
+## 10. 实施结果与偏差 (What Actually Shipped)
+
+两期按 §9 的顺序交付，共 16 个提交。以下只记录**与计划不同**或**计划没想到**的部分；
+与计划一致的部分不再重复。
+
+### 10.1 计划漏掉、评审时才补上的
+
+**最小尝试间隔（自动集成）。** §6 风险表只防了「失败导致的重试风暴」，漏了成功侧：
+写入报告 `.installed`、但随后重新探测仍是 `.notInstalled`（写入与状态探测判断不一致，
+或外部进程改回配置）时，成功会立刻销账退避，而成功又会触发下一轮评估——形成**没有任何
+延迟的写盘循环**，每轮真实改写厂商配置并新建备份点。
+
+修法是三重的：`recordAttempt` 在发起时无条件记时间戳；`recordSuccess` 只清失败计数、
+**保留**时间戳；成功判定收紧为「结果是 installed/repaired **且** 重新探测确实收敛」。
+另加 `suppressAutoIntegration`，让集成自身触发的刷新不再回头驱动评估。
+
+> **教训**：退避只按失败计数是不够的。任何"成功"只要不保证收敛，就必须同样受最小间隔约束。
+
+**幂等 no-op 被记成失败。** `.unchanged` 有两个来源：版本门禁跳过，以及配置其实已就位。
+后者是成功语义，记成失败会让真正需要自动集成的场景被 60 分钟退避静默压制。现按
+`statusAfter == .installed` 区分。
+
+**刷新无单飞。** 三个触发源（启动/手动、5 分钟定时器、集成完成）各自起一条探测，
+`dashboardStore.update` 是 last-writer-wins，慢的旧结果会覆盖新的。改为复用既有的
+`TaskProgressRefreshGate`（begin/complete + generation）。
+
+**缓存 TTL 不能等于刷新周期。** 时间戳记在探测发生时刻，比定时器唤醒晚一个派发延迟加
+前序 Agent 的探测耗时，两者相等时约一半轮次空转，实际间隔退化成两个周期。
+现为 TTL 240s < 周期 300s，并有静态断言守着。
+
+### 10.2 实现形态与计划不同的
+
+**一次性确认做成了按钮二次确认**，而不是模态框——仓库里没有任何 `NSAlert`，
+且模态无法在 CLI 自测中断言。首次开启：第一次点击进入待确认态并说明会写哪些文件，
+第二次才生效；8 秒或面板关闭自动撤销；确认只需一次。门禁在
+`evaluateAutoIntegration` 里独立复核两个 defaults 键，不依赖 UI 状态。
+
+**注错方式**：§5.4 原写 `chmod 400` 目标文件，实测**无效**——所有写入走
+`AgentIntegrationAtomicFileWriter`（temp + `rename(2)`），只要求父目录可写。
+`chmod 500` 父目录能触发失败，但回滚也会一起失败（`restoreContents` 的
+`moveItem` 同样需要父目录写权限），所以 `didRollback == false` 是**预期**行为。
+回滚断言最终用 `FailingManagedAdapter` 模式，且必须**先落盘再抛错**，否则断言恒真。
+
+**新增 §5.4 未要求的东西**：`--self-test-agent-integration-manager` 独立 flag
+（集成契约原先只挂在 `--self-test-task-progress` 上，被前面任何一条无关适配器自测
+挡住就跑不到）；Agents 页的两个预览状态 `agents` / `agents-configuring`
+（这一页原本没有任何可视化回归手段）。
+
+### 10.3 真机与 CI 验收结果
+
+**真机（本机 5 个 Agent）**：Cursor / ZCode / OMP 从 `needsRepair` → `repaired` →
+`installed`；二次运行全部 `unchanged`；Claude Code 返回 `unchanged` 且
+`settings.json` 三次运行**字节不变**，证明 `unchanged` 路径确实不写盘。
+安装后自动集成 defaults 未设置 = 默认关闭。
+
+**预览渲染**抓出两个 UI 缺陷：瞬态必须在 `apply` 之前设置（反过来整张表会空掉），
+以及右列用固定下限 `max(500, …)` 在实际卡片宽度下溢出 12pt、所有右对齐文本被裁。
+
+**CI**：本计划开工时 CI 已红了八九个提交没人发现（运行时长从 1–3 分钟掉到 23–33 秒，
+连编译都不够）。修 CI 过程中查出**三个与本计划无关的既有 bug**：
+
+| 问题 | 性质 |
+| :--- | :--- |
+| `\Character.isNewline` 显式根 key path 当函数用 | 旧 Swift 编译不过；#28 以来所有红灯的主体就是这一行 |
+| `Bool?` 上直接 `case true/false/nil` | 旧 Swift 不认作穷尽 |
+| `mkdtemp` 返回的指针被带出 `withUnsafeMutableBufferPointer` | **未定义行为**；本机碰巧读到正确字节，runner 读到空串，socket 被建到仓库检出根目录 |
+
+> **教训**：开发机 Swift 6.3.1、runner Swift 5.10，差两个大版本。`-swift-version 5`
+> 是语言**模式**开关，不是编译器版本约束——本地编过从不证明 runner 能编，唯一的执行者
+> 就是 CI。另外 `macos-14` 是 GitHub 上最老的 arm64 runner，是
+> `arm64-apple-macos12.3` 部署目标唯一能拿到的老 Foundation 覆盖，**不要为了让 CI 变绿
+> 而升级它**——第三个 bug 在新镜像上大概率会"自动消失"，但消失的原因是错的。
+>
+> 定位第三个 bug 的方式值得复用：`directoryPermissionFailed` 把 6 个谓词压成一个不带
+> path/errno/mode 的裸枚举，先做**零行为变化的诊断增强**再推一次，一轮就拿到确切答案，
+> 而根因既不是评审推断的、也不是实施者推断的。**不要盲改。**
+
+### 10.4 已知遗留（均判定为不阻塞）
+
+1. **single-flight 合并会吸收集成后的重探测**：若集成完成时正有一次未抑制的刷新在飞，
+   suppress 刷新被并入，快照可能落下写盘前的旧状态，按钮短暂回到「一键安装」，
+   最长一个周期（300s）自愈。不成环——被最小间隔挡住。
+   改法：合并时记一个「需跟进刷新」标记，在飞完成后再串一次探测。
+2. **互斥期间点击被静默吞掉**：某个 Agent 配置中时，其他行按钮仍显示可点，
+   点击被 `isPerformingIntegration` 吞掉且无反馈。
+3. **CLI `--agent <id>` 未做**（§8 Q3），§7 对应验收项悬空。
+4. **`performAgentIntegration` 里 `activeVersion` 的回退未复用
+   `agentAutoIntegrationBackoffVersion(for:)`**，缺一级 `versionComponents` 回退。
+   当前所有生产构造下两者外延等价，属隐患非现实 bug。
+5. **`THREADHELM_REQUIRE_OMP` 严格开关**：若 `locateOMPExecutable` 因 PATH 异常在
+   装了 OMP 的机器上误判为 nil，扩展加载验证会静默降级为 skip。建议加严格开关。
+6. **12% 空载 CPU**（既有，与本计划无关）：60 秒空闲窗口实测，最可疑是每 0.5 秒的
+   `agentHookDropTimer`（`AppDelegate.swift:989`）。集成状态探测整轮只要 27ms，
+   本计划的 5 分钟定时器在该窗口内最多贡献 0.3%。
 
 Phase 1 单独上线即可消除 §1.2 的核心痛点（用户不必再开终端）；Phase 2 属于体验增强，不应阻塞 Phase 1。
