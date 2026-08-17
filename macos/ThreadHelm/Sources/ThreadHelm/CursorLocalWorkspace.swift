@@ -258,7 +258,27 @@ enum CursorLocalWorkspace {
         startedAt: Date,
         updatedAt: Date
     ) -> [TaskActivityEvent] {
-        let rows = fragments.suffix(maximumVisibleEvents)
+        let rows: [CursorLocalActivityFragment]
+        if fragments.count <= maximumVisibleEvents {
+            rows = fragments
+        } else {
+            // 按通道截断：保留最新 32 条 commentary + 最新 tool 各独立
+            // 计数。混合数组整体 suffix(32) 会恰好裁掉中间的 tool，
+            // 无 Hook 时 currentToolStatus 投影为 nil。
+            let commentarySuffix = fragments.enumerated()
+                .filter { $0.element.kind == .commentary }
+                .suffix(maximumVisibleEvents)
+            let latestToolIndex = fragments.lastIndex {
+                $0.kind == .tool
+            }
+            let kept = Set(
+                commentarySuffix.map(\.offset)
+                    + (latestToolIndex.map { [$0] } ?? [])
+            )
+            rows = fragments.enumerated().compactMap {
+                kept.contains($0.offset) ? $0.element : nil
+            }
+        }
         guard !rows.isEmpty else { return [] }
         if rows.count == 1 {
             return [

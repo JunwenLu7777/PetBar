@@ -945,7 +945,10 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
         }
 
         // Call 2: fresh restart（无追加）。index-hit 恢复后 fragments
-        // 仍含 tool（来自 current-tool descriptor 或 public 恢复）。
+        // 仍含 tool（来自 current-tool descriptor 或 public 恢复），
+        // 且最终 projection（legacy bridging 消费 datedEvents）的
+        // currentToolStatus 必须保留 tool——混合数组整体 suffix(32)
+        // 会裁掉中间的 tool。
         CursorLocalWorkspace.resetInMemoryStateForTesting()
         guard let second = CursorLocalWorkspace.sessionContent(
             sessionID: sessionID,
@@ -955,6 +958,16 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
         else {
             failCursorAdapterSelfTest(
                 "Cursor tool evict: index-hit restart must keep tool in fragments"
+            )
+        }
+        let secondProjectionTool = cursorProjectionToolText(
+            for: second,
+            sessionID: sessionID,
+            updatedAt: Date()
+        )
+        guard secondProjectionTool != nil else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: index-hit projection must keep currentToolStatus"
             )
         }
         let cp2 = store.load(agentID: .cursor, sessionKey: sessionID)
@@ -984,6 +997,15 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
         else {
             failCursorAdapterSelfTest(
                 "Cursor tool evict: second fresh restart must keep tool in fragments"
+            )
+        }
+        guard cursorProjectionToolText(
+            for: third,
+            sessionID: sessionID,
+            updatedAt: Date()
+        ) != nil else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: second restart projection must keep currentToolStatus"
             )
         }
         let cp3 = store.load(agentID: .cursor, sessionKey: sessionID)
@@ -1021,6 +1043,15 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
         else {
             failCursorAdapterSelfTest(
                 "Cursor tool evict: appended tail must show after index-hit"
+            )
+        }
+        guard cursorProjectionToolText(
+            for: tailed,
+            sessionID: sessionID,
+            updatedAt: Date()
+        ) != nil else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: tailed projection must keep currentToolStatus"
             )
         }
         let cpAfterTail = store.load(agentID: .cursor, sessionKey: sessionID)
@@ -1134,6 +1165,43 @@ private func runCursorMixedThenPureToolOrderingSelfTest() {
         failCursorAdapterSelfTest("Cursor tool ordering test: \(error)")
     }
 }
+/// 经 taskProgressItem 消费 local content（如 AgentLiveEventStore 无 Hook
+/// 路径）得到最终 projection 的 currentToolStatus 文本。
+private func cursorProjectionToolText(
+    for content: CursorLocalSessionContent,
+    sessionID: String,
+    updatedAt: Date
+) -> String? {
+    let snapshot = AgentSessionSnapshot(
+        identity: AgentSessionIdentity(
+            agentID: .cursor,
+            nativeID: sessionID
+        ),
+        adapterVersion: "self-test",
+        executionState: .running,
+        attentionReason: .none,
+        actionability: .openNativeApp,
+        evidenceQuality: .officialHook,
+        freshness: Freshness(
+            observedAt: updatedAt,
+            expiresAt: nil
+        ),
+        title: "Cursor 会话",
+        activitySummary: "正在执行",
+        workingDirectory: nil,
+        latestEventID: "cursor-latest",
+        updatedAt: updatedAt
+    )
+    let item = taskProgressItem(
+        from: snapshot,
+        cursorWorkingDirectory: { _ in nil },
+        cursorSessionContent: { id in
+            id == sessionID ? content : nil
+        }
+    )
+    return item.projection.currentToolStatus?.text
+}
+
 private func writeCursorConversationSearchDatabase(
     at url: URL,
     sessionID: String,
