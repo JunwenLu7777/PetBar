@@ -56,6 +56,11 @@ if CommandLine.arguments.contains("--suppress-native-activity-once") {
     suppressNativeActivityOnce()
 }
 
+// Phase 0 红灯/逆向回归：当前固定窗口读取在此用例上是红灯；共享 reader
+// 落地后转为绿灯。独立入口保证顺序可单独验证。
+if CommandLine.arguments.contains("--self-test-large-window-regression") {
+    runLargeTranscriptWindowRegressionSelfTest()
+}
 if CommandLine.arguments.contains("--self-test-lifecycle") {
     runLifecycleSelfTest()
 }
