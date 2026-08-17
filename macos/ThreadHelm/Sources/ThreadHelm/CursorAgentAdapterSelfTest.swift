@@ -863,8 +863,9 @@ private func runCursorPartialTailCompletionSelfTest() {
     }
 }
 
-/// 最新 tool_use 后接 >32 条非工具记录，连续两次 fresh restart：
+/// 最新 mixed record（text + tool_use）后接 >32 条非工具记录：
 /// current-tool descriptor 独立持久化，不被 32 条 public 窗口挤出。
+/// 两次 fresh restart 后 fragments 中仍须有 tool 记录。
 private func runCursorToolSurvivesWindowEvictionSelfTest() {
     let manager = FileManager.default
     let temp = manager.temporaryDirectory.appendingPathComponent(
@@ -896,28 +897,29 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
         CursorLocalWorkspace.resetInMemoryStateForTesting()
         defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
 
-        // fixture: user → 最新 tool_use → 40 条 public 记录（> 32 窗口）。
+        // fixture: user → mixed record（text + tool_use）→ 40 条纯 public。
+        // mixed 被 40 条 public 挤出 32 窗口；仅 current-tool descriptor
+        // 持久化其 tool 通道。
         var lines: [String] = []
         lines.append("{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"任务标题\"}]}}\n")
-        lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"path\":\"/x\"}}]}}\n")
+        lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"混合消息正文\"},{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"path\":\"/x\"}}]}}\n")
         for i in 0..<40 {
             lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"公开消息\(i)\"}]}}\n")
         }
         try Data(lines.joined().utf8).write(to: transcriptURL)
 
-        // Call 1: cold scan。tool 记录被独立分类为 current-tool descriptor，
-        // 40 条 public 挤出 32 窗口后 tool 仍应恢复。
-        // activityText: 最后 public 文本优先；completedActivityText 也取 public。
-        // tool 是否存活：读取 sidecar checkpoint 的 currentToolDescriptor。
+        // Call 1: cold scan。mixed record 同时进 public 与 current-tool
+        // 通道；40 条 public 挤出后 fragments 仍应有 tool。
         guard let first = CursorLocalWorkspace.sessionContent(
             sessionID: sessionID,
             projectsRoot: projectsRoot,
             fileManager: manager
         ), first.title == "任务标题",
-           first.activityText?.contains("公开消息39") == true
+           first.activityText?.contains("公开消息39") == true,
+           first.fragments.contains(where: { $0.kind == .tool })
         else {
             failCursorAdapterSelfTest(
-                "Cursor tool evict: cold scan must show latest public text"
+                "Cursor tool evict: cold scan must keep tool in fragments"
             )
         }
         let store = TranscriptIndexStore(
@@ -931,13 +933,19 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
             )
         }
 
-        // Call 2: fresh restart（无追加）。index-hit 必须恢复 tool descriptor。
+        // Call 2: fresh restart（无追加）。index-hit 恢复后 fragments
+        // 仍含 tool（来自 current-tool descriptor 或 public 恢复）。
         CursorLocalWorkspace.resetInMemoryStateForTesting()
-        _ = CursorLocalWorkspace.sessionContent(
+        guard let second = CursorLocalWorkspace.sessionContent(
             sessionID: sessionID,
             projectsRoot: projectsRoot,
             fileManager: manager
-        )
+        ), second.fragments.contains(where: { $0.kind == .tool })
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: index-hit restart must keep tool in fragments"
+            )
+        }
         let cp2 = store.load(agentID: .cursor, sessionKey: sessionID)
         guard cp2?.currentToolDescriptor != nil else {
             failCursorAdapterSelfTest(
@@ -945,13 +953,18 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
             )
         }
 
-        // Call 3: 第二次 fresh restart（无追加）。链仍保留 tool。
+        // Call 3: 第二次 fresh restart（无追加）。链仍保留 tool fragment。
         CursorLocalWorkspace.resetInMemoryStateForTesting()
-        _ = CursorLocalWorkspace.sessionContent(
+        guard let third = CursorLocalWorkspace.sessionContent(
             sessionID: sessionID,
             projectsRoot: projectsRoot,
             fileManager: manager
-        )
+        ), third.fragments.contains(where: { $0.kind == .tool })
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: second fresh restart must keep tool in fragments"
+            )
+        }
         let cp3 = store.load(agentID: .cursor, sessionKey: sessionID)
         guard cp3?.currentToolDescriptor != nil else {
             failCursorAdapterSelfTest(

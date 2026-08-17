@@ -460,9 +460,20 @@ enum CursorLocalWorkspace {
         {
             var restoredData = Data()
             var restoredCurrentToolData = Data()
+            // mixed record 的 range 同时出现在 public descriptors 与
+            // currentToolDescriptor：public 恢复已含其 data，单独恢复
+            // 会重复拼行。构建 public range 集合做去重。
+            let publicRanges = Set(
+                checkpoint.publicMessageDescriptors.map {
+                    "\($0.startOffset)-\($0.byteCount)"
+                }
+            )
             // 先回读 current-tool descriptor（活动工具状态独立持久化，
             // 不受 32 条 public 窗口挤出影响，§4.2）。
             if let toolDescriptor = checkpoint.currentToolDescriptor,
+               !publicRanges.contains(
+                   "\(toolDescriptor.startOffset)-\(toolDescriptor.byteCount)"
+               ),
                let data = reader.readRange(toolDescriptor) {
                 restoredCurrentToolData = data
             }
@@ -482,6 +493,8 @@ enum CursorLocalWorkspace {
             if case .success(let forwardRecords) = forwardResult {
                 for record in forwardRecords {
                     let cls = classifyCursorRecord(record.data)
+                    // 分类非互斥：mixed record（text + tool_use）必须同时
+                    // 更新 public 与 current-tool 通道（raw data 只拼一次）。
                     if cls.isPublic {
                         appendedData.append(record.data)
                         appendedDescriptors.append(
@@ -493,7 +506,6 @@ enum CursorLocalWorkspace {
                                 occurredAt: nil
                             )
                         )
-                        continue
                     }
                     if cls.isCurrentTool {
                         appendedCurrentToolDescriptor =
@@ -504,8 +516,11 @@ enum CursorLocalWorkspace {
                                 eventClass: .currentTool,
                                 occurredAt: nil
                             )
-                        appendedData.append(record.data)
-                        continue
+                        if !cls.isPublic {
+                            // 纯 tool record 才把 data 拼入文本流；
+                            // mixed record 的 data 已由 public 分支拼入。
+                            appendedData.append(record.data)
+                        }
                     }
                 }
             }
@@ -594,7 +609,8 @@ enum CursorLocalWorkspace {
             var passDescriptors: [TranscriptRecordLocation] = []
             for record in records {
                 let cls = classifyCursorRecord(record.data)
-                // public 优先：text + tool_use 同记录时 activityText 显示文本。
+                // 分类非互斥：mixed record（text + tool_use）必须同时
+                // 更新 public 与 current-tool 通道（raw data 只拼一次）。
                 if cls.isPublic {
                     passData.append(record.data)
                     passDescriptors.append(
@@ -606,7 +622,6 @@ enum CursorLocalWorkspace {
                             occurredAt: nil
                         )
                     )
-                    continue
                 }
                 if cls.isCurrentTool {
                     // 最新 tool 记录独立持久化（不被 32 条 public 窗口挤出）。
@@ -617,20 +632,13 @@ enum CursorLocalWorkspace {
                         eventClass: .currentTool,
                         occurredAt: nil
                     )
-                    currentToolData = record.data
-                    continue
+                    if !cls.isPublic {
+                        // 纯 tool record 的 data 才进入 currentToolData；
+                        // mixed record 的 data 已在 public 通道（重复解析
+                        // 会把 latestPublicText 错误覆盖为 mixed 文本）。
+                        currentToolData = record.data
+                    }
                 }
-                guard cls.isPublic else { continue }
-                passData.append(record.data)
-                passDescriptors.append(
-                    TranscriptRecordLocation(
-                        startOffset: record.startOffset,
-                        byteCount: UInt32(record.byteCount),
-                        sourceOrder: record.sourceOrder,
-                        eventClass: .publicMessage,
-                        occurredAt: nil
-                    )
-                )
             }
             // 更早的窗口 prepend。
             recoveredData = passData + recoveredData
