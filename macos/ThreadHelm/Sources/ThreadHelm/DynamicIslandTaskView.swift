@@ -229,21 +229,6 @@ final class DynamicIslandTaskViewController:
         weight: .regular
     )
     private let detailHeaderDivider = DynamicIslandDividerView()
-    private let activityTitleField = DynamicIslandTaskLabel(
-        size: 12,
-        weight: .semibold
-    )
-    private let activityCard = DynamicIslandCardView(
-        cornerRadius: 12,
-        backgroundColor: DynamicIslandPalette.raised
-    )
-    private let activityScrollView = NSScrollView()
-    private let activityTextView = NSTextView()
-    private let activityMetaField = DynamicIslandTaskLabel(
-        size: 12,
-        weight: .medium,
-        monospaced: true
-    )
     private let eventsTitleField = DynamicIslandTaskLabel(
         size: 12,
         weight: .semibold
@@ -351,10 +336,6 @@ final class DynamicIslandTaskViewController:
         detailContentView.addSubview(elapsedField)
         detailContentView.addSubview(workingDirectoryField)
         detailContentView.addSubview(detailHeaderDivider)
-        detailContentView.addSubview(activityTitleField)
-        detailContentView.addSubview(activityCard)
-        activityCard.addSubview(activityScrollView)
-        detailContentView.addSubview(activityMetaField)
         detailContentView.addSubview(eventsTitleField)
         detailContentView.addSubview(eventsCard)
         eventsCard.addSubview(eventsScrollView)
@@ -411,21 +392,17 @@ final class DynamicIslandTaskViewController:
 
         eventsTitleField.stringValue = "最近事件"
         eventsTitleField.setAccessibilityLabel("最近事件，全部活动记录")
-        activityTitleField.stringValue = "当前活动"
-        activityTitleField.setAccessibilityLabel("当前活动")
-        activityTitleField.textColor = DynamicIslandPalette.secondaryText
         eventsTitleField.textColor = DynamicIslandPalette.secondaryText
         providerField.textColor = DynamicIslandPalette.secondaryText
         workingDirectoryField.textColor = DynamicIslandPalette.secondaryText
         identityField.textColor = DynamicIslandPalette.secondaryText
-        activityMetaField.textColor = DynamicIslandPalette.tertiaryText
-        configureActivityScrollView()
         openButton.target = self
         openButton.action = #selector(openSelectedTask)
         openButton.setAccessibilityLabel("打开当前任务")
         copyButton.target = self
         copyButton.action = #selector(copySelectedWorkingDirectory)
         copyButton.setAccessibilityLabel("复制工作目录")
+        copyButton.imageHugsTitle = true
     }
 
     override func viewDidLayout() {
@@ -588,7 +565,7 @@ final class DynamicIslandTaskViewController:
             return DynamicIslandTaskEventRowView(
                 time: eventTimeFormatter.string(from: event.occurredAt),
                 text: event.text,
-                highlighted: row == displayedEvents.count - 1
+                highlighted: eventRowIsHighlighted(row)
             )
         }
         guard queueRows.indices.contains(row),
@@ -783,8 +760,6 @@ final class DynamicIslandTaskViewController:
             startedField.stringValue = ""
             elapsedField.stringValue = ""
             workingDirectoryField.stringValue = "工作目录不可用"
-            renderCurrentActivity("当前没有符合筛选条件的任务")
-            activityMetaField.stringValue = "0 条安全事件"
             identityField.stringValue = ""
             openButton.setVisualStyle(.bare)
             openButton.setDisplayTitle("仅查看状态")
@@ -813,13 +788,6 @@ final class DynamicIslandTaskViewController:
         elapsedField.stringValue = "持续 \(durationText)"
         workingDirectoryField.stringValue = copyPathForSelfTest()
             ?? "工作目录不可用"
-        let currentActivity = (item.activityText ?? item.events.last?.text)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        renderCurrentActivity(
-            currentActivity.flatMap { $0.isEmpty ? nil : $0 }
-                ?? "暂无当前活动"
-        )
-        activityMetaField.stringValue = "\(item.events.count) 条安全事件 · 更新 \(eventTimeFormatter.string(from: item.updatedAt))"
         identityField.stringValue = secondaryIdentityText(for: item) ?? ""
         openButton.setDisplayTitle(item.openButtonTitle)
         openButton.setAccessibilityLabel("打开当前任务")
@@ -874,9 +842,6 @@ final class DynamicIslandTaskViewController:
             elapsedField,
             workingDirectoryField,
             detailHeaderDivider,
-            activityTitleField,
-            activityCard,
-            activityMetaField,
             eventsTitleField,
             eventsCard,
             identityField,
@@ -962,34 +927,9 @@ final class DynamicIslandTaskViewController:
             width: fieldWidth,
             height: 1
         )
-        activityTitleField.frame = NSRect(
-            x: inset,
-            y: contentHeight - 134,
-            width: fieldWidth,
-            height: 18
-        )
-        activityCard.frame = NSRect(
-            x: inset,
-            y: contentHeight - 242,
-            width: fieldWidth,
-            height: 96
-        )
-        activityScrollView.frame = NSRect(
-            x: 12,
-            y: 28,
-            width: activityCard.bounds.width - 24,
-            height: 52
-        )
-        layoutActivityTextView()
-        activityMetaField.frame = NSRect(
-            x: activityCard.frame.minX + 13,
-            y: activityCard.frame.minY + 8,
-            width: activityCard.frame.width - 26,
-            height: 16
-        )
         eventsTitleField.frame = NSRect(
             x: inset,
-            y: contentHeight - 270,
+            y: contentHeight - 134,
             width: fieldWidth,
             height: 18
         )
@@ -997,7 +937,7 @@ final class DynamicIslandTaskViewController:
             x: inset,
             y: 64,
             width: fieldWidth,
-            height: max(96, contentHeight - 346)
+            height: max(96, contentHeight - 210)
         )
         eventsScrollView.frame = eventsCard.bounds.insetBy(dx: 10, dy: 10)
         layoutEventsTable()
@@ -1005,8 +945,17 @@ final class DynamicIslandTaskViewController:
         footerDivider.frame = NSRect(x: inset, y: 52, width: fieldWidth, height: 1)
         if cursorListeningEmpty == nil {
             let openWidth: CGFloat = 112
+            let copyWidth = min(
+                92,
+                max(88, ceil(copyButton.intrinsicContentSize.width + 16))
+            )
             openButton.frame = NSRect(x: inset, y: 10, width: openWidth, height: 32)
-            copyButton.frame = NSRect(x: inset + openWidth + 14, y: 10, width: 100, height: 32)
+            copyButton.frame = NSRect(
+                x: inset + openWidth + 14,
+                y: 10,
+                width: copyWidth,
+                height: 32
+            )
             deferButton.frame = .zero
         }
         let identityMinX = copyButton.isHidden
@@ -1095,76 +1044,24 @@ final class DynamicIslandTaskViewController:
     }
 
     private func renderEvents(_ events: [TaskActivityEvent]) {
-        displayedEvents = events
+        displayedEvents = events.enumerated().sorted { lhs, rhs in
+            if lhs.element.occurredAt != rhs.element.occurredAt {
+                return lhs.element.occurredAt > rhs.element.occurredAt
+            }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
         eventsTableView.reloadData()
         layoutEventsTable()
         showEventsScroller()
-        if let latestRow = displayedEvents.indices.last {
-            eventsTableView.scrollRowToVisible(latestRow)
+        if !displayedEvents.isEmpty {
+            eventsTableView.scrollRowToVisible(0)
             eventsScrollView.reflectScrolledClipView(eventsScrollView.contentView)
         }
     }
 
-    private func configureActivityScrollView() {
-        activityTextView.isEditable = false
-        activityTextView.isSelectable = true
-        activityTextView.drawsBackground = false
-        activityTextView.textColor = DynamicIslandPalette.primaryText
-        activityTextView.font = .systemFont(ofSize: 13, weight: .regular)
-        activityTextView.textContainerInset = .zero
-        activityTextView.textContainer?.lineFragmentPadding = 0
-        activityTextView.textContainer?.lineBreakMode = .byWordWrapping
-        activityTextView.textContainer?.maximumNumberOfLines = 0
-        activityTextView.textContainer?.widthTracksTextView = true
-        activityTextView.isHorizontallyResizable = false
-        activityTextView.isVerticallyResizable = true
-        activityTextView.autoresizingMask = [.width]
-        activityTextView.setAccessibilityLabel("当前活动完整内容")
-
-        let verticalScroller = NSScroller(frame: .zero)
-        verticalScroller.controlSize = .small
-        verticalScroller.knobStyle = .light
-        activityScrollView.verticalScroller = verticalScroller
-        activityScrollView.documentView = activityTextView
-        activityScrollView.hasVerticalScroller = true
-        activityScrollView.hasHorizontalScroller = false
-        activityScrollView.autohidesScrollers = false
-        activityScrollView.scrollerStyle = .legacy
-        activityScrollView.drawsBackground = false
-        activityScrollView.borderType = .noBorder
-        activityScrollView.setAccessibilityLabel("当前活动，可滚动查看完整内容")
-    }
-
-    private func renderCurrentActivity(_ text: String) {
-        activityTextView.string = text
-        layoutActivityTextView()
-        activityScrollView.contentView.scroll(to: .zero)
-        activityScrollView.reflectScrolledClipView(activityScrollView.contentView)
-    }
-
-    private func layoutActivityTextView() {
-        let contentSize = activityScrollView.contentSize
-        let width = max(1, contentSize.width)
-        activityTextView.textContainer?.containerSize = NSSize(
-            width: width,
-            height: .greatestFiniteMagnitude
-        )
-        activityTextView.setFrameSize(NSSize(
-            width: width,
-            height: max(1, contentSize.height)
-        ))
-        guard let layoutManager = activityTextView.layoutManager,
-              let textContainer = activityTextView.textContainer
-        else { return }
-        layoutManager.ensureLayout(for: textContainer)
-        let textHeight = ceil(layoutManager.usedRect(for: textContainer).height)
-        activityTextView.setFrameSize(NSSize(
-            width: width,
-            height: max(contentSize.height, textHeight)
-        ))
-        activityScrollView.tile()
-        activityScrollView.verticalScroller?.isHidden = false
-        activityScrollView.verticalScroller?.alphaValue = 1
+    private func eventRowIsHighlighted(_ row: Int) -> Bool {
+        displayedEvents.indices.contains(row)
+            && row == displayedEvents.startIndex
     }
 
     private func layoutEventsTable() {
@@ -1217,8 +1114,6 @@ final class DynamicIslandTaskViewController:
                 startedField.stringValue,
                 elapsedField.stringValue,
                 workingDirectoryField.stringValue,
-                activityTextView.string,
-                activityMetaField.stringValue,
                 "最近事件",
             ].joined(separator: "，")
         }
@@ -1288,23 +1183,15 @@ final class DynamicIslandTaskViewController:
     }
 
     func detailEventTextsForSelfTest() -> [String] {
-        selectedItem?.events.map(\.text) ?? []
+        _ = view
+        return displayedEvents.map(\.text)
     }
 
-    func currentActivityTextForSelfTest() -> String {
+    func highlightedEventTextsForSelfTest() -> [String] {
         _ = view
-        return activityTextView.string
-    }
-
-    func activityScrollerIsEnabledForSelfTest() -> Bool {
-        _ = view
-        view.layoutSubtreeIfNeeded()
-        return activityScrollView.hasVerticalScroller
-            && !activityScrollView.autohidesScrollers
-            && activityScrollView.scrollerStyle == .legacy
-            && activityScrollView.documentView === activityTextView
-            && activityTextView.textContainer?.maximumNumberOfLines == 0
-            && activityTextView.frame.height > activityScrollView.contentSize.height
+        return displayedEvents.indices
+            .filter(eventRowIsHighlighted)
+            .map { displayedEvents[$0].text }
     }
 
     func eventsScrollerIsEnabledForSelfTest() -> Bool {
@@ -1338,6 +1225,18 @@ final class DynamicIslandTaskViewController:
         _ = view
         view.layoutSubtreeIfNeeded()
         return copyButton.frame.minX - openButton.frame.maxX
+    }
+
+    func copyButtonUsesCompactContentLayoutForSelfTest() -> Bool {
+        _ = view
+        view.layoutSubtreeIfNeeded()
+        guard copyButton.imageHugsTitle,
+              let cell = copyButton.cell
+        else { return false }
+        let contentRect = cell.imageRect(forBounds: copyButton.bounds)
+            .union(cell.titleRect(forBounds: copyButton.bounds))
+        return copyButton.frame.width <= 92
+            && copyButton.bounds.insetBy(dx: 8, dy: 0).contains(contentRect)
     }
 
     func copyPathForSelfTest() -> String? {

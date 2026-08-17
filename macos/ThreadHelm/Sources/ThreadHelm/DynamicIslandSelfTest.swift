@@ -755,6 +755,16 @@ private func assertDynamicIslandTaskWorkspace() {
             text: index == 5 ? fullActivityText : "safe event \(index)"
         )
     }
+    let sameTimeFirst = TaskActivityEvent(
+        kind: .commentary,
+        occurredAt: now.addingTimeInterval(3),
+        text: "same-time first"
+    )
+    let sameTimeSecond = TaskActivityEvent(
+        kind: .commentary,
+        occurredAt: now.addingTimeInterval(3),
+        text: "same-time second"
+    )
     let codexRunning = TaskProgressItem(
         title: "Codex running",
         kind: .running,
@@ -764,7 +774,14 @@ private func assertDynamicIslandTaskWorkspace() {
         activityText: fullActivityText,
         threadID: "thread-abc1234",
         workingDirectory: "/tmp/threadhelm/../threadhelm",
-        events: (1...5).map(event)
+        events: [
+            event(2),
+            sameTimeFirst,
+            event(5),
+            event(1),
+            sameTimeSecond,
+            event(4),
+        ]
     )
     let claudeWaiting = TaskProgressItem(
         title: "Claude waiting",
@@ -872,18 +889,19 @@ private func assertDynamicIslandTaskWorkspace() {
           controller.accessibilitySnapshotForSelfTest().contains("全部 2"),
           controller.accessibilitySnapshotForSelfTest().contains("运行 1"),
           controller.accessibilitySnapshotForSelfTest().contains("最近事件"),
+          !controller.accessibilitySnapshotForSelfTest().contains("当前活动"),
           controller.accessibilitySnapshotForSelfTest().contains("开始 "),
           controller.accessibilitySnapshotForSelfTest().contains("持续 01:30"),
           controller.detailEventTextsForSelfTest()
               == [
-                  "safe event 1",
-                  "safe event 2",
-                  "safe event 3",
-                  "safe event 4",
                   fullActivityText,
+                  "safe event 4",
+                  "same-time first",
+                  "same-time second",
+                  "safe event 2",
+                  "safe event 1",
               ],
-          controller.currentActivityTextForSelfTest() == fullActivityText,
-          controller.activityScrollerIsEnabledForSelfTest(),
+          controller.highlightedEventTextsForSelfTest() == [fullActivityText],
           controller.eventsScrollerIsEnabledForSelfTest(),
           controller.visibleProviderIconsAreConcreteForSelfTest(),
           controller.visibleTaskGroupSummariesForSelfTest() == [
@@ -891,6 +909,7 @@ private func assertDynamicIslandTaskWorkspace() {
               "已完成 1",
           ],
           controller.footerButtonGapForSelfTest() >= 14,
+          controller.copyButtonUsesCompactContentLayoutForSelfTest(),
           controller.copyPathForSelfTest() == "/tmp/threadhelm",
           controller.openButtonTitleForSelfTest() == "打开 Codex"
     else {
@@ -1075,7 +1094,7 @@ private func assertDynamicIslandTaskWorkspace() {
     let selectedBeforeHover = controller.selectedTaskKeyForSelfTest()
     controller.showHoverForSelfTest(item: codexRunning)
     guard controller.hoverEventTextsForSelfTest()
-        == ["safe event 3", "safe event 4", fullActivityText],
+        == ["safe event 1", "same-time second", "safe event 4"],
           controller.selectedTaskKeyForSelfTest() == selectedBeforeHover
     else {
         fputs("dynamic island task hover self-test failed\n", stderr)
@@ -3197,7 +3216,7 @@ func runDynamicIslandSelfTest() -> Never {
             + "window-actions=refresh+hide+provider+copy+detail-ack "
             + "passive-refresh=no-ack "
             + "filters=source+state selection=stable "
-            + "detail-events=all-safe+scroll current-activity=latest copy-path=absolute-only "
+            + "detail-events=all-safe+newest-first+stable-ties+scroll copy-path=absolute-only "
             + "source-action=immediate open-callback=forwarded "
             + "hover=no-selection-change+collapse-hide "
             + "terminal-time=stable "
