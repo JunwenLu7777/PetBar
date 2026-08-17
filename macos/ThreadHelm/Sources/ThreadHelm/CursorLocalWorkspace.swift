@@ -459,7 +459,14 @@ enum CursorLocalWorkspace {
            checkpoint.committedOffset <= fileSize
         {
             var restoredData = Data()
-            // descriptors 按 sourceOrder 升序存储；按序 append 恢复顺序。
+            var restoredCurrentToolData = Data()
+            // 先回读 current-tool descriptor（活动工具状态独立持久化，
+            // 不受 32 条 public 窗口挤出影响，§4.2）。
+            if let toolDescriptor = checkpoint.currentToolDescriptor,
+               let data = reader.readRange(toolDescriptor) {
+                restoredCurrentToolData = data
+            }
+            // public descriptors 按 sourceOrder 升序存储；按序 append 恢复顺序。
             for descriptor in checkpoint.publicMessageDescriptors {
                 if let data = reader.readRange(descriptor) {
                     restoredData.append(data)
@@ -471,18 +478,35 @@ enum CursorLocalWorkspace {
             let forwardResult = reader.readForwardPass()
             var appendedData = Data()
             var appendedDescriptors: [TranscriptRecordLocation] = []
+            var appendedCurrentToolDescriptor: TranscriptRecordLocation?
             if case .success(let forwardRecords) = forwardResult {
                 for record in forwardRecords {
-                    appendedData += record.data
-                    appendedDescriptors.append(
-                        TranscriptRecordLocation(
-                            startOffset: record.startOffset,
-                            byteCount: UInt32(record.byteCount),
-                            sourceOrder: record.sourceOrder,
-                            eventClass: .publicMessage,
-                            occurredAt: nil
+                    let cls = classifyCursorRecord(record.data)
+                    if cls.isPublic {
+                        appendedData.append(record.data)
+                        appendedDescriptors.append(
+                            TranscriptRecordLocation(
+                                startOffset: record.startOffset,
+                                byteCount: UInt32(record.byteCount),
+                                sourceOrder: record.sourceOrder,
+                                eventClass: .publicMessage,
+                                occurredAt: nil
+                            )
                         )
-                    )
+                        continue
+                    }
+                    if cls.isCurrentTool {
+                        appendedCurrentToolDescriptor =
+                            TranscriptRecordLocation(
+                                startOffset: record.startOffset,
+                                byteCount: UInt32(record.byteCount),
+                                sourceOrder: record.sourceOrder,
+                                eventClass: .currentTool,
+                                occurredAt: nil
+                            )
+                        appendedData.append(record.data)
+                        continue
+                    }
                 }
             }
             // 合并旧 descriptors + 追加 descriptors，截断到上限。
@@ -495,8 +519,15 @@ enum CursorLocalWorkspace {
                     TranscriptIndexStore.maximumPublicMessages
                 ))
             }
-            if !restoredData.isEmpty || !appendedData.isEmpty {
-                let allData = restoredData + appendedData
+            // 最新 current-tool descriptor：追加的优先，否则取恢复的旧值。
+            let currentToolDescriptor = appendedCurrentToolDescriptor
+                ?? checkpoint.currentToolDescriptor
+            if !restoredData.isEmpty || !appendedData.isEmpty
+                || !restoredCurrentToolData.isEmpty {
+                // tool 记录放最后：parseTranscript 的 latestTool 取文本
+                // 末尾的 tool，activityText = latestPublicText ?? latestTool
+                // 才能显示最近的活动工具。
+                let allData = restoredData + appendedData + restoredCurrentToolData
                 let text = String(data: allData, encoding: .utf8)
                     ?? String(decoding: allData, as: UTF8.self)
                 let content = parseTranscript(text)
@@ -524,7 +555,7 @@ enum CursorLocalWorkspace {
                     committedOffset: reader.committedOffset,
                     backscanContinuationOffset: nil,
                     publicMessageDescriptors: allDescriptors,
-                    currentToolDescriptor: nil,
+                    currentToolDescriptor: currentToolDescriptor,
                     terminalDescriptor: nil,
                     metadataDescriptor: nil,
                     oversizedRecords: 0
@@ -541,11 +572,13 @@ enum CursorLocalWorkspace {
         // 现有 parseTranscript——替代旧的 1 MiB 固定尾读。
         var backscanBudget = TranscriptReadBudget.transcriptEvents
             .maximumAutomaticBackscanBytes
+        var enoughContent = false
+        var committedAfterScan = fileSize
+        var currentToolDescriptor: TranscriptRecordLocation?
+        var currentToolData = Data()
         var endOffset = fileSize
         var recoveredData = Data()
         var descriptors: [TranscriptRecordLocation] = []
-        var enoughContent = false
-        var committedAfterScan = fileSize
         while backscanBudget > 0, endOffset > 0 {
             let passBytes = min(backscanBudget, 8 * 1_048_576)
             let result = reader.readBackwardPass(
@@ -559,8 +592,35 @@ enum CursorLocalWorkspace {
             }
             var passData = Data()
             var passDescriptors: [TranscriptRecordLocation] = []
-            // 本窗口内 records 已按 sourceOrder 升序；append 保持时序。
             for record in records {
+                let cls = classifyCursorRecord(record.data)
+                // public 优先：text + tool_use 同记录时 activityText 显示文本。
+                if cls.isPublic {
+                    passData.append(record.data)
+                    passDescriptors.append(
+                        TranscriptRecordLocation(
+                            startOffset: record.startOffset,
+                            byteCount: UInt32(record.byteCount),
+                            sourceOrder: record.sourceOrder,
+                            eventClass: .publicMessage,
+                            occurredAt: nil
+                        )
+                    )
+                    continue
+                }
+                if cls.isCurrentTool {
+                    // 最新 tool 记录独立持久化（不被 32 条 public 窗口挤出）。
+                    currentToolDescriptor = TranscriptRecordLocation(
+                        startOffset: record.startOffset,
+                        byteCount: UInt32(record.byteCount),
+                        sourceOrder: record.sourceOrder,
+                        eventClass: .currentTool,
+                        occurredAt: nil
+                    )
+                    currentToolData = record.data
+                    continue
+                }
+                guard cls.isPublic else { continue }
                 passData.append(record.data)
                 passDescriptors.append(
                     TranscriptRecordLocation(
@@ -589,11 +649,10 @@ enum CursorLocalWorkspace {
             }
         }
         // 持久 checkpoint 停在最后完整 LF 后（末尾未完成行不计入）。
-        if committedAfterScan < fileSize {
-            reader.setCommittedOffset(committedAfterScan)
-        }
-        let text = String(data: recoveredData, encoding: .utf8)
-            ?? String(decoding: recoveredData, as: UTF8.self)
+        // tool 记录放最后：parseTranscript 的 latestTool 取末尾 tool。
+        let allData = recoveredData + currentToolData
+        let text = String(data: allData, encoding: .utf8)
+            ?? String(decoding: allData, as: UTF8.self)
         let content = parseTranscript(text)
         if reader.scanHeadReachedEOF || committedAfterScan >= fileSize {
             cacheLock.lock()
@@ -619,7 +678,7 @@ enum CursorLocalWorkspace {
             committedOffset: reader.committedOffset,
             backscanContinuationOffset: nil,
             publicMessageDescriptors: cpDescriptors,
-            currentToolDescriptor: nil,
+            currentToolDescriptor: currentToolDescriptor,
             terminalDescriptor: nil,
             metadataDescriptor: nil,
             oversizedRecords: 0
@@ -700,6 +759,37 @@ enum CursorLocalWorkspace {
             fragments: fragments
         )
     }
+}
+
+/// 分类一条 Cursor JSONL record：
+/// - public: assistant text 或 user text（后者用于 title 提取）
+/// - currentTool: assistant tool_use / tool-use block（活动工具状态）
+/// 两者都不是 → 两个都为 false。
+private func classifyCursorRecord(
+    _ data: Data
+) -> (isPublic: Bool, isCurrentTool: Bool) {
+    guard let record = try? JSONSerialization.jsonObject(with: data)
+            as? [String: Any]
+    else { return (false, false) }
+    let role = ((record["role"] as? String) ?? (record["type"] as? String))?
+        .lowercased()
+    guard role == "assistant" || role == "user" else { return (false, false) }
+    let message = record["message"] as? [String: Any]
+    let blocks = contentBlocks(from: message?["content"] ?? record["content"])
+    var isPublic = false
+    var isCurrentTool = false
+    for block in blocks {
+        if (block.type == "text" || role == "user"), block.text != nil {
+            // user text 也保留：parseTranscript 用它提取 title。
+            isPublic = true
+        }
+        if role == "assistant",
+           (block.type == "tool_use" || block.type == "tool-use"),
+           block.name != nil {
+            isCurrentTool = true
+        }
+    }
+    return (isPublic, isCurrentTool)
 }
 
 private struct CursorTranscriptBlock {

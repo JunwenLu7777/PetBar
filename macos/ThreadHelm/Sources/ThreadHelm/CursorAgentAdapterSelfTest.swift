@@ -249,6 +249,7 @@ func runCursorAgentAdapterSelfTest() {
         runCursorOpenSelfTest()
         runCursorIndexTailAppendSelfTest()
         runCursorPartialTailCompletionSelfTest()
+        runCursorToolSurvivesWindowEvictionSelfTest()
     } catch {
         failCursorAdapterSelfTest("unexpected error: \(error)")
     }
@@ -862,6 +863,105 @@ private func runCursorPartialTailCompletionSelfTest() {
     }
 }
 
+/// 最新 tool_use 后接 >32 条非工具记录，连续两次 fresh restart：
+/// current-tool descriptor 独立持久化，不被 32 条 public 窗口挤出。
+private func runCursorToolSurvivesWindowEvictionSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-tool-evict-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    do {
+        let projectsRoot = temp.appendingPathComponent(
+            "cursor-projects", isDirectory: true
+        )
+        let sessionID = "cursor-tool-evict-session"
+        let transcriptsDir = projectsRoot
+            .appendingPathComponent("test-workspace", isDirectory: true)
+            .appendingPathComponent("agent-transcripts", isDirectory: true)
+        let transcriptURL = transcriptsDir.appendingPathComponent(
+            "\(sessionID).jsonl"
+        )
+        try manager.createDirectory(
+            at: transcriptsDir,
+            withIntermediateDirectories: true
+        )
+        let indexRoot = temp.appendingPathComponent(
+            "index-root", isDirectory: true
+        )
+        let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
+        CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
+        defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
+
+        // fixture: user → 最新 tool_use → 40 条 public 记录（> 32 窗口）。
+        var lines: [String] = []
+        lines.append("{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"任务标题\"}]}}\n")
+        lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"path\":\"/x\"}}]}}\n")
+        for i in 0..<40 {
+            lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"公开消息\(i)\"}]}}\n")
+        }
+        try Data(lines.joined().utf8).write(to: transcriptURL)
+
+        // Call 1: cold scan。tool 记录被独立分类为 current-tool descriptor，
+        // 40 条 public 挤出 32 窗口后 tool 仍应恢复。
+        // activityText: 最后 public 文本优先；completedActivityText 也取 public。
+        // tool 是否存活：读取 sidecar checkpoint 的 currentToolDescriptor。
+        guard let first = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), first.title == "任务标题",
+           first.activityText?.contains("公开消息39") == true
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: cold scan must show latest public text"
+            )
+        }
+        let store = TranscriptIndexStore(
+            rootDirectory: indexRoot,
+            fileManager: manager
+        )
+        let cp1 = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard cp1?.currentToolDescriptor != nil else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: cold scan must persist current-tool descriptor"
+            )
+        }
+
+        // Call 2: fresh restart（无追加）。index-hit 必须恢复 tool descriptor。
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        _ = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        )
+        let cp2 = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard cp2?.currentToolDescriptor != nil else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: index-hit restart must preserve tool descriptor"
+            )
+        }
+
+        // Call 3: 第二次 fresh restart（无追加）。链仍保留 tool。
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        _ = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        )
+        let cp3 = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard cp3?.currentToolDescriptor != nil else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: second fresh restart must preserve tool descriptor"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor tool evict test: \(error)")
+    }
+}
 private func writeCursorConversationSearchDatabase(
     at url: URL,
     sessionID: String,
