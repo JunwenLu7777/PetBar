@@ -121,6 +121,10 @@ final class TranscriptEventReader {
     /// checkpoint（可能因超长行 discard 停留在更早位置），scanHead 必须单独
     /// 跟踪，否则 discard 后下一 pass 会从原地重读而永不前进。
     private(set) var scanHead: UInt64 = 0
+    /// 最近一次前向 pass 是否已读到文件 EOF（remaining == 0 或
+    /// readEndpoint == after.fileSize）。用于判断 checkpoint 的
+    /// committedOffset 是否可以安全写为文件大小。
+    private(set) var scanHeadReachedEOF = false
     private(set) var snapshotEOF: UInt64
     private(set) var backscanContinuationOffset: UInt64?
     private(set) var diagnostics = TranscriptReadDiagnostics()
@@ -218,11 +222,14 @@ final class TranscriptEventReader {
         } catch {
             return .failure(.ioFailed)
         }
-        guard attrs.identity == identity else { return .failure(.identityChanged) }
         let readStart = scanHead
         guard attrs.fileSize >= readStart else { return .failure(.truncation) }
         let remaining = attrs.fileSize - readStart
-        guard remaining > 0 else { return .success([]) }
+        guard remaining > 0 else {
+            scanHeadReachedEOF = true
+            snapshotEOF = attrs.fileSize
+            return .success([])
+        }
         let budgetLimit = UInt64(budget.maximumBytesPerPass)
         let passLimit = min(remaining, budgetLimit)
 
@@ -289,6 +296,7 @@ final class TranscriptEventReader {
         diagnostics.recordsDecoded += produced.count
         diagnostics.recordsSkippedOversized +=
             max(0, workingFramer.skippedOversized - framer.skippedOversized)
+        scanHeadReachedEOF = (readEndpoint >= after.fileSize)
         snapshotEOF = readEndpoint
         scanHead = snapshotEOF
         // 清空 framer 已映射的 records：下一 pass 只返回新增记录。
@@ -305,7 +313,11 @@ final class TranscriptEventReader {
         fromEnd endOffset: UInt64,
         maximumBytes: Int
     ) -> Result<
-        (records: [TranscriptRecordRange], continuation: UInt64?),
+        (
+            records: [TranscriptRecordRange],
+            continuation: UInt64?,
+            trailingPartialStart: UInt64?
+        ),
         TranscriptReadError
     > {
         let attrs: FileAttributes
@@ -318,7 +330,8 @@ final class TranscriptEventReader {
         let lowerBound = endOffset > UInt64(maximumBytes)
             ? endOffset - UInt64(maximumBytes)
             : 0
-        guard endOffset > lowerBound else { return .success(([], nil)) }
+        guard endOffset > lowerBound else { return .success(([], nil, nil)) }
+
 
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             return .failure(.ioFailed)
@@ -342,7 +355,7 @@ final class TranscriptEventReader {
                 guard let firstLF = data.firstIndex(of: 0x0A) else {
                     // 整个区间无 LF：全是片段，不产生记录。
                     let continuation: UInt64? = lowerBound > 0 ? lowerBound : nil
-                    return .success(([], continuation))
+                    return .success(([], continuation, nil))
                 }
                 let fragmentEnd = firstLF + 1
                 feedStart = lowerBound + UInt64(fragmentEnd)
@@ -370,7 +383,23 @@ final class TranscriptEventReader {
 
             diagnostics.recordsDecoded += records.count
             let continuation: UInt64? = lowerBound > 0 ? feedStart : nil
-            return .success((records, continuation))
+            // 当本 pass 触及文件尾（endOffset == attrs.fileSize）且末尾
+            // 是未完成行时，返回该行的起始偏移（最后一条完整记录之后），
+            // 供调用方把持久 committedOffset 停在"最后完整记录后"，避免把
+            // 未读/未完成字节标记为已提交。
+            let trailingPartialStart: UInt64? = {
+                guard endOffset == attrs.fileSize,
+                      !framer.pending.isEmpty,
+                      !framer.discarding
+                else { return nil }
+                return records.last.map { $0.endOffset }
+                    ?? feedStart
+            }()
+            return .success((
+                records,
+                continuation,
+                trailingPartialStart
+            ))
         } catch {
             return .failure(.ioFailed)
         }

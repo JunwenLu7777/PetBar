@@ -43,7 +43,12 @@ enum CursorLocalWorkspace {
     private static let cacheLock = NSLock()
     private static var contentCache: [String: CachedTranscript] = [:]
     static var mockIndexRootDirectory: URL?
-
+    /// 测试钩子：模拟进程重启，清空内存缓存（sidecar 保留）。
+    static func resetInMemoryStateForTesting() {
+        cacheLock.lock()
+        contentCache.removeAll()
+        cacheLock.unlock()
+    }
 
     private struct CachedTranscript {
         let modificationDate: Date
@@ -454,9 +459,10 @@ enum CursorLocalWorkspace {
            checkpoint.committedOffset <= fileSize
         {
             var restoredData = Data()
+            // descriptors 按 sourceOrder 升序存储；按序 append 恢复顺序。
             for descriptor in checkpoint.publicMessageDescriptors {
                 if let data = reader.readRange(descriptor) {
-                    restoredData = data + restoredData
+                    restoredData.append(data)
                 }
             }
             // Index-hit 后从旧 committedOffset 做 forward-tail，读取
@@ -494,13 +500,18 @@ enum CursorLocalWorkspace {
                 let text = String(data: allData, encoding: .utf8)
                     ?? String(decoding: allData, as: UTF8.self)
                 let content = parseTranscript(text)
-                cacheLock.lock()
-                contentCache[cacheKey] = CachedTranscript(
-                    modificationDate: modificationDate,
-                    content: content
-                )
-                cacheLock.unlock()
-                // 保存 checkpoint：committedOffset 推进到当前 fileSize。
+                // 仅当前向已追平（scanHead 到 EOF）才缓存；否则 mtime
+                // 命中会返回部分内容。未追平时下次调用经 index-hit 继续。
+                if reader.scanHeadReachedEOF {
+                    cacheLock.lock()
+                    contentCache[cacheKey] = CachedTranscript(
+                        modificationDate: modificationDate,
+                        content: content
+                    )
+                    cacheLock.unlock()
+                }
+                // 保存 checkpoint：committedOffset 推进到前向 pass 停点
+                // （最后完整 LF；预算受限/末尾未完成时 < fileSize）。
                 let mtime = (attributes?[.modificationDate] as? Date)?
                     .timeIntervalSince1970 ?? 0
                 let cp = TranscriptIndexStore.Checkpoint(
@@ -510,7 +521,7 @@ enum CursorLocalWorkspace {
                     sourceIdentity: reader.identity,
                     observedSize: fileSize,
                     observedMTime: UInt64(mtime),
-                    committedOffset: fileSize,
+                    committedOffset: reader.committedOffset,
                     backscanContinuationOffset: nil,
                     publicMessageDescriptors: allDescriptors,
                     currentToolDescriptor: nil,
@@ -534,28 +545,34 @@ enum CursorLocalWorkspace {
         var recoveredData = Data()
         var descriptors: [TranscriptRecordLocation] = []
         var enoughContent = false
+        var committedAfterScan = fileSize
         while backscanBudget > 0, endOffset > 0 {
             let passBytes = min(backscanBudget, 8 * 1_048_576)
             let result = reader.readBackwardPass(
                 fromEnd: endOffset,
                 maximumBytes: passBytes
             )
-            guard case .success(let (records, cont)) = result else { break }
+            guard case .success(let (records, cont, trailingPartial)) = result
+            else { break }
+            if let trailingPartial, trailingPartial < committedAfterScan {
+                committedAfterScan = trailingPartial
+            }
             var passData = Data()
             var passDescriptors: [TranscriptRecordLocation] = []
+            // 本窗口内 records 已按 sourceOrder 升序；append 保持时序。
             for record in records {
-                passData = record.data + passData
-                passDescriptors.insert(
+                passData.append(record.data)
+                passDescriptors.append(
                     TranscriptRecordLocation(
                         startOffset: record.startOffset,
                         byteCount: UInt32(record.byteCount),
                         sourceOrder: record.sourceOrder,
                         eventClass: .publicMessage,
                         occurredAt: nil
-                    ),
-                    at: 0
+                    )
                 )
             }
+            // 更早的窗口 prepend。
             recoveredData = passData + recoveredData
             descriptors = passDescriptors + descriptors
             backscanBudget -= passBytes
@@ -571,22 +588,25 @@ enum CursorLocalWorkspace {
                 break
             }
         }
-
-        guard !recoveredData.isEmpty else { return nil }
+        // 持久 checkpoint 停在最后完整 LF 后（末尾未完成行不计入）。
+        if committedAfterScan < fileSize {
+            reader.setCommittedOffset(committedAfterScan)
+        }
         let text = String(data: recoveredData, encoding: .utf8)
             ?? String(decoding: recoveredData, as: UTF8.self)
-
         let content = parseTranscript(text)
-        cacheLock.lock()
-        contentCache[cacheKey] = CachedTranscript(
-            modificationDate: modificationDate,
-            content: content
-        )
-        cacheLock.unlock()
+        if reader.scanHeadReachedEOF || committedAfterScan >= fileSize {
+            cacheLock.lock()
+            contentCache[cacheKey] = CachedTranscript(
+                modificationDate: modificationDate,
+                content: content
+            )
+            cacheLock.unlock()
+        }
         // §4.2: 保存 checkpoint sidecar（metadata-only）。
         let mtime = (attributes?[.modificationDate] as? Date)?
             .timeIntervalSince1970 ?? 0
-        let cpDescriptors = Array(descriptors.prefix(
+        let cpDescriptors = Array(descriptors.suffix(
             TranscriptIndexStore.maximumPublicMessages
         ))
         let cp = TranscriptIndexStore.Checkpoint(
@@ -596,7 +616,7 @@ enum CursorLocalWorkspace {
             sourceIdentity: reader.identity,
             observedSize: fileSize,
             observedMTime: UInt64(mtime),
-            committedOffset: fileSize,
+            committedOffset: reader.committedOffset,
             backscanContinuationOffset: nil,
             publicMessageDescriptors: cpDescriptors,
             currentToolDescriptor: nil,

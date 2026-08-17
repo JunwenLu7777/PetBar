@@ -248,6 +248,7 @@ func runCursorAgentAdapterSelfTest() {
         runCursorTransportSelfTest()
         runCursorOpenSelfTest()
         runCursorIndexTailAppendSelfTest()
+        runCursorPartialTailCompletionSelfTest()
     } catch {
         failCursorAdapterSelfTest("unexpected error: \(error)")
     }
@@ -722,6 +723,8 @@ private func runCursorIndexTailAppendSelfTest() {
         let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
         CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
         defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
 
         let firstLine = #"{"role":"assistant","content":[{"type":"text","text":"初始公开消息"}]}"# + "\n"
         try Data(firstLine.utf8).write(to: transcriptURL)
@@ -753,12 +756,27 @@ private func runCursorIndexTailAppendSelfTest() {
             )
         }
 
-        // Call 3: 再次追加 + 再次 index-hit，验证连续追加不丢。
+        // Call 3: 无追加的 fresh restart。index-hit 必须从 sidecar
+        // 恢复两个 descriptor 的链（第二次重启不得清空旧投影）。
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        guard let fresh = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ),
+              fresh.activityText?.contains("追加尾部消息") == true else {
+            failCursorAdapterSelfTest(
+                "Cursor index: no-append fresh restart must preserve old projection chain"
+            )
+        }
+
+        // Call 4: 再次追加 + 再次 index-hit，验证连续追加不丢。
         let thirdLine = #"{"role":"assistant","content":[{"type":"text","text":"再次追加消息"}]}"# + "\n"
         let handle2 = try FileHandle(forWritingTo: transcriptURL)
         try handle2.seekToEnd()
         try handle2.write(contentsOf: Data(thirdLine.utf8))
         try handle2.close()
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
         guard let third = CursorLocalWorkspace.sessionContent(
             sessionID: sessionID,
             projectsRoot: projectsRoot,
@@ -770,6 +788,77 @@ private func runCursorIndexTailAppendSelfTest() {
         }
     } catch {
         failCursorAdapterSelfTest("Cursor index tail append test: \(error)")
+    }
+}
+
+private func runCursorPartialTailCompletionSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-partial-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    do {
+        let projectsRoot = temp.appendingPathComponent(
+            "cursor-projects", isDirectory: true
+        )
+        let sessionID = "cursor-partial-session"
+        let transcriptsDir = projectsRoot
+            .appendingPathComponent("test-workspace", isDirectory: true)
+            .appendingPathComponent("agent-transcripts", isDirectory: true)
+        let transcriptURL = transcriptsDir.appendingPathComponent(
+            "\(sessionID).jsonl"
+        )
+        try manager.createDirectory(
+            at: transcriptsDir,
+            withIntermediateDirectories: true
+        )
+        let indexRoot = temp.appendingPathComponent(
+            "index-root", isDirectory: true
+        )
+        let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
+        CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
+        defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
+
+        let complete = #"{"role":"assistant","content":[{"type":"text","text":"完整消息"}]}"# + "\n"
+        // partial：无 LF 结尾的未完成行。
+        let partial = #"{"role":"assistant","content":[{"type":"text","text":"未完成行"}]}"#
+        try Data((complete + partial).utf8).write(to: transcriptURL)
+
+        // Call 1: cold scan。partial 未完成，不得作为完整消息恢复，
+        // 且 checkpoint committedOffset 必须停在最后完整 LF 后（< fileSize）。
+        guard let first = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), first.activityText?.contains("完整消息") == true,
+           first.activityText?.contains("未完成行") != true else {
+            failCursorAdapterSelfTest(
+                "Cursor partial: partial line must not be recovered as complete"
+            )
+        }
+
+        // 补全 partial：追加 LF（模拟进程写完完整行）。
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\n".utf8))
+        try handle.close()
+
+        // Call 2: fresh restart。此前未读的 partial 字节必须被前向读回。
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        guard let second = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), second.activityText?.contains("未完成行") == true else {
+            failCursorAdapterSelfTest(
+                "Cursor partial: completed partial must be recovered after restart"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor partial tail completion test: \(error)")
     }
 }
 

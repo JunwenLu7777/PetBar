@@ -596,7 +596,11 @@ final class ClaudeTaskProgressReader {
                cached.activeProcessStartIdentity
                     == agent?.processStartIdentity,
                cached.allowsAgentOpen == candidate.allowsAgentOpen,
-               cached.inferredActivityExpiresAt.map { now <= $0 } ?? true
+               cached.inferredActivityExpiresAt.map { now <= $0 } ?? true,
+               cached.reader.map { $0.scanHead
+                    >= (try? fileManager.attributesOfItem(
+                        atPath: candidate.url.path
+                    )[.size] as? NSNumber)?.uint64Value ?? 0 } ?? true
             {
                 item = cached.item
             } else {
@@ -619,6 +623,8 @@ final class ClaudeTaskProgressReader {
                     let result = cachedReader.readForwardPass()
                     if case .success(let records) = result {
                         reducer = cached.reducer
+                        // 链式保持：从持久 descriptors 种子继续。
+                        descriptors = cached.descriptors
                         for record in records {
                             if let line = String(
                                 data: record.data, encoding: .utf8
@@ -643,7 +649,7 @@ final class ClaudeTaskProgressReader {
                             TranscriptIndexStore.maximumPublicMessages
                         ))
                         backscanCont = cached.backscanContinuation
-                        snapEOF = cached.snapshotEOF
+                        snapEOF = cachedReader.scanHead
                     } else {
                         // identity 变化：冷启动。
                         guard let newReader = TranscriptEventReader.make(
@@ -677,7 +683,9 @@ final class ClaudeTaskProgressReader {
                        checkpoint.sourceIdentity == probeReader.identity,
                        checkpoint.committedOffset <= probeReader.snapshotEOF
                     {
-                        // Index-hit：从 descriptor 回读 record data。
+                        // Index-hit：从 checkpoint descriptors 种子重建，
+                        // 避免第二次重启链被清空。
+                        descriptors = checkpoint.publicMessageDescriptors
                         var restoredLines: [String] = []
                         for descriptor in checkpoint.publicMessageDescriptors {
                             if let data = probeReader.readRange(descriptor),
@@ -722,7 +730,7 @@ final class ClaudeTaskProgressReader {
                             TranscriptIndexStore.maximumPublicMessages
                         ))
                         backscanCont = checkpoint.backscanContinuationOffset
-                        snapEOF = checkpoint.observedSize
+                        snapEOF = probeReader.scanHead
                     } else {
                         guard let newReader = TranscriptEventReader.make(
                             at: candidate.url
@@ -779,7 +787,7 @@ final class ClaudeTaskProgressReader {
                     let mtime = (try? fileManager.attributesOfItem(
                         atPath: candidate.url.path
                     )[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-                    let cpDescriptors = Array(descriptors.prefix(
+                    let cpDescriptors = Array(descriptors.suffix(
                         TranscriptIndexStore.maximumPublicMessages
                     ))
                     let checkpoint = TranscriptIndexStore.Checkpoint(
@@ -1316,7 +1324,7 @@ final class ClaudeTaskProgressReader {
                 fromEnd: endOffset,
                 maximumBytes: passBytes
             )
-            guard case .success(let (records, cont)) = result else { break }
+            guard case .success(let (records, cont, _)) = result else { break }
             let passLines = records.compactMap {
                 String(data: $0.data, encoding: .utf8)
             }
@@ -1337,6 +1345,9 @@ final class ClaudeTaskProgressReader {
         let descriptors: [TranscriptRecordLocation]
         let backscanContinuation: UInt64?
         let snapshotEOF: UInt64
+        /// 冷扫描后应持久化的前向 committedOffset：
+        /// 触及文件尾且末尾未完成行时停在最后完整 LF 后（≤ fileSize）。
+        let committedOffset: UInt64
     }
 
     private func coldScan(
@@ -1352,14 +1363,18 @@ final class ClaudeTaskProgressReader {
         var endOffset = fileSize
         var lines: [String] = []
         var descriptors: [TranscriptRecordLocation] = []
+        var committedAfterScan = fileSize
         while budget > 0, endOffset > 0 {
             let passBytes = min(budget, 8 * 1_048_576)
             let result = reader.readBackwardPass(
                 fromEnd: endOffset,
                 maximumBytes: passBytes
             )
-            guard case .success(let (records, cont)) = result
+            guard case .success(let (records, cont, trailingPartial)) = result
             else { break }
+            if let trailingPartial, trailingPartial < committedAfterScan {
+                committedAfterScan = trailingPartial
+            }
             var passLines: [String] = []
             var passDescriptors: [TranscriptRecordLocation] = []
             for record in records {
@@ -1384,11 +1399,15 @@ final class ClaudeTaskProgressReader {
             } else { break }
             if lines.count >= 200 { break }
         }
+        if committedAfterScan < fileSize {
+            reader.setCommittedOffset(committedAfterScan)
+        }
         return ColdScanResult(
             lines: lines,
             descriptors: descriptors,
             backscanContinuation: endOffset == fileSize ? nil : endOffset,
-            snapshotEOF: fileSize
+            snapshotEOF: fileSize,
+            committedOffset: committedAfterScan
         )
     }
 

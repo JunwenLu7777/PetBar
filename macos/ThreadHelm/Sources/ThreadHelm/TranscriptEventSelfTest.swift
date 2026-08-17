@@ -383,7 +383,7 @@ private func runTranscriptReaderContractSelfTest() throws {
         fromEnd: rec2End,
         maximumBytes: pass1Bytes
     ))
-    let (backRecords1, cont1) = backResult1
+    let (backRecords1, cont1, _) = backResult1
     // 只应恢复 rec2（rec1 尾部片段被丢弃）。
     guard backRecords1.count == 1,
           backRecords1[0].data == rec2
@@ -408,7 +408,7 @@ private func runTranscriptReaderContractSelfTest() throws {
         fromEnd: cont1!,
         maximumBytes: pass2Bytes
     ))
-    let (backRecords2, cont2) = backResult2
+    let (backRecords2, cont2, _) = backResult2
     guard backRecords2.count == 1,
           backRecords2[0].data == rec1
     else {
@@ -429,7 +429,7 @@ private func runTranscriptReaderContractSelfTest() throws {
         fromEnd: cont2!,
         maximumBytes: rec0.count
     ))
-    let (backRecords3, cont3) = backResult3
+    let (backRecords3, cont3, _) = backResult3
     guard backRecords3.count == 1,
           backRecords3[0].data == rec0
     else {

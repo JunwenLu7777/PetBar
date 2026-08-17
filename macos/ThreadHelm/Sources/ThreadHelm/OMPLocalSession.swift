@@ -156,7 +156,7 @@ enum OMPLocalSession {
                             : 0,
                         recoveredWorkingDirectory: nil,
                         metadataProbeComplete: false,
-                        recoveredDescriptors: [],
+                        recoveredDescriptors: checkpoint.publicMessageDescriptors,
                         recoveredEvents: restoredEvents
                 )
             } else {
@@ -199,7 +199,17 @@ enum OMPLocalSession {
                 fromEnd: endOffset,
                 maximumBytes: passBytes
             )
-            if case .success(let (records, cont)) = result {
+            if case .success(let (records, cont, trailingPartial)) = result {
+                // 冷扫描触及文件尾且末尾未完成时，fence 停在最后完整记录后。
+                if let trailingPartial, trailingPartial < state.snapshotEOF {
+                    if state.forwardReader.committedOffset
+                        > trailingPartial {
+                        state.forwardReader.resetPartialBytes()
+                    }
+                    if state.forwardReader.committedOffset != trailingPartial {
+                        state.forwardReader.setCommittedOffset(trailingPartial)
+                    }
+                }
                 var batchEvents: [TaskActivityEvent] = []
                 var batchDescriptors: [TranscriptRecordLocation] = []
                 for record in records {
@@ -240,6 +250,12 @@ enum OMPLocalSession {
         // 一轮前向增量：从 snapshotEOF fence 读追加部分。前向 reader 的
         // committedOffset 锁在 fence，不设为回扫 continuation（否则重读）。
         let forwardResult = state.forwardReader.readForwardPass()
+        if case .failure = forwardResult {
+            // 前向读失败（truncation/identity）：backscan 预算已过期的
+            // 事件仍可回落，但把 reader 复位到最后完整 LF 的安全位置，
+            // 下轮刷新重读追加部分（§4.2：不得把未读字节标记为已提交）。
+            state.forwardReader.resetPartialBytes()
+        }
         if case .success(let records) = forwardResult {
             for record in records {
                 if let decoded = decodeRecord(record.data) {
