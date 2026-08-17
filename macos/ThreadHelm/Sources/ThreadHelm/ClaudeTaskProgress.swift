@@ -390,56 +390,40 @@ final class ClaudeTaskProgressReader {
             {
                 item = cached.item
             } else {
-                // 增量读取：有持久 reader 时做前向 pass（只读追加字节）。
-                var recoveredLines: [String] = []
-                var reader: TranscriptEventReader?
-                if let cached = parsedCache[cacheKey],
-                   let cachedReader = cached.reader
-                {
-                    let result = cachedReader.readForwardPass()
-                    if case .success(let records) = result {
-                        let newLines = records.compactMap {
-                            String(data: $0.data, encoding: .utf8)
-                        }
-                        recoveredLines = cached.recoveredLines + newLines
-                        reader = cachedReader
+                // 有界回扫 + 全量 parse（不累积历史行，AC-15）。
+                guard let reader = TranscriptEventReader.make(
+                    at: candidate.url
+                ) else { continue }
+                let fileSize = (try? fileManager.attributesOfItem(
+                    atPath: candidate.url.path
+                )[.size] as? NSNumber)?.uint64Value ?? 0
+                reader.setCommittedOffset(fileSize)
+                var budget = TranscriptReadBudget.transcriptEvents
+                    .maximumAutomaticBackscanBytes
+                var endOffset = fileSize
+                var lines: [String] = []
+                while budget > 0, endOffset > 0 {
+                    let passBytes = min(budget, 8 * 1_048_576)
+                    let result = reader.readBackwardPass(
+                        fromEnd: endOffset,
+                        maximumBytes: passBytes
+                    )
+                    guard case .success(let (records, cont)) = result
+                    else { break }
+                    let passLines = records.compactMap {
+                        String(data: $0.data, encoding: .utf8)
                     }
-                }
-                if reader == nil {
-                    guard let newReader = TranscriptEventReader.make(
-                        at: candidate.url
-                    ) else { continue }
-                    let fileSize = (try? fileManager.attributesOfItem(
-                        atPath: candidate.url.path
-                    )[.size] as? NSNumber)?.uint64Value ?? 0
-                    newReader.setCommittedOffset(fileSize)
-                    var budget = TranscriptReadBudget.transcriptEvents
-                        .maximumAutomaticBackscanBytes
-                    var endOffset = fileSize
-                    while budget > 0, endOffset > 0 {
-                        let passBytes = min(budget, 8 * 1_048_576)
-                        let result = newReader.readBackwardPass(
-                            fromEnd: endOffset,
-                            maximumBytes: passBytes
-                        )
-                        guard case .success(let (records, cont)) = result
-                        else { break }
-                        let passLines = records.compactMap {
-                            String(data: $0.data, encoding: .utf8)
-                        }
-                        recoveredLines = passLines + recoveredLines
-                        budget -= passBytes
-                        if let cont = cont {
-                            endOffset = cont
-                        } else {
-                            break
-                        }
-                        if recoveredLines.count >= 200 { break }
+                    lines = passLines + lines
+                    budget -= passBytes
+                    if let cont = cont {
+                        endOffset = cont
+                    } else {
+                        break
                     }
-                    reader = newReader
+                    if lines.count >= 200 { break }
                 }
                 item = Self.parseTranscript(
-                    lines: recoveredLines,
+                    lines: lines,
                     sessionID: candidate.sessionID,
                     fallbackTitle: agent?.title ?? "Claude 会话",
                     workingDirectory: agent?.workingDirectory ?? "",
@@ -464,8 +448,8 @@ final class ClaudeTaskProgressReader {
                             ? candidate.modificationDate.addingTimeInterval(30)
                             : nil,
                     item: item,
-                    reader: reader,
-                    recoveredLines: recoveredLines
+                    reader: nil,
+                    recoveredLines: []
                 )
             }
             if let item,

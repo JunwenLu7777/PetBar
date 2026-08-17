@@ -39,7 +39,194 @@ final class CodexTaskProgressReader {
         let modificationDate: Date
         let snapshot: TaskProgressSnapshot
         var reader: TranscriptEventReader?
-        var recoveredLines: [String]
+        var reducer: CodexReducerState
+    }
+
+    /// 增量 reducer 状态：只 apply 新 records，不保存原始历史行。
+    /// events 限制为最近 32 条（AC-15）。
+    struct CodexReducerState {
+        var lifecycle: TaskProgressKind?
+        var pendingUserInputCalls = Set<String>()
+        var activeTools: [String: (text: String, updatedAt: Date)] = [:]
+        var latestUserTitle: String?
+        var activeTaskTitle: String?
+        var publicCommentaryText = ""
+        var latestPublicCommentary: String?
+        var workingDirectory: String?
+        var events: [TaskActivityEvent] = []
+        var taskStartedAt: Date
+        var lastUpdatedAt: Date
+
+        init(modificationDate: Date) {
+            taskStartedAt = modificationDate
+            lastUpdatedAt = modificationDate
+        }
+
+        mutating func apply(_ line: String) {
+            guard line.contains("task_started")
+                || line.contains("task_complete")
+                || line.contains("task_failed")
+                || line.contains("turn_aborted")
+                || line.contains(#""type":"error""#)
+                || line.contains("user_message")
+                || line.contains("agent_message")
+                || line.contains("request_user_input")
+                || line.contains("function_call")
+                || line.contains("custom_tool_call")
+                || line.contains("function_call_output")
+                || line.contains("custom_tool_call_output")
+                || line.contains("session_meta")
+            else { return }
+            guard let data = line.data(using: .utf8),
+                  let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let payload = record["payload"] as? [String: Any]
+            else { return }
+            if record["type"] as? String == "session_meta",
+               let rawCwd = payload["cwd"] as? String,
+               let cwd = normalizedAbsolutePath(rawCwd) {
+                workingDirectory = cwd
+                return
+            }
+            guard let payloadType = payload["type"] as? String else { return }
+            if record["type"] as? String == "event_msg" {
+                let eventDate = CodexTaskProgressReader.timestamp(from: record) ?? lastUpdatedAt
+                if payloadType == "user_message",
+                   let message = payload["message"] as? String,
+                   let title = CodexTaskProgressReader.taskTitle(from: message) {
+                    latestUserTitle = title
+                } else if payloadType == "task_started" {
+                    lifecycle = .running
+                    pendingUserInputCalls.removeAll()
+                    activeTools.removeAll()
+                    publicCommentaryText = ""
+                    latestPublicCommentary = nil
+                    activeTaskTitle = latestUserTitle ?? activeTaskTitle
+                    taskStartedAt = eventDate
+                    lastUpdatedAt = eventDate
+                    events.removeAll(keepingCapacity: true)
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(kind: .lifecycle, occurredAt: eventDate, text: "任务开始"),
+                        to: events
+                    )
+                } else if payloadType == "task_complete" {
+                    lifecycle = .completed
+                    pendingUserInputCalls.removeAll()
+                    activeTools.removeAll()
+                    lastUpdatedAt = eventDate
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(kind: .lifecycle, occurredAt: eventDate, text: "任务完成"),
+                        to: events
+                    )
+                } else if ["task_failed", "turn_aborted", "error"].contains(payloadType) {
+                    lifecycle = .failed
+                    pendingUserInputCalls.removeAll()
+                    activeTools.removeAll()
+                    lastUpdatedAt = eventDate
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(kind: .lifecycle, occurredAt: eventDate, text: "任务失败"),
+                        to: events
+                    )
+                } else if payloadType == "agent_message",
+                          ["commentary", "final_answer"].contains(
+                              (payload["phase"] as? String)?.lowercased() ?? ""
+                          ),
+                          let message = payload["message"] as? String,
+                          let commentary = CodexTaskProgressReader.sanitizedPublicCommentary(message) {
+                    if latestPublicCommentary != commentary {
+                        latestPublicCommentary = commentary
+                        publicCommentaryText = appendingTaskActivityParagraph(commentary, to: publicCommentaryText)
+                        events = appendingTaskActivityEvent(
+                        TaskActivityEvent(kind: .commentary, occurredAt: eventDate, text: commentary),
+                            to: events
+                        )
+                        if events.count > 32 {
+                            events = Array(events.suffix(32))
+                        }
+                    }
+                    lastUpdatedAt = eventDate
+                }
+                return
+            }
+            if ["function_call", "custom_tool_call"].contains(payloadType),
+               let name = payload["name"] as? String,
+               let callID = payload["call_id"] as? String {
+                let eventDate = CodexTaskProgressReader.timestamp(from: record) ?? lastUpdatedAt
+                lastUpdatedAt = eventDate
+                if name == "request_user_input" {
+                    pendingUserInputCalls.insert(callID)
+                    activeTools.removeValue(forKey: callID)
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(kind: .lifecycle, occurredAt: eventDate, text: "等待输入"),
+                        to: events
+                    )
+                } else {
+                    let toolActivity = CodexTaskProgressReader.safeToolActivity(name: name)
+                    activeTools[callID] = (text: toolActivity, updatedAt: eventDate)
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(kind: .tool, occurredAt: eventDate, text: toolActivity),
+                        to: events
+                    )
+                }
+                return
+            }
+            if ["function_call_output", "custom_tool_call_output"].contains(payloadType),
+               let callID = payload["call_id"] as? String {
+                let wasPendingInput = pendingUserInputCalls.remove(callID) != nil
+                let wasActiveTool = activeTools.removeValue(forKey: callID) != nil
+                if wasPendingInput || wasActiveTool {
+                    lastUpdatedAt = CodexTaskProgressReader.timestamp(from: record) ?? lastUpdatedAt
+                }
+            }
+        }
+
+        func snapshot(modificationDate: Date, now: Date) -> TaskProgressSnapshot {
+            let title = activeTaskTitle ?? latestUserTitle ?? "Codex 任务"
+            if lifecycle == .running, !pendingUserInputCalls.isEmpty {
+                return TaskProgressSnapshot(items: [TaskProgressItem(
+                    title: title, kind: .waitingForInput,
+                    startedAt: taskStartedAt, updatedAt: lastUpdatedAt,
+                    workingDirectory: workingDirectory, events: events
+                )])
+            }
+            if let lifecycle {
+                let activityText: String?
+                if lifecycle == .running {
+                    activityText = CodexTaskProgressReader.runningActivityText(
+                        activeTools: activeTools,
+                        publicCommentaryText: publicCommentaryText
+                    )
+                } else { activityText = nil }
+                return TaskProgressSnapshot(items: [TaskProgressItem(
+                    title: title, kind: lifecycle,
+                    startedAt: taskStartedAt, updatedAt: lastUpdatedAt,
+                    activityText: activityText,
+                    workingDirectory: workingDirectory, events: events
+                )])
+            }
+            if !pendingUserInputCalls.isEmpty {
+                return TaskProgressSnapshot(items: [TaskProgressItem(
+                    title: title, kind: .waitingForInput,
+                    startedAt: taskStartedAt, updatedAt: lastUpdatedAt,
+                    workingDirectory: workingDirectory, events: events
+                )])
+            }
+            if now.timeIntervalSince(modificationDate) <= 30 * 60 {
+                return TaskProgressSnapshot(items: [TaskProgressItem(
+                    title: title, kind: .running,
+                    startedAt: taskStartedAt, updatedAt: lastUpdatedAt,
+                    activityText: CodexTaskProgressReader.runningActivityText(
+                        activeTools: activeTools,
+                        publicCommentaryText: publicCommentaryText
+                    ),
+                    workingDirectory: workingDirectory, events: events
+                )])
+            }
+            return .idle
+        }
+
+        private static func timestamp(from record: [String: Any]) -> Date? {
+            CodexTaskProgressReader.timestamp(from: record)
+        }
     }
     private struct RolloutSessionMetadata {
         let firstLine: String?
@@ -80,47 +267,54 @@ final class CodexTaskProgressReader {
             {
                 snapshot = cached.snapshot
             } else {
-                // 增量读取：有持久 reader 时做前向 pass（只读追加字节），
-                // 无则冷启动回扫。
-                var recoveredLines: [String] = []
+                // 增量 reducer：有持久 reader 时做前向 pass，只 apply 新
+                // records 到持久 reducer 状态（不保存原始行）。
+                // 无则冷启动回扫后 apply 全部回扫记录。
                 var reader: TranscriptEventReader?
+                var reducer: CodexReducerState
                 if let cached = parsedCache[cacheKey],
                    let cachedReader = cached.reader
                 {
-                    // identity 变化时 reader.readForwardPass 会返回
-                    // .identityChanged → 冷启动重建。
                     let result = cachedReader.readForwardPass()
                     if case .success(let records) = result {
-                        let newLines = records.compactMap {
-                            String(data: $0.data, encoding: .utf8)
+                        reducer = cached.reducer
+                        for record in records {
+                            if let line = String(data: record.data, encoding: .utf8) {
+                                reducer.apply(line)
+                            }
                         }
-                        recoveredLines = cached.recoveredLines + newLines
                         reader = cachedReader
+                    } else {
+                        // identity 变化：冷启动。
+                        guard let newReader = TranscriptEventReader.make(
+                            at: candidate.url
+                        ) else { continue }
+                        reader = newReader
+                        reducer = CodexReducerState(modificationDate: candidate.modificationDate)
+                        let coldLines = readTailLinesColdScan(
+                            reader: newReader, url: candidate.url
+                        )
+                        for line in coldLines { reducer.apply(line) }
                     }
-                }
-                if reader == nil {
-                    // 冷启动：有界回扫。
+                } else {
                     guard let newReader = TranscriptEventReader.make(
                         at: candidate.url
                     ) else { continue }
-                    let coldLines = readTailLinesColdScan(
-                        reader: newReader,
-                        url: candidate.url
-                    )
-                    recoveredLines = coldLines
                     reader = newReader
+                    reducer = CodexReducerState(modificationDate: candidate.modificationDate)
+                    let coldLines = readTailLinesColdScan(
+                        reader: newReader, url: candidate.url
+                    )
+                    for line in coldLines { reducer.apply(line) }
                 }
-                guard !recoveredLines.isEmpty else { continue }
-                snapshot = Self.parse(
-                    lines: recoveredLines,
-                    modificationDate: candidate.modificationDate,
-                    now: now
+                snapshot = reducer.snapshot(
+                    modificationDate: candidate.modificationDate, now: now
                 )
                 parsedCache[cacheKey] = ParsedCacheEntry(
                     modificationDate: candidate.modificationDate,
                     snapshot: snapshot,
                     reader: reader,
-                    recoveredLines: recoveredLines
+                    reducer: reducer
                 )
             }
             guard var item = snapshot.items.first, item.kind != .idle else { continue }
