@@ -124,7 +124,9 @@ final class TranscriptEventReader {
     private(set) var snapshotEOF: UInt64
     private(set) var backscanContinuationOffset: UInt64?
     private(set) var diagnostics = TranscriptReadDiagnostics()
-
+    /// 测试注入：在读完 chunk 循环后、读后身份校验前调用。用于构造
+    /// 读取中 truncate/replace 的确定性回归。
+    var postReadHook: (() -> Void)?
     init(
         url: URL,
         identity: TranscriptSourceIdentity,
@@ -259,10 +261,18 @@ final class TranscriptEventReader {
         } catch {
             return .failure(.ioFailed)
         }
+        // 测试注入：读完 chunk 后、校验前截断，构造读取中 truncation。
+        postReadHook?()
 
         // 读后身份校验：replace/truncate 时丢弃本轮（不提交副本）。
+        // 必须按本轮真实读端点校验（readStart + consumed），而不是按
+        // committedOffset——partial/discard 时 committedOffset 会落后于已读
+        // 终点，若 truncate 到两者之间，按旧值校验会把 stale bytes / pending
+        // 错误提交，并让 scanHead 越过新 EOF。
+        let readEndpoint = readStart + UInt64(consumed)
         guard let after = try? fileAttributes(),
               after.identity == identity,
+              after.fileSize >= readEndpoint,
               after.fileSize >= workingFramer.committedOffset
         else {
             return .failure(.truncation)
@@ -279,7 +289,7 @@ final class TranscriptEventReader {
         diagnostics.recordsDecoded += produced.count
         diagnostics.recordsSkippedOversized +=
             max(0, workingFramer.skippedOversized - framer.skippedOversized)
-        snapshotEOF = readStart + UInt64(consumed)
+        snapshotEOF = readEndpoint
         scanHead = snapshotEOF
         // 清空 framer 已映射的 records：下一 pass 只返回新增记录。
         workingFramer.clearRecords()

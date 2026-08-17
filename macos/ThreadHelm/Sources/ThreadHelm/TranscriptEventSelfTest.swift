@@ -301,6 +301,46 @@ private func runTranscriptReaderContractSelfTest() throws {
             "reader huge scanHead not at EOF"
         )
     }
+    // 5) 读取中 truncate 到 readStart+consumed 与 committedOffset 之间：
+    //    partial/discard 时 committedOffset 落后于本轮已读终点，旧校验
+    //    (fileSize >= committedOffset) 会放行 stale bytes 并让 scanHead
+    //    越过新 EOF。用 postReadHook 在读完 chunk、校验前截断。
+    let truncURL = temp.appendingPathComponent("trunc.jsonl")
+    // 2 MiB 无 LF 行、且 8 MiB pass 内完全没有 LF：pass 结束 committedOffset
+    // 仍为 0，而 consumed 已读到 2 MiB。这样旧校验（fileSize>=committed=0）
+    // 会放行并把 cursor 越过新 EOF；新校验（fileSize>=readEndpoint）失败。
+    let prefixLine = String(repeating: "p", count: 2 * 1_048_576) // 2 MiB 无 LF
+    try Data(prefixLine.utf8).write(to: truncURL)
+    guard let truncReader = TranscriptEventReader.make(at: truncURL) else {
+        throw TranscriptEventSelfTestError.failed("reader trunc make failed")
+    }
+    // 读到 2 MiB 后、校验前截断到 1 byte（保留 inode，identity 不变）。
+    truncReader.postReadHook = {
+        do {
+            let h = try FileHandle(forWritingTo: truncURL)
+            try h.truncate(atOffset: 1)
+            try h.close()
+        } catch {
+            // 忽略：让 fileSize 校验决定结果
+        }
+    }
+    let truncResult = truncReader.readForwardPass()
+    guard case .failure(.truncation) = truncResult else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader mid-read truncate not flagged as truncation: "
+                + "\(truncResult)"
+        )
+    }
+    // committedOffset / scanHead 不得前进越过新 EOF（本轮丢弃，无提交）。
+    guard truncReader.committedOffset == 0,
+          truncReader.scanHead == 0
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader mid-read truncate advanced cursor: "
+                + "committed=\(truncReader.committedOffset)"
+                + " scanHead=\(truncReader.scanHead)"
+        )
+    }
 }
 
 private func XCTUnwrapResult<T>(
