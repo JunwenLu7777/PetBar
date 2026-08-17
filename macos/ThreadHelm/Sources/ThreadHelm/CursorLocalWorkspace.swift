@@ -647,7 +647,15 @@ enum CursorLocalWorkspace {
                     )
                 }
                 if cls.isCurrentTool {
-                    // 最新 tool 记录独立持久化（不被 32 条 public 窗口挤出）。
+                    // 跨 pass 回扫从 EOF 向旧数据推进：更旧的 pass 后处理，
+                    // 无条件覆盖会让旧 tool 顶替新的。按最大 startOffset
+                    // 原子更新 descriptor+data（同一文件内 startOffset 唯一，
+                    // 相等即同一条）。
+                    if let existing = currentToolDescriptor,
+                       record.startOffset <= existing.startOffset
+                    {
+                        continue
+                    }
                     currentToolDescriptor = TranscriptRecordLocation(
                         startOffset: record.startOffset,
                         byteCount: UInt32(record.byteCount),
@@ -655,10 +663,11 @@ enum CursorLocalWorkspace {
                         eventClass: .currentTool,
                         occurredAt: nil
                     )
-                    if !cls.isPublic {
-                        // 纯 tool record 的 data 才进入 currentToolData；
-                        // mixed record 的 data 已在 public 通道（重复解析
-                        // 会把 latestPublicText 错误覆盖为 mixed 文本）。
+                    if cls.isPublic {
+                        // mixed：data 已在 public 通道。清空 currentToolData
+                        // 避免旧 pure tool 的 data 残留末尾，latestTool 倒退。
+                        currentToolData = Data()
+                    } else {
                         currentToolData = record.data
                     }
                 }

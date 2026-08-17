@@ -251,6 +251,8 @@ func runCursorAgentAdapterSelfTest() {
         runCursorPartialTailCompletionSelfTest()
         runCursorToolSurvivesWindowEvictionSelfTest()
         runCursorMixedThenPureToolOrderingSelfTest()
+        runCursorColdScanPureThenMixedToolSelfTest()
+        runCursorColdScanCrossPassToolSelfTest()
     } catch {
         failCursorAdapterSelfTest("unexpected error: \(error)")
     }
@@ -1201,6 +1203,188 @@ private func cursorProjectionToolText(
     )
     return item.projection.currentToolStatus?.text
 }
+
+/// 冷扫描同 pass 内先 pure tool A 后较新 mixed tool B：descriptor 须
+/// 原子更新为 B 且 currentToolData 清空（pure A 的 data 残留末尾会让
+/// latestTool 倒退为 A）。
+private func runCursorColdScanPureThenMixedToolSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-pure-mixed-cold-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    do {
+        let projectsRoot = temp.appendingPathComponent(
+            "cursor-projects", isDirectory: true
+        )
+        let sessionID = "cursor-pure-mixed-cold-session"
+        let transcriptsDir = projectsRoot
+            .appendingPathComponent("test-workspace", isDirectory: true)
+            .appendingPathComponent("agent-transcripts", isDirectory: true)
+        let transcriptURL = transcriptsDir.appendingPathComponent(
+            "\(sessionID).jsonl"
+        )
+        try manager.createDirectory(
+            at: transcriptsDir,
+            withIntermediateDirectories: true
+        )
+        let indexRoot = temp.appendingPathComponent(
+            "index-root", isDirectory: true
+        )
+        let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
+        CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
+        defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
+
+        // fixture: user → pure tool Read A → 3 条 public → mixed Bash B
+        // （text + tool_use，最后记录 → 最新 tool）。
+        var lines: [String] = []
+        lines.append("{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"标题\"}]}}\n")
+        lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"path\":\"/a\"}}]}}\n")
+        for i in 0..<3 {
+            lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"中间\(i)\"}]}}\n")
+        }
+        lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"跑命令说明\"},{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}]}}\n")
+        try Data(lines.joined().utf8).write(to: transcriptURL)
+
+        guard let content = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), content.title == "标题" else {
+            failCursorAdapterSelfTest(
+                "Cursor pure->mixed cold: must return content"
+            )
+        }
+        let store = TranscriptIndexStore(
+            rootDirectory: indexRoot,
+            fileManager: manager
+        )
+        let cp = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard let cp, cp.currentToolDescriptor != nil else {
+            failCursorAdapterSelfTest(
+                "Cursor pure->mixed cold: must persist current-tool descriptor"
+            )
+        }
+        // latestTool 必须是 Bash（mixed，最后记录），不是倒退的 Read。
+        let toolFragments = content.fragments.filter { $0.kind == .tool }
+        guard toolFragments.last?.text == "正在运行命令" else {
+            failCursorAdapterSelfTest(
+                "Cursor pure->mixed cold: latest tool must be Bash, got \(toolFragments.last?.text ?? "nil")"
+            )
+        }
+        // latestPublicText 是 mixed 的 text（最后 public），不被清空影响。
+        guard let activity = content.activityText,
+              activity.contains("跑命令说明") else {
+            failCursorAdapterSelfTest(
+                "Cursor pure->mixed cold: latest public text must survive"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor pure->mixed cold test: \(error)")
+    }
+}
+
+/// 跨 8 MiB pass：文件 = pure tool A（旧，pass3） + >4MiB 超限记录
+/// （pass1/pass2 被丢弃，recoveredData < 8MiB 使回扫继续）+ mixed tool B
+/// （新，pass1）。旧逻辑在 pass3 无条件覆盖 descriptor 且拼入 A 的 data，
+/// latestTool 倒退为 A；修复后按最大 startOffset 保留 B。
+private func runCursorColdScanCrossPassToolSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-cross-pass-cold-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    do {
+        let projectsRoot = temp.appendingPathComponent(
+            "cursor-projects", isDirectory: true
+        )
+        let sessionID = "cursor-cross-pass-session"
+        let transcriptsDir = projectsRoot
+            .appendingPathComponent("test-workspace", isDirectory: true)
+            .appendingPathComponent("agent-transcripts", isDirectory: true)
+        let transcriptURL = transcriptsDir.appendingPathComponent(
+            "\(sessionID).jsonl"
+        )
+        try manager.createDirectory(
+            at: transcriptsDir,
+            withIntermediateDirectories: true
+        )
+        let indexRoot = temp.appendingPathComponent(
+            "index-root", isDirectory: true
+        )
+        let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
+        CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
+        defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
+
+        // fixture: user → pure Read A → 5 MiB 小 public 记录组 →
+        // 6 MiB oversized 单行（framer 丢弃，制造 pass1 恢复亏空）→
+        // mixed Bash B（EOF，最新）。pass1 恢复 <8 MiB 继续回扫，
+        // pass2 处理 A；旧逻辑无条件覆盖使 A 顶替 B。
+        try manager.createFile(atPath: transcriptURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.write(contentsOf: Data(
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"标题\"}]}}\n".utf8
+        ))
+        try handle.write(contentsOf: Data(
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"path\":\"/a\"}}]}}\n".utf8
+        ))
+        let filler = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + String(repeating: "g", count: 5000) + "\"}]}}\n"
+        var fillerLines: [String] = []
+        for _ in 0..<1000 { fillerLines.append(filler) }
+        try handle.write(contentsOf: Data(fillerLines.joined().utf8))
+        let hugeText = String(repeating: "x", count: 6 * 1_048_576)
+        let hugeRecord = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + hugeText + "\"}]}}\n"
+        try handle.write(contentsOf: Data(hugeRecord.utf8))
+        try handle.write(contentsOf: Data(
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"跑命令说明\"},{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}]}}\n".utf8
+        ))
+        try handle.close()
+
+        guard let content = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), content.title == "标题" else {
+            failCursorAdapterSelfTest(
+                "Cursor cross-pass cold: must return content"
+            )
+        }
+        let store = TranscriptIndexStore(
+            rootDirectory: indexRoot,
+            fileManager: manager
+        )
+        let cp = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard let cp, cp.currentToolDescriptor != nil else {
+            failCursorAdapterSelfTest(
+                "Cursor cross-pass cold: must persist current-tool descriptor"
+            )
+        }
+        let toolFragments = content.fragments.filter { $0.kind == .tool }
+        guard toolFragments.last?.text == "正在运行命令" else {
+            failCursorAdapterSelfTest(
+                "Cursor cross-pass cold: latest tool must be Bash (newest pass), got \(toolFragments.last?.text ?? "nil")"
+            )
+        }
+        // checkpoint 的 currentToolDescriptor 必须指向 B（max startOffset）。
+        guard cp.currentToolDescriptor.map({ $0.startOffset })
+                == cp.currentToolDescriptor.map({ $0.startOffset }),
+              toolFragments.last?.text == "正在运行命令"
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor cross-pass cold: checkpoint tool descriptor mismatch"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor cross-pass cold test: \(error)")
+    }
+}
+
 
 private func writeCursorConversationSearchDatabase(
     at url: URL,
