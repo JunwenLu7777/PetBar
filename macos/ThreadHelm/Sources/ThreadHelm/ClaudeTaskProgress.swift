@@ -293,14 +293,16 @@ final class ClaudeTaskProgressReader {
     }
 
     private struct ParsedCacheEntry {
-        let modificationDate: Date
-        let activeKind: TaskProgressKind?
-        let activeTitle: String
-        let activeProcessID: Int32?
-        let activeProcessStartIdentity: String?
-        let allowsAgentOpen: Bool
-        let inferredActivityExpiresAt: Date?
-        let item: TaskProgressItem?
+        var modificationDate: Date
+        var activeKind: TaskProgressKind?
+        var activeTitle: String
+        var activeProcessID: Int32?
+        var activeProcessStartIdentity: String?
+        var allowsAgentOpen: Bool
+        var inferredActivityExpiresAt: Date?
+        var item: TaskProgressItem?
+        var reader: TranscriptEventReader?
+        var recoveredLines: [String]
     }
 
     private let fileManager = FileManager.default
@@ -388,9 +390,56 @@ final class ClaudeTaskProgressReader {
             {
                 item = cached.item
             } else {
-                let lines = readTailLines(from: candidate.url) ?? []
+                // 增量读取：有持久 reader 时做前向 pass（只读追加字节）。
+                var recoveredLines: [String] = []
+                var reader: TranscriptEventReader?
+                if let cached = parsedCache[cacheKey],
+                   let cachedReader = cached.reader
+                {
+                    let result = cachedReader.readForwardPass()
+                    if case .success(let records) = result {
+                        let newLines = records.compactMap {
+                            String(data: $0.data, encoding: .utf8)
+                        }
+                        recoveredLines = cached.recoveredLines + newLines
+                        reader = cachedReader
+                    }
+                }
+                if reader == nil {
+                    guard let newReader = TranscriptEventReader.make(
+                        at: candidate.url
+                    ) else { continue }
+                    let fileSize = (try? fileManager.attributesOfItem(
+                        atPath: candidate.url.path
+                    )[.size] as? NSNumber)?.uint64Value ?? 0
+                    newReader.setCommittedOffset(fileSize)
+                    var budget = TranscriptReadBudget.transcriptEvents
+                        .maximumAutomaticBackscanBytes
+                    var endOffset = fileSize
+                    while budget > 0, endOffset > 0 {
+                        let passBytes = min(budget, 8 * 1_048_576)
+                        let result = newReader.readBackwardPass(
+                            fromEnd: endOffset,
+                            maximumBytes: passBytes
+                        )
+                        guard case .success(let (records, cont)) = result
+                        else { break }
+                        let passLines = records.compactMap {
+                            String(data: $0.data, encoding: .utf8)
+                        }
+                        recoveredLines = passLines + recoveredLines
+                        budget -= passBytes
+                        if let cont = cont {
+                            endOffset = cont
+                        } else {
+                            break
+                        }
+                        if recoveredLines.count >= 200 { break }
+                    }
+                    reader = newReader
+                }
                 item = Self.parseTranscript(
-                    lines: lines,
+                    lines: recoveredLines,
                     sessionID: candidate.sessionID,
                     fallbackTitle: agent?.title ?? "Claude 会话",
                     workingDirectory: agent?.workingDirectory ?? "",
@@ -414,7 +463,9 @@ final class ClaudeTaskProgressReader {
                         agent == nil && item?.kind == .running
                             ? candidate.modificationDate.addingTimeInterval(30)
                             : nil,
-                    item: item
+                    item: item,
+                    reader: reader,
+                    recoveredLines: recoveredLines
                 )
             }
             if let item,

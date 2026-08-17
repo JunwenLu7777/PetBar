@@ -38,8 +38,9 @@ final class CodexTaskProgressReader {
     private struct ParsedCacheEntry {
         let modificationDate: Date
         let snapshot: TaskProgressSnapshot
+        var reader: TranscriptEventReader?
+        var recoveredLines: [String]
     }
-
     private struct RolloutSessionMetadata {
         let firstLine: String?
         let workingDirectory: String?
@@ -74,21 +75,52 @@ final class CodexTaskProgressReader {
             let cacheKey = candidate.url.path
             let sessionMetadata = readSessionMetadata(from: candidate.url)
             let snapshot: TaskProgressSnapshot
-            if let cached = parsedCache[cacheKey],
+            if var cached = parsedCache[cacheKey],
                cached.modificationDate == candidate.modificationDate
             {
                 snapshot = cached.snapshot
             } else {
-                guard let lines = readTailLinesViaReader(from: candidate.url)
-                else { continue }
+                // 增量读取：有持久 reader 时做前向 pass（只读追加字节），
+                // 无则冷启动回扫。
+                var recoveredLines: [String] = []
+                var reader: TranscriptEventReader?
+                if let cached = parsedCache[cacheKey],
+                   let cachedReader = cached.reader
+                {
+                    // identity 变化时 reader.readForwardPass 会返回
+                    // .identityChanged → 冷启动重建。
+                    let result = cachedReader.readForwardPass()
+                    if case .success(let records) = result {
+                        let newLines = records.compactMap {
+                            String(data: $0.data, encoding: .utf8)
+                        }
+                        recoveredLines = cached.recoveredLines + newLines
+                        reader = cachedReader
+                    }
+                }
+                if reader == nil {
+                    // 冷启动：有界回扫。
+                    guard let newReader = TranscriptEventReader.make(
+                        at: candidate.url
+                    ) else { continue }
+                    let coldLines = readTailLinesColdScan(
+                        reader: newReader,
+                        url: candidate.url
+                    )
+                    recoveredLines = coldLines
+                    reader = newReader
+                }
+                guard !recoveredLines.isEmpty else { continue }
                 snapshot = Self.parse(
-                    lines: lines,
+                    lines: recoveredLines,
                     modificationDate: candidate.modificationDate,
                     now: now
                 )
                 parsedCache[cacheKey] = ParsedCacheEntry(
                     modificationDate: candidate.modificationDate,
-                    snapshot: snapshot
+                    snapshot: snapshot,
+                    reader: reader,
+                    recoveredLines: recoveredLines
                 )
             }
             guard var item = snapshot.items.first, item.kind != .idle else { continue }
@@ -736,30 +768,8 @@ final class CodexTaskProgressReader {
         return cachedRollouts
     }
 
-    private func isUserVisibleRollout(
-        _ url: URL,
-        explicitlyVisibleThreadIDs: Set<String>
-    ) -> Bool {
-        let explicitlyVisible = Self.threadID(from: url).map {
-            explicitlyVisibleThreadIDs.contains($0)
-        } ?? false
-        let cacheKey = "\(url.path)#\(explicitlyVisible ? "explicit" : "default")"
-        if let cached = cachedRolloutVisibility[cacheKey] { return cached }
-
-        var isVisible = true
-        if let firstLine = readSessionMetadata(from: url).firstLine {
-            isVisible = Self.isUserVisibleSessionMetadata(
-                line: firstLine,
-                explicitlyVisible: explicitlyVisible
-            )
-        }
-        cachedRolloutVisibility[cacheKey] = isVisible
-        return isVisible
-    }
-
     private func readSessionMetadata(from url: URL) -> RolloutSessionMetadata {
         if let cached = cachedSessionMetadata[url.path] { return cached }
-
         var firstLine: String?
         if let handle = try? FileHandle(forReadingFrom: url) {
             defer { try? handle.close() }
@@ -779,14 +789,37 @@ final class CodexTaskProgressReader {
         cachedSessionMetadata[url.path] = metadata
         return metadata
     }
-    private func readTailLinesViaReader(from url: URL) -> [String]? {
-        guard let reader = TranscriptEventReader.make(at: url) else {
-            return nil
+
+    private func isUserVisibleRollout(
+        _ url: URL,
+        explicitlyVisibleThreadIDs: Set<String>
+    ) -> Bool {
+        let explicitlyVisible = Self.threadID(from: url).map {
+            explicitlyVisibleThreadIDs.contains($0)
+        } ?? false
+        let cacheKey = "\(url.path)#\(explicitlyVisible ? "explicit" : "default")"
+        if let cached = cachedRolloutVisibility[cacheKey] { return cached }
+        var isVisible = true
+        if let firstLine = readSessionMetadata(from: url).firstLine {
+            isVisible = Self.isUserVisibleSessionMetadata(
+                line: firstLine,
+                explicitlyVisible: explicitlyVisible
+            )
         }
-        let fileSize = (try? FileManager.default.attributesOfItem(
+        cachedRolloutVisibility[cacheKey] = isVisible
+        return isVisible
+    }
+
+    private func readTailLinesColdScan(
+        reader: TranscriptEventReader,
+        url: URL
+    ) -> [String] {
+        let fileSize = (try? fileManager.attributesOfItem(
             atPath: url.path
         )[.size] as? NSNumber)?.uint64Value ?? 0
         // 有界回扫：从 EOF 向前读 8 MiB/pass，最多 64 MiB。
+        // 冷启动后前向 fence 设为 fileSize（只读追加）。
+        reader.setCommittedOffset(fileSize)
         var budget = TranscriptReadBudget.transcriptEvents
             .maximumAutomaticBackscanBytes
         var endOffset = fileSize
@@ -810,7 +843,7 @@ final class CodexTaskProgressReader {
             }
             if lines.count >= 200 { break }
         }
-        return lines.isEmpty ? nil : lines
+        return lines
     }
 
     private static let iso8601WithFractional: ISO8601DateFormatter = {
