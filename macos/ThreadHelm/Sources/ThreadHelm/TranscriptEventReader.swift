@@ -293,6 +293,7 @@ final class TranscriptEventReader {
             var records: [TranscriptRecordRange] = []
             var framer = JSONLFramer(
                 maximumRecordBytes: budget.maximumRecordBytes,
+                committedOffset: lowerBound,
                 sourceOrder: self.sourceOrder
             )
             framer.feed(data, chunkStart: lowerBound)

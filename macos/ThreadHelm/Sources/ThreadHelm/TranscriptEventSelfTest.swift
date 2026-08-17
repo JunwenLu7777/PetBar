@@ -165,6 +165,30 @@ private func runJSONLFramerContractSelfTest() throws {
     guard f5.records.map(\.sourceOrder) == [1, 2] else {
         throw TranscriptEventSelfTestError.failed("sourceOrder not monotonic")
     }
+
+    // 6) 非零起始回扫偏移：framer 必须以窗口起点 lowerBound 作为绝对基准，
+    //    不得产出窗口相对偏移（否则 stable ID / sidecar descriptor 被污染）。
+    let backBody = "one\ntwo\nthree\nfour\n"
+    let backBytes = Array(backBody.utf8)
+    let windowStart = UInt64(backBytes.count) - 11 // 窗口从 "three\nfour\n" 起
+    var back = JSONLFramer(
+        maximumRecordBytes: 4 * 1_048_576,
+        committedOffset: windowStart
+    )
+    back.feed(
+        Data(backBytes[Int(windowStart)..<backBytes.count]),
+        chunkStart: windowStart
+    )
+    guard back.records.count == 2,
+          back.records[0].startOffset == windowStart,
+          back.records[0].byteCount == 6, // "three\n"
+          back.records[1].startOffset == windowStart + 6,
+          back.records[1].byteCount == 5 // "four\n"
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "backward non-zero offset: \(back.records.map { ($0.startOffset, $0.byteCount) })"
+        )
+    }
 }
 
 // MARK: index store contract（metadata-only）
