@@ -665,7 +665,10 @@ func dynamicIslandCapsulePresentation(
         let startAndElapsed = taskProgressStartAndDurationText(for: item, now: now)
         let provider = agentPresentation(for: item.source).displayName
         let activity = dynamicIslandSanitizedTaskActivityText(
-            item.activityText ?? item.events.last?.text
+            item.activityText
+                ?? item.projection.currentToolStatus?.text
+                ?? item.projection.publicMessages.first?.text
+                ?? item.projection.terminalEvent?.text
         )
         let status: String
         switch style {

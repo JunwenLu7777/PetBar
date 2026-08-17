@@ -798,7 +798,9 @@ final class DynamicIslandTaskViewController:
         copyButton.isEnabled = copyPathForSelfTest() != nil
         copyButton.setDisplayTitle("复制路径")
         copyButton.setAccessibilityLabel("复制工作目录")
-        renderEvents(item.events)
+        renderEvents(item.projection.publicMessages.map {
+            TaskActivityEvent(kind: .commentary, occurredAt: $0.occurredAt, text: $0.text)
+        })
         updateDetailAccessibility()
         view.needsLayout = true
     }
@@ -1309,7 +1311,7 @@ final class DynamicIslandTaskHoverController {
 
     func show(item: TaskProgressItem, sourceRect: NSRect) {
         titleField.stringValue = item.title
-        currentEventTexts = Array(item.events.suffix(3)).map(\.text)
+        currentEventTexts = Array(item.projection.publicMessages.prefix(3)).map(\.text)
         stack.arrangedSubviews.forEach {
             stack.removeArrangedSubview($0)
             $0.removeFromSuperview()
