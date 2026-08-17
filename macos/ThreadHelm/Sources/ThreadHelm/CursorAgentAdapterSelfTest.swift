@@ -250,6 +250,7 @@ func runCursorAgentAdapterSelfTest() {
         runCursorIndexTailAppendSelfTest()
         runCursorPartialTailCompletionSelfTest()
         runCursorToolSurvivesWindowEvictionSelfTest()
+        runCursorMixedThenPureToolOrderingSelfTest()
     } catch {
         failCursorAdapterSelfTest("unexpected error: \(error)")
     }
@@ -1030,6 +1031,107 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
         }
     } catch {
         failCursorAdapterSelfTest("Cursor tool evict test: \(error)")
+    }
+}
+/// mixed tool（Read，在 32 条 public 窗口内）先于 pure tool（Bash，
+/// 仅 currentToolDescriptor）时，重启后最新 tool 必须是 Bash：
+/// current-tool + public descriptors 须按 startOffset 排序去重回读，
+/// 否则 Bash 被拼在 Read 前，latestTool 倒退为 Read。
+private func runCursorMixedThenPureToolOrderingSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-tool-order-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    do {
+        let projectsRoot = temp.appendingPathComponent(
+            "cursor-projects", isDirectory: true
+        )
+        let sessionID = "cursor-tool-order-session"
+        let transcriptsDir = projectsRoot
+            .appendingPathComponent("test-workspace", isDirectory: true)
+            .appendingPathComponent("agent-transcripts", isDirectory: true)
+        let transcriptURL = transcriptsDir.appendingPathComponent(
+            "\(sessionID).jsonl"
+        )
+        try manager.createDirectory(
+            at: transcriptsDir,
+            withIntermediateDirectories: true
+        )
+        let indexRoot = temp.appendingPathComponent(
+            "index-root", isDirectory: true
+        )
+        let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
+        CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
+        defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
+
+        // fixture: user → mixed tool Read（text + tool_use）→ 20 条纯 public
+        // → pure tool Bash（tool_use only）→ 10 条纯 public。
+        // public 总数 31 ≤ 32：mixed Read 在窗口内；
+        // Bash pure 不在 public，只在 currentToolDescriptor。
+        var lines: [String] = []
+        lines.append("{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"任务标题\"}]}}\n")
+        lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"读文件说明\"},{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"path\":\"/a\"}}]}}\n")
+        for i in 0..<20 {
+            lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"中间消息\(i)\"}]}}\n")
+        }
+        lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}]}}\n")
+        for i in 0..<10 {
+            lines.append("{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"收尾消息\(i)\"}]}}\n")
+        }
+        try Data(lines.joined().utf8).write(to: transcriptURL)
+
+        // Call 1: cold scan。fragments 中 Read 在前（mixed 含 text），
+        // Bash 在最后（pure tool 拼末尾）；latestTool = Bash。
+        guard let first = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), first.title == "任务标题",
+           first.fragments.contains(where: {
+               $0.kind == .tool && $0.text == "正在运行命令"
+           }) == true
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor tool ordering: cold scan must end with latest tool Bash"
+            )
+        }
+
+        // Call 2: fresh restart（无追加）。统一 descriptor 回读必须
+        // 保持 chronological：latestTool 仍为 Bash（不是退回到 Read）。
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        guard let second = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ) else {
+            failCursorAdapterSelfTest(
+                "Cursor tool ordering: index-hit restart must return content"
+            )
+        }
+        let toolFragments = second.fragments.filter { $0.kind == .tool }
+        guard toolFragments.last?.text == "正在运行命令" else {
+            failCursorAdapterSelfTest(
+                "Cursor tool ordering: latest tool must be Bash after restart, got \(toolFragments.last?.text ?? "nil")"
+            )
+        }
+        // Read 在 Bash 前（chronological）。
+        let readIndex = toolFragments.firstIndex {
+            $0.text == "正在检查文件"
+        }
+        let bashIndex = toolFragments.firstIndex {
+            $0.text == "正在运行命令"
+        }
+        guard let readIndex, let bashIndex, readIndex < bashIndex else {
+            failCursorAdapterSelfTest(
+                "Cursor tool ordering: Read must precede Bash after restart"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor tool ordering test: \(error)")
     }
 }
 private func writeCursorConversationSearchDatabase(

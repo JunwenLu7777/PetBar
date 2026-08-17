@@ -458,27 +458,30 @@ enum CursorLocalWorkspace {
            checkpoint.sourceIdentity == reader.identity,
            checkpoint.committedOffset <= fileSize
         {
-            var restoredData = Data()
-            var restoredCurrentToolData = Data()
-            // mixed record 的 range 同时出现在 public descriptors 与
-            // currentToolDescriptor：public 恢复已含其 data，单独恢复
-            // 会重复拼行。构建 public range 集合做去重。
-            let publicRanges = Set(
-                checkpoint.publicMessageDescriptors.map {
-                    "\($0.startOffset)-\($0.byteCount)"
-                }
-            )
-            // 先回读 current-tool descriptor（活动工具状态独立持久化，
-            // 不受 32 条 public 窗口挤出影响，§4.2）。
-            if let toolDescriptor = checkpoint.currentToolDescriptor,
-               !publicRanges.contains(
-                   "\(toolDescriptor.startOffset)-\(toolDescriptor.byteCount)"
-               ),
-               let data = reader.readRange(toolDescriptor) {
-                restoredCurrentToolData = data
+            // current-tool + public descriptors 统一按 startOffset 排序
+            // 去重回读，保证 chronological：current-tool 可能是较旧的
+            // mixed tool（已在 public 窗口）或较新的 pure tool（只在
+            // currentToolDescriptor）。分别拼接会把顺序搞反，导致
+            // latestTool / latestPublicText 退回旧记录。
+            var unifiedDescriptors = checkpoint.publicMessageDescriptors
+            if let toolDescriptor = checkpoint.currentToolDescriptor {
+                unifiedDescriptors.append(toolDescriptor)
             }
-            // public descriptors 按 sourceOrder 升序存储；按序 append 恢复顺序。
-            for descriptor in checkpoint.publicMessageDescriptors {
+            unifiedDescriptors.sort {
+                if $0.startOffset == $1.startOffset {
+                    return $0.byteCount < $1.byteCount
+                }
+                return $0.startOffset < $1.startOffset
+            }
+            var restoredData = Data()
+            var lastReadStart = UInt64.max
+            for descriptor in unifiedDescriptors {
+                // 按 startOffset 去重：同一 range（mixed record 同时持久化为
+                // public + currentTool）只回读一次。
+                if descriptor.startOffset == lastReadStart {
+                    continue
+                }
+                lastReadStart = descriptor.startOffset
                 if let data = reader.readRange(descriptor) {
                     restoredData.append(data)
                 }
@@ -537,14 +540,12 @@ enum CursorLocalWorkspace {
             // 最新 current-tool descriptor：追加的优先，否则取恢复的旧值。
             let currentToolDescriptor = appendedCurrentToolDescriptor
                 ?? checkpoint.currentToolDescriptor
-            if !restoredData.isEmpty || !appendedData.isEmpty
-                || !restoredCurrentToolData.isEmpty {
-                // 顺序与冷扫描一致（chronological）：current-tool 记录在
-                // public 文本之前（mixed 记录含 text，拼在末尾会覆盖
-                // latestPublicText）。latestTool 按文本中最后 tool 取，
-                // 顺序正确时自然指向最近的 tool。
-                let allData = restoredCurrentToolData
-                    + restoredData + appendedData
+            if !restoredData.isEmpty || !appendedData.isEmpty {
+                // 顺序已由统一 descriptor 回读保证 chronological
+                // （current-tool + public 按 startOffset 排序），
+                // forward tail 顺序追加在末。latestTool 取文本中
+                // 最后 tool，即最近发生的工具活动。
+                let allData = restoredData + appendedData
                 let text = String(data: allData, encoding: .utf8)
                     ?? String(decoding: allData, as: UTF8.self)
                 let content = parseTranscript(text)
