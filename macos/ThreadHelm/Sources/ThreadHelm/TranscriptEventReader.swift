@@ -117,6 +117,10 @@ final class TranscriptEventReader {
     /// 当前 framer（含 committedOffset/pending/discard/sourceOrder）。
     var committedOffset: UInt64 { framer.committedOffset }
     var sourceOrder: UInt64 { framer.sourceOrder }
+    /// 仅内存扫描头：已喂给 framer 的字节位置。committedOffset 是持久
+    /// checkpoint（可能因超长行 discard 停留在更早位置），scanHead 必须单独
+    /// 跟踪，否则 discard 后下一 pass 会从原地重读而永不前进。
+    private(set) var scanHead: UInt64 = 0
     private(set) var snapshotEOF: UInt64
     private(set) var backscanContinuationOffset: UInt64?
     private(set) var diagnostics = TranscriptReadDiagnostics()
@@ -136,9 +140,40 @@ final class TranscriptEventReader {
         self.fileManager = fileManager
         self.clock = clock
         snapshotEOF = initialFileSize
+        scanHead = restoreOffset
         framer = JSONLFramer(
             maximumRecordBytes: budget.maximumRecordBytes,
             committedOffset: restoreOffset
+        )
+    }
+
+    /// 用文件真实 identity 构造 reader（测试与冷启动统一入口）。
+    static func make(
+        at url: URL,
+        budget: TranscriptReadBudget = .transcriptEvents,
+        fileManager: FileManager = .default,
+        clock: TranscriptMonotonicClock = SystemTranscriptMonotonicClock()
+    ) -> TranscriptEventReader? {
+        var statBuffer = stat()
+        guard lstat(url.path, &statBuffer) == 0 else { return nil }
+        #if os(macOS)
+        let birth = statBuffer.st_birthtimespec
+        #else
+        let birth = statBuffer.st_ctimespec
+        #endif
+        let identity = TranscriptSourceIdentity(
+            device: UInt64(statBuffer.st_dev),
+            inode: UInt64(statBuffer.st_ino),
+            birthSeconds: Int64(birth.tv_sec),
+            birthNanoseconds: Int64(birth.tv_nsec)
+        )
+        return TranscriptEventReader(
+            url: url,
+            identity: identity,
+            budget: budget,
+            fileManager: fileManager,
+            clock: clock,
+            initialFileSize: UInt64(statBuffer.st_size)
         )
     }
 
@@ -182,7 +217,7 @@ final class TranscriptEventReader {
             return .failure(.ioFailed)
         }
         guard attrs.identity == identity else { return .failure(.identityChanged) }
-        let readStart = framer.committedOffset + UInt64(framer.pending.count)
+        let readStart = scanHead
         guard attrs.fileSize >= readStart else { return .failure(.truncation) }
         let remaining = attrs.fileSize - readStart
         guard remaining > 0 else { return .success([]) }
@@ -245,15 +280,11 @@ final class TranscriptEventReader {
         diagnostics.recordsSkippedOversized +=
             max(0, workingFramer.skippedOversized - framer.skippedOversized)
         snapshotEOF = readStart + UInt64(consumed)
+        scanHead = snapshotEOF
+        // 清空 framer 已映射的 records：下一 pass 只返回新增记录。
         workingFramer.clearRecords()
-        _ = workingFramer.finishPass()
         framer = workingFramer
         return .success(produced)
-    }
-
-    /// 直接记录诊断用当前 checkpoint。
-    private func commitCurrent() {
-        // framer 已持有 committedOffset。
     }
 
     // MARK: - backward bounded backscan（冷启动无索引 / index re-read）
@@ -321,6 +352,7 @@ final class TranscriptEventReader {
             committedOffset: value,
             sourceOrder: framer.sourceOrder
         )
+        scanHead = value
     }
     func setBackscanContinuation(_ value: UInt64?) { backscanContinuationOffset = value }
     func resetPartialBytes() { framer.resetPending() }

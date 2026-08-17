@@ -144,6 +144,9 @@ struct TaskProgressItem: Equatable {
         if source == .cursor || source == .zcode {
             return sessionID != nil
         }
+        if source == .omp {
+            return sessionID.flatMap(normalizedOMPSessionID) != nil
+        }
         return false
     }
 
@@ -452,6 +455,30 @@ func safePublicActivityParagraph(from text: String) -> String? {
         )
     }
     return paragraph
+}
+
+/// 活动文本单条 / 合计预算（计划 §4.3）。
+enum AgentActivityBudget {
+    static let maximumPublicMessages = 32
+    static let maximumPublicMessageBytes = 4 * 1_024
+    static let maximumPublicMessagesTotalBytes = 64 * 1_024
+    static let maximumToolStatusBytes = 512
+    static let maximumTerminalBytes = 256
+}
+
+/// 在脱敏之后做 UTF-8 安全截断：按标量边界截断，绝不劈开多字节 UTF-8。
+func safeUTF8Truncated(_ text: String, to byteLimit: Int) -> String {
+    guard byteLimit > 0 else { return "" }
+    if text.utf8.count <= byteLimit { return text }
+    var result = ""
+    var bytes = 0
+    for scalar in text.unicodeScalars {
+        let size = UTF8.width(scalar)
+        if bytes + size > byteLimit { break }
+        result.unicodeScalars.append(scalar)
+        bytes += size
+    }
+    return result
 }
 
 func appendingTaskActivityParagraph(

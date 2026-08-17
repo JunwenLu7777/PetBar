@@ -92,6 +92,72 @@ struct TaskActivityEvent: Equatable {
     let text: String
 }
 
+/// 稳定三通道活动投影。视图只消费这个投影，不再各自猜测 events 数组方向。
+struct AgentActivityEventID: Hashable, Equatable {
+    let source: AgentID
+    let sessionKey: String
+    let stableSourceKey: String
+}
+
+struct AgentActivityEntry: Equatable {
+    let id: AgentActivityEventID
+    let occurredAt: Date
+    let sourceOrder: UInt64
+    let text: String
+}
+
+struct AgentActivityProjection: Equatable {
+    /// 公开消息，按 occurredAt DESC、sourceOrder DESC 稳定排序。
+    var publicMessages: [AgentActivityEntry]
+    var currentToolStatus: AgentActivityEntry?
+    var terminalEvent: AgentActivityEntry?
+
+    init(
+        publicMessages: [AgentActivityEntry] = [],
+        currentToolStatus: AgentActivityEntry? = nil,
+        terminalEvent: AgentActivityEntry? = nil
+    ) {
+        self.publicMessages = publicMessages
+        self.currentToolStatus = currentToolStatus
+        self.terminalEvent = terminalEvent
+    }
+
+    static let empty = AgentActivityProjection()
+
+    /// 迁移期兼容桥：由公共投影唯一派生的旧 `events` 数组（正文已按时间/顺序
+    /// 倒序；工具与终态各自独立通道附后）。provider 不得再直接写混合数组。
+    var displayEvents: [TaskActivityEvent] {
+        var rows: [(order: UInt64, occurredAt: Date, kind: TaskActivityEventKind, text: String)] = []
+        for entry in publicMessages {
+            rows.append((entry.sourceOrder, entry.occurredAt, .commentary, entry.text))
+        }
+        if let currentToolStatus {
+            rows.append((
+                currentToolStatus.sourceOrder,
+                currentToolStatus.occurredAt,
+                .tool,
+                currentToolStatus.text
+            ))
+        }
+        if let terminalEvent {
+            rows.append((
+                terminalEvent.sourceOrder,
+                terminalEvent.occurredAt,
+                .lifecycle,
+                terminalEvent.text
+            ))
+        }
+        return rows.sorted {
+            if $0.occurredAt != $1.occurredAt {
+                return $0.occurredAt > $1.occurredAt
+            }
+            return $0.order > $1.order
+        }.map {
+            TaskActivityEvent(kind: $0.kind, occurredAt: $0.occurredAt, text: $0.text)
+        }
+    }
+}
+
 struct TaskProgressCollectionSnapshot: Equatable {
     let items: [TaskProgressItem]
 

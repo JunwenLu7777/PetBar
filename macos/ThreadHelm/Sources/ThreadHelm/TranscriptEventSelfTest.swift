@@ -11,6 +11,7 @@ import Foundation
 func runTranscriptEventReaderSelfTest() -> Never {
     do {
         try runJSONLFramerContractSelfTest()
+        try runTranscriptReaderContractSelfTest()
         try runTranscriptIndexContractSelfTest()
     } catch {
         fputs("transcript-events-self-test: \(error)\n", stderr)
@@ -19,8 +20,8 @@ func runTranscriptEventReaderSelfTest() -> Never {
     print(
         "transcript-events-self-test: providers=5 transcript=4 hook-only=1"
             + " utf8-boundary=pass partial=pass oversized-discard=pass"
-            + " rotation=pass index=metadata-only budgets=8MiB/64MiB/4MiB"
-            + " memory=32/64KiB"
+            + " rotation=pass reader-forward=pass reader-identity=pass"
+            + " index=metadata-only budgets=8MiB/64MiB/4MiB memory=32/64KiB"
     )
     exit(0)
 }
@@ -191,8 +192,127 @@ private func runJSONLFramerContractSelfTest() throws {
     }
 }
 
-// MARK: index store contract（metadata-only）
+// MARK: Reader contract（真实文件驱动）
 
+private func runTranscriptReaderContractSelfTest() throws {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-reader-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    try manager.createDirectory(at: temp, withIntermediateDirectories: true)
+
+    let identity = TranscriptSourceIdentity(
+        device: 3,
+        inode: 4,
+        birthSeconds: 1_600_000_000,
+        birthNanoseconds: 0
+    )
+
+    // 1) forward pass 读完整记录（用 make 捕获真实 identity）。
+    let smallURL = temp.appendingPathComponent("small.jsonl")
+    try Data("alpha\nbeta\n".utf8).write(to: smallURL)
+    guard var reader = TranscriptEventReader.make(at: smallURL) else {
+        throw TranscriptEventSelfTestError.failed("reader make failed")
+    }
+    let pass1 = try XCTUnwrapResult(reader.readForwardPass())
+    guard pass1.count == 2,
+          pass1[0].data == Data("alpha\n".utf8),
+          pass1[1].data == Data("beta\n".utf8),
+          reader.committedOffset == UInt64("alpha\nbeta\n".utf8.count),
+          reader.scanHead == UInt64("alpha\nbeta\n".utf8.count)
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader forward pass: count=\(pass1.count)"
+                + " scanHead=\(reader.scanHead)"
+                + " committed=\(reader.committedOffset)"
+        )
+    }
+    // 2) 增量：追加（保留 inode）后第二次 pass 只读新增。
+    let appendHandle = try FileHandle(forWritingTo: smallURL)
+    try appendHandle.seekToEnd()
+    try appendHandle.write(contentsOf: Data("gamma\n".utf8))
+    try appendHandle.close()
+    let pass2 = try XCTUnwrapResult(reader.readForwardPass())
+    guard pass2.count == 1,
+          pass2[0].data == Data("gamma\n".utf8),
+          reader.committedOffset == UInt64("alpha\nbeta\ngamma\n".utf8.count),
+          reader.scanHead == UInt64("alpha\nbeta\ngamma\n".utf8.count)
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader incremental tail: count=\(pass2.count) data="
+                + "\(pass2.map { String(data: $0.data, encoding: .utf8) ?? "?" })"
+                + " committed=\(reader.committedOffset)"
+                + " scanHead=\(reader.scanHead)"
+        )
+    }
+
+    // 3) identity 改变：不同 identity 的 reader 在同一文件上应 identity 失败。
+    let otherIdentity = TranscriptSourceIdentity(
+        device: 3,
+        inode: 5,
+        birthSeconds: 1_600_000_000,
+        birthNanoseconds: 0
+    )
+    let mismatched = TranscriptEventReader(url: smallURL, identity: otherIdentity)
+    if case .success = mismatched.readForwardPass() {
+        throw TranscriptEventSelfTestError.failed("reader identity mismatch accepted")
+    }
+    // 缺失文件 → ioFailed。
+    let missingURL = temp.appendingPathComponent("missing.jsonl")
+    let missingReader = TranscriptEventReader(url: missingURL, identity: identity)
+    if case .success = missingReader.readForwardPass() {
+        throw TranscriptEventSelfTestError.failed("reader ioFailed on missing file")
+    }
+
+    // 4) 跨 pass 超长行不前进死锁：>8 MiB 无 LF 行 + 结尾 "tail\n"。用注入
+    //    的 Fake 单调时钟避免真实 50 ms wall budget 抢先终止造成歧义。
+    let huge = String(repeating: "y", count: 10 * 1_048_576) // >8 MiB
+    let hugeURL = temp.appendingPathComponent("huge.jsonl")
+    let hugeData = Data((huge + "\ntail\n").utf8)
+    try hugeData.write(to: hugeURL)
+    let fakeClock = FakeTranscriptMonotonicClock()
+    guard let hugeReader = TranscriptEventReader.make(
+        at: hugeURL,
+        clock: fakeClock
+    ) else {
+        throw TranscriptEventSelfTestError.failed("reader huge make failed")
+    }
+    let hugePass1 = try XCTUnwrapResult(hugeReader.readForwardPass())
+    guard hugePass1.isEmpty else {
+        throw TranscriptEventSelfTestError.failed("reader huge pass1 produced records")
+    }
+    // scanHead 前进到 8 MiB pass 边界；committedOffset 不前进（停在起始）。
+    guard hugeReader.scanHead == UInt64(8 * 1_048_576) else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader huge pass1 scanHead stuck: \(hugeReader.scanHead)"
+        )
+    }
+    // 第二 pass：读到 LF + tail，恢复。
+    let hugePass2 = try XCTUnwrapResult(hugeReader.readForwardPass())
+    guard hugePass2.contains(where: { $0.data == Data("tail\n".utf8) }) else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader huge pass2 did not resume after LF (records \(hugePass2.count))"
+        )
+    }
+    guard hugeReader.scanHead == UInt64(hugeData.count) else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader huge scanHead not at EOF"
+        )
+    }
+}
+
+private func XCTUnwrapResult<T>(
+    _ result: Result<T, TranscriptReadError>
+) throws -> T {
+    switch result {
+    case .success(let value):
+        return value
+    case .failure(let error):
+        throw TranscriptEventSelfTestError.failed("reader failed: \(error)")
+    }
+}
 private func runTranscriptIndexContractSelfTest() throws {
     let manager = FileManager.default
     let temp = manager.temporaryDirectory.appendingPathComponent(
