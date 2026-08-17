@@ -40,6 +40,9 @@ final class CodexTaskProgressReader {
         let snapshot: TaskProgressSnapshot
         var reader: TranscriptEventReader?
         var reducer: CodexReducerState
+        var descriptors: [TranscriptRecordLocation] = []
+        var backscanContinuation: UInt64?
+        var snapshotEOF: UInt64 = 0
     }
 
     /// 增量 reducer 状态：只 apply 新 records，不保存原始历史行。
@@ -272,6 +275,15 @@ final class CodexTaskProgressReader {
                 // 无则冷启动回扫后 apply 全部回扫记录。
                 var reader: TranscriptEventReader?
                 var reducer: CodexReducerState
+                var descriptors: [TranscriptRecordLocation] = []
+                var backscanCont: UInt64?
+                var snapEOF: UInt64 = 0
+                let sessionKey = Self.threadID(from: candidate.url)
+                    ?? candidate.url.lastPathComponent
+                let indexStore = TranscriptIndexStore(
+                    rootDirectory: TranscriptIndexStore.defaultRootDirectory,
+                    fileManager: fileManager
+                )
                 if let cached = parsedCache[cacheKey],
                    let cachedReader = cached.reader
                 {
@@ -279,11 +291,27 @@ final class CodexTaskProgressReader {
                     if case .success(let records) = result {
                         reducer = cached.reducer
                         for record in records {
-                            if let line = String(data: record.data, encoding: .utf8) {
+                            if let line = String(
+                                data: record.data, encoding: .utf8
+                            ) {
                                 reducer.apply(line)
+                                descriptors.append(
+                                    TranscriptRecordLocation(
+                                        startOffset: record.startOffset,
+                                        byteCount: UInt32(record.byteCount),
+                                        sourceOrder: record.sourceOrder,
+                                        eventClass: .publicMessage,
+                                        occurredAt: nil
+                                    )
+                                )
                             }
                         }
                         reader = cachedReader
+                        descriptors = Array(descriptors.suffix(
+                            TranscriptIndexStore.maximumPublicMessages
+                        ))
+                        backscanCont = cached.backscanContinuation
+                        snapEOF = cached.snapshotEOF
                     } else {
                         // identity 变化：冷启动。
                         guard let newReader = TranscriptEventReader.make(
@@ -291,21 +319,57 @@ final class CodexTaskProgressReader {
                         ) else { continue }
                         reader = newReader
                         reducer = CodexReducerState(modificationDate: candidate.modificationDate)
-                        let coldLines = readTailLinesColdScan(
+                        let cold = readTailLinesColdScan(
                             reader: newReader, url: candidate.url
                         )
-                        for line in coldLines { reducer.apply(line) }
+                        for line in cold.lines { reducer.apply(line) }
+                        descriptors = cold.descriptors
+                        backscanCont = cold.backscanContinuation
+                        snapEOF = cold.snapshotEOF
                     }
                 } else {
-                    guard let newReader = TranscriptEventReader.make(
-                        at: candidate.url
-                    ) else { continue }
-                    reader = newReader
-                    reducer = CodexReducerState(modificationDate: candidate.modificationDate)
-                    let coldLines = readTailLinesColdScan(
-                        reader: newReader, url: candidate.url
+                    // 无缓存：先查 sidecar index（§4.2）。
+                    let checkpoint = indexStore.load(
+                        agentID: .codex, sessionKey: sessionKey
                     )
-                    for line in coldLines { reducer.apply(line) }
+                    let probeReader = TranscriptEventReader.make(
+                        at: candidate.url
+                    )
+                    if let checkpoint = checkpoint,
+                       let probeReader = probeReader,
+                       checkpoint.sourceIdentity == probeReader.identity,
+                       checkpoint.committedOffset <= probeReader.snapshotEOF
+                    {
+                        // Index-hit：从 descriptor 回读 record data。
+                        var restoredLines: [String] = []
+                        for descriptor in checkpoint.publicMessageDescriptors {
+                            if let data = probeReader.readRange(descriptor),
+                               let line = String(data: data, encoding: .utf8)
+                            {
+                                restoredLines.append(line)
+                            }
+                        }
+                        probeReader.setCommittedOffset(checkpoint.committedOffset)
+                        reader = probeReader
+                        reducer = CodexReducerState(modificationDate: candidate.modificationDate)
+                        for line in restoredLines { reducer.apply(line) }
+                        descriptors = checkpoint.publicMessageDescriptors
+                        backscanCont = checkpoint.backscanContinuationOffset
+                        snapEOF = checkpoint.observedSize
+                    } else {
+                        guard let newReader = TranscriptEventReader.make(
+                            at: candidate.url
+                        ) else { continue }
+                        reader = newReader
+                        reducer = CodexReducerState(modificationDate: candidate.modificationDate)
+                        let cold = readTailLinesColdScan(
+                            reader: newReader, url: candidate.url
+                        )
+                        for line in cold.lines { reducer.apply(line) }
+                        descriptors = cold.descriptors
+                        backscanCont = cold.backscanContinuation
+                        snapEOF = cold.snapshotEOF
+                    }
                 }
                 snapshot = reducer.snapshot(
                     modificationDate: candidate.modificationDate, now: now
@@ -314,8 +378,38 @@ final class CodexTaskProgressReader {
                     modificationDate: candidate.modificationDate,
                     snapshot: snapshot,
                     reader: reader,
-                    reducer: reducer
+                    reducer: reducer,
+                    descriptors: descriptors,
+                    backscanContinuation: backscanCont,
+                    snapshotEOF: snapEOF
                 )
+                // §4.2: 保存 checkpoint sidecar（metadata-only）。
+                if let reader = reader {
+                    let mtime = (try? fileManager.attributesOfItem(
+                        atPath: candidate.url.path
+                    )[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+                    let cpDescriptors = Array(descriptors.prefix(
+                        TranscriptIndexStore.maximumPublicMessages
+                    ))
+                    let checkpoint = TranscriptIndexStore.Checkpoint(
+                        schemaVersion: TranscriptIndexStore.schemaVersion,
+                        agentID: .codex,
+                        sessionKeyDigest: sessionKey,
+                        sourceIdentity: reader.identity,
+                        observedSize: snapEOF,
+                        observedMTime: UInt64(mtime),
+                        committedOffset: reader.committedOffset,
+                        backscanContinuationOffset: backscanCont,
+                        publicMessageDescriptors: cpDescriptors,
+                        currentToolDescriptor: nil,
+                        terminalDescriptor: nil,
+                        metadataDescriptor: nil,
+                        oversizedRecords: 0
+                    )
+                    try? indexStore.save(
+                        checkpoint, agentID: .codex, sessionKey: sessionKey
+                    )
+                }
             }
             guard var item = snapshot.items.first, item.kind != .idle else { continue }
             let resolvedTitle = Self.resolvedTitle(
@@ -1004,10 +1098,17 @@ final class CodexTaskProgressReader {
         return isVisible
     }
 
+    private struct ColdScanResult {
+        let lines: [String]
+        let descriptors: [TranscriptRecordLocation]
+        let backscanContinuation: UInt64?
+        let snapshotEOF: UInt64
+    }
+
     private func readTailLinesColdScan(
         reader: TranscriptEventReader,
         url: URL
-    ) -> [String] {
+    ) -> ColdScanResult {
         let fileSize = (try? fileManager.attributesOfItem(
             atPath: url.path
         )[.size] as? NSNumber)?.uint64Value ?? 0
@@ -1018,6 +1119,7 @@ final class CodexTaskProgressReader {
             .maximumAutomaticBackscanBytes
         var endOffset = fileSize
         var lines: [String] = []
+        var descriptors: [TranscriptRecordLocation] = []
         while budget > 0, endOffset > 0 {
             let passBytes = min(budget, 8 * 1_048_576)
             let result = reader.readBackwardPass(
@@ -1025,10 +1127,24 @@ final class CodexTaskProgressReader {
                 maximumBytes: passBytes
             )
             guard case .success(let (records, cont)) = result else { break }
-            let passLines = records.compactMap {
-                String(data: $0.data, encoding: .utf8)
+            var passLines: [String] = []
+            var passDescriptors: [TranscriptRecordLocation] = []
+            for record in records {
+                if let line = String(data: record.data, encoding: .utf8) {
+                    passLines.append(line)
+                    passDescriptors.append(
+                        TranscriptRecordLocation(
+                            startOffset: record.startOffset,
+                            byteCount: UInt32(record.byteCount),
+                            sourceOrder: record.sourceOrder,
+                            eventClass: .publicMessage,
+                            occurredAt: nil
+                        )
+                    )
+                }
             }
             lines = passLines + lines
+            descriptors = passDescriptors + descriptors
             budget -= passBytes
             if let cont = cont {
                 endOffset = cont
@@ -1037,7 +1153,12 @@ final class CodexTaskProgressReader {
             }
             if lines.count >= 200 { break }
         }
-        return lines
+        return ColdScanResult(
+            lines: lines,
+            descriptors: descriptors,
+            backscanContinuation: endOffset == fileSize ? nil : endOffset,
+            snapshotEOF: fileSize
+        )
     }
 
     private static let iso8601WithFractional: ISO8601DateFormatter = {

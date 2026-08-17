@@ -428,14 +428,71 @@ enum CursorLocalWorkspace {
             fileManager: fileManager
         ) else { return nil }
 
+        let fileSize = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+
+        // §4.2: 先查 sidecar index。identity 匹配时从 descriptor 回读
+        // record data（index-hit），跳过回扫。
+        let sessionKey = url.deletingPathExtension().lastPathComponent
+        let indexStore = TranscriptIndexStore(
+            rootDirectory: TranscriptIndexStore.defaultRootDirectory,
+            fileManager: fileManager
+        )
+        let checkpoint = indexStore.load(
+            agentID: .cursor, sessionKey: sessionKey
+        )
+        if let checkpoint = checkpoint,
+           checkpoint.sourceIdentity == reader.identity,
+           checkpoint.committedOffset <= fileSize
+        {
+            var restoredData = Data()
+            for descriptor in checkpoint.publicMessageDescriptors {
+                if let data = reader.readRange(descriptor) {
+                    restoredData = data + restoredData
+                }
+            }
+            if !restoredData.isEmpty {
+                let text = String(data: restoredData, encoding: .utf8)
+                    ?? String(decoding: restoredData, as: UTF8.self)
+                let content = parseTranscript(text)
+                cacheLock.lock()
+                contentCache[cacheKey] = CachedTranscript(
+                    modificationDate: modificationDate,
+                    content: content
+                )
+                cacheLock.unlock()
+                // 保存 checkpoint（更新 mtime/size）。
+                let mtime = (attributes?[.modificationDate] as? Date)?
+                    .timeIntervalSince1970 ?? 0
+                let cp = TranscriptIndexStore.Checkpoint(
+                    schemaVersion: TranscriptIndexStore.schemaVersion,
+                    agentID: .cursor,
+                    sessionKeyDigest: sessionKey,
+                    sourceIdentity: reader.identity,
+                    observedSize: fileSize,
+                    observedMTime: UInt64(mtime),
+                    committedOffset: fileSize,
+                    backscanContinuationOffset: nil,
+                    publicMessageDescriptors: checkpoint.publicMessageDescriptors,
+                    currentToolDescriptor: nil,
+                    terminalDescriptor: nil,
+                    metadataDescriptor: nil,
+                    oversizedRecords: 0
+                )
+                try? indexStore.save(
+                    cp, agentID: .cursor, sessionKey: sessionKey
+                )
+                return content
+            }
+        }
+
         // 有界回扫：从 EOF 向前读 8 MiB/pass，最多 64 MiB。
         // 只收集完整 LF 记录（片段由 reader 丢弃），拼成文本交给
         // 现有 parseTranscript——替代旧的 1 MiB 固定尾读。
-        let fileSize = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
         var backscanBudget = TranscriptReadBudget.transcriptEvents
             .maximumAutomaticBackscanBytes
         var endOffset = fileSize
         var recoveredData = Data()
+        var descriptors: [TranscriptRecordLocation] = []
         var enoughContent = false
         while backscanBudget > 0, endOffset > 0 {
             let passBytes = min(backscanBudget, 8 * 1_048_576)
@@ -444,9 +501,23 @@ enum CursorLocalWorkspace {
                 maximumBytes: passBytes
             )
             guard case .success(let (records, cont)) = result else { break }
+            var passData = Data()
+            var passDescriptors: [TranscriptRecordLocation] = []
             for record in records {
-                recoveredData = record.data + recoveredData
+                passData = record.data + passData
+                passDescriptors.insert(
+                    TranscriptRecordLocation(
+                        startOffset: record.startOffset,
+                        byteCount: UInt32(record.byteCount),
+                        sourceOrder: record.sourceOrder,
+                        eventClass: .publicMessage,
+                        occurredAt: nil
+                    ),
+                    at: 0
+                )
             }
+            recoveredData = passData + recoveredData
+            descriptors = passDescriptors + descriptors
             backscanBudget -= passBytes
             if let cont = cont {
                 endOffset = cont
@@ -472,6 +543,30 @@ enum CursorLocalWorkspace {
             content: content
         )
         cacheLock.unlock()
+        // §4.2: 保存 checkpoint sidecar（metadata-only）。
+        let mtime = (attributes?[.modificationDate] as? Date)?
+            .timeIntervalSince1970 ?? 0
+        let cpDescriptors = Array(descriptors.prefix(
+            TranscriptIndexStore.maximumPublicMessages
+        ))
+        let cp = TranscriptIndexStore.Checkpoint(
+            schemaVersion: TranscriptIndexStore.schemaVersion,
+            agentID: .cursor,
+            sessionKeyDigest: sessionKey,
+            sourceIdentity: reader.identity,
+            observedSize: fileSize,
+            observedMTime: UInt64(mtime),
+            committedOffset: fileSize,
+            backscanContinuationOffset: nil,
+            publicMessageDescriptors: cpDescriptors,
+            currentToolDescriptor: nil,
+            terminalDescriptor: nil,
+            metadataDescriptor: nil,
+            oversizedRecords: 0
+        )
+        try? indexStore.save(
+            cp, agentID: .cursor, sessionKey: sessionKey
+        )
         return content
     }
 

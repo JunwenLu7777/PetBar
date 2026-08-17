@@ -303,6 +303,9 @@ final class ClaudeTaskProgressReader {
         var item: TaskProgressItem?
         var reader: TranscriptEventReader?
         var reducer: ClaudeReducerState
+        var descriptors: [TranscriptRecordLocation] = []
+        var backscanContinuation: UInt64?
+        var snapshotEOF: UInt64 = 0
     }
 
     /// 增量 reducer 状态：只 apply 新 records，不保存原始历史行。
@@ -602,6 +605,14 @@ final class ClaudeTaskProgressReader {
                 // 无则冷启动回扫后 apply 全部回扫记录。
                 var reader: TranscriptEventReader?
                 var reducer: ClaudeReducerState
+                var descriptors: [TranscriptRecordLocation] = []
+                var backscanCont: UInt64?
+                var snapEOF: UInt64 = 0
+                let sessionKey = candidate.sessionID
+                let indexStore = TranscriptIndexStore(
+                    rootDirectory: TranscriptIndexStore.defaultRootDirectory,
+                    fileManager: fileManager
+                )
                 if let cached = parsedCache[cacheKey],
                    let cachedReader = cached.reader
                 {
@@ -609,74 +620,104 @@ final class ClaudeTaskProgressReader {
                     if case .success(let records) = result {
                         reducer = cached.reducer
                         for record in records {
-                            if let line = String(data: record.data, encoding: .utf8) {
-                                reducer.apply(line, modificationDate: candidate.modificationDate)
+                            if let line = String(
+                                data: record.data, encoding: .utf8
+                            ) {
+                                reducer.apply(
+                                    line,
+                                    modificationDate: candidate.modificationDate
+                                )
+                                descriptors.append(
+                                    TranscriptRecordLocation(
+                                        startOffset: record.startOffset,
+                                        byteCount: UInt32(record.byteCount),
+                                        sourceOrder: record.sourceOrder,
+                                        eventClass: .publicMessage,
+                                        occurredAt: nil
+                                    )
+                                )
                             }
                         }
                         reader = cachedReader
+                        descriptors = Array(descriptors.suffix(
+                            TranscriptIndexStore.maximumPublicMessages
+                        ))
+                        backscanCont = cached.backscanContinuation
+                        snapEOF = cached.snapshotEOF
                     } else {
                         // identity 变化：冷启动。
                         guard let newReader = TranscriptEventReader.make(
                             at: candidate.url
                         ) else { continue }
                         reader = newReader
-                        reducer = ClaudeReducerState(modificationDate: candidate.modificationDate)
-                        let fileSize = (try? fileManager.attributesOfItem(
-                            atPath: candidate.url.path
-                        )[.size] as? NSNumber)?.uint64Value ?? 0
-                        newReader.setCommittedOffset(fileSize)
-                        var budget = TranscriptReadBudget.transcriptEvents
-                            .maximumAutomaticBackscanBytes
-                        var endOffset = fileSize
-                        while budget > 0, endOffset > 0 {
-                            let passBytes = min(budget, 8 * 1_048_576)
-                            let result = newReader.readBackwardPass(
-                                fromEnd: endOffset,
-                                maximumBytes: passBytes
+                        reducer = ClaudeReducerState(
+                            modificationDate: candidate.modificationDate
+                        )
+                        let cold = coldScan(reader: newReader, url: candidate.url)
+                        for line in cold.lines {
+                            reducer.apply(
+                                line,
+                                modificationDate: candidate.modificationDate
                             )
-                            guard case .success(let (records, cont)) = result
-                            else { break }
-                            for record in records {
-                                if let line = String(data: record.data, encoding: .utf8) {
-                                    reducer.apply(line, modificationDate: candidate.modificationDate)
-                                }
-                            }
-                            budget -= passBytes
-                            if let cont = cont {
-                                endOffset = cont
-                            } else { break }
                         }
+                        descriptors = cold.descriptors
+                        backscanCont = cold.backscanContinuation
+                        snapEOF = cold.snapshotEOF
                     }
                 } else {
-                    guard let newReader = TranscriptEventReader.make(
+                    // 无缓存：先查 sidecar index（§4.2）。
+                    let checkpoint = indexStore.load(
+                        agentID: .claudeCode, sessionKey: sessionKey
+                    )
+                    let probeReader = TranscriptEventReader.make(
                         at: candidate.url
-                    ) else { continue }
-                    reader = newReader
-                    reducer = ClaudeReducerState(modificationDate: candidate.modificationDate)
-                    let fileSize = (try? fileManager.attributesOfItem(
-                        atPath: candidate.url.path
-                    )[.size] as? NSNumber)?.uint64Value ?? 0
-                    newReader.setCommittedOffset(fileSize)
-                    var budget = TranscriptReadBudget.transcriptEvents
-                        .maximumAutomaticBackscanBytes
-                    var endOffset = fileSize
-                    while budget > 0, endOffset > 0 {
-                        let passBytes = min(budget, 8 * 1_048_576)
-                        let result = newReader.readBackwardPass(
-                            fromEnd: endOffset,
-                            maximumBytes: passBytes
-                        )
-                        guard case .success(let (records, cont)) = result
-                        else { break }
-                        for record in records {
-                            if let line = String(data: record.data, encoding: .utf8) {
-                                reducer.apply(line, modificationDate: candidate.modificationDate)
+                    )
+                    if let checkpoint = checkpoint,
+                       let probeReader = probeReader,
+                       checkpoint.sourceIdentity == probeReader.identity,
+                       checkpoint.committedOffset <= probeReader.snapshotEOF
+                    {
+                        // Index-hit：从 descriptor 回读 record data。
+                        var restoredLines: [String] = []
+                        for descriptor in checkpoint.publicMessageDescriptors {
+                            if let data = probeReader.readRange(descriptor),
+                               let line = String(data: data, encoding: .utf8)
+                            {
+                                restoredLines.append(line)
                             }
                         }
-                        budget -= passBytes
-                        if let cont = cont {
-                            endOffset = cont
-                        } else { break }
+                        probeReader.setCommittedOffset(checkpoint.committedOffset)
+                        reader = probeReader
+                        reducer = ClaudeReducerState(
+                            modificationDate: candidate.modificationDate
+                        )
+                        for line in restoredLines {
+                            reducer.apply(
+                                line,
+                                modificationDate: candidate.modificationDate
+                            )
+                        }
+                        descriptors = checkpoint.publicMessageDescriptors
+                        backscanCont = checkpoint.backscanContinuationOffset
+                        snapEOF = checkpoint.observedSize
+                    } else {
+                        guard let newReader = TranscriptEventReader.make(
+                            at: candidate.url
+                        ) else { continue }
+                        reader = newReader
+                        reducer = ClaudeReducerState(
+                            modificationDate: candidate.modificationDate
+                        )
+                        let cold = coldScan(reader: newReader, url: candidate.url)
+                        for line in cold.lines {
+                            reducer.apply(
+                                line,
+                                modificationDate: candidate.modificationDate
+                            )
+                        }
+                        descriptors = cold.descriptors
+                        backscanCont = cold.backscanContinuation
+                        snapEOF = cold.snapshotEOF
                     }
                 }
                 item = reducer.buildItem(
@@ -705,8 +746,40 @@ final class ClaudeTaskProgressReader {
                             : nil,
                     item: item,
                     reader: reader,
-                    reducer: reducer
+                    reducer: reducer,
+                    descriptors: descriptors,
+                    backscanContinuation: backscanCont,
+                    snapshotEOF: snapEOF
                 )
+                // §4.2: 保存 checkpoint sidecar（metadata-only）。
+                if let reader = reader {
+                    let mtime = (try? fileManager.attributesOfItem(
+                        atPath: candidate.url.path
+                    )[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+                    let cpDescriptors = Array(descriptors.prefix(
+                        TranscriptIndexStore.maximumPublicMessages
+                    ))
+                    let checkpoint = TranscriptIndexStore.Checkpoint(
+                        schemaVersion: TranscriptIndexStore.schemaVersion,
+                        agentID: .claudeCode,
+                        sessionKeyDigest: sessionKey,
+                        sourceIdentity: reader.identity,
+                        observedSize: snapEOF,
+                        observedMTime: UInt64(mtime),
+                        committedOffset: reader.committedOffset,
+                        backscanContinuationOffset: backscanCont,
+                        publicMessageDescriptors: cpDescriptors,
+                        currentToolDescriptor: nil,
+                        terminalDescriptor: nil,
+                        metadataDescriptor: nil,
+                        oversizedRecords: 0
+                    )
+                    try? indexStore.save(
+                        checkpoint,
+                        agentID: .claudeCode,
+                        sessionKey: sessionKey
+                    )
+                }
             }
             if let item,
                taskIsWithinTerminalPanelRetention(
@@ -1234,6 +1307,66 @@ final class ClaudeTaskProgressReader {
             if lines.count >= 200 { break }
         }
         return lines.isEmpty ? nil : lines
+    }
+
+    private struct ColdScanResult {
+        let lines: [String]
+        let descriptors: [TranscriptRecordLocation]
+        let backscanContinuation: UInt64?
+        let snapshotEOF: UInt64
+    }
+
+    private func coldScan(
+        reader: TranscriptEventReader,
+        url: URL
+    ) -> ColdScanResult {
+        let fileSize = (try? fileManager.attributesOfItem(
+            atPath: url.path
+        )[.size] as? NSNumber)?.uint64Value ?? 0
+        reader.setCommittedOffset(fileSize)
+        var budget = TranscriptReadBudget.transcriptEvents
+            .maximumAutomaticBackscanBytes
+        var endOffset = fileSize
+        var lines: [String] = []
+        var descriptors: [TranscriptRecordLocation] = []
+        while budget > 0, endOffset > 0 {
+            let passBytes = min(budget, 8 * 1_048_576)
+            let result = reader.readBackwardPass(
+                fromEnd: endOffset,
+                maximumBytes: passBytes
+            )
+            guard case .success(let (records, cont)) = result
+            else { break }
+            var passLines: [String] = []
+            var passDescriptors: [TranscriptRecordLocation] = []
+            for record in records {
+                if let line = String(data: record.data, encoding: .utf8) {
+                    passLines.append(line)
+                    passDescriptors.append(
+                        TranscriptRecordLocation(
+                            startOffset: record.startOffset,
+                            byteCount: UInt32(record.byteCount),
+                            sourceOrder: record.sourceOrder,
+                            eventClass: .publicMessage,
+                            occurredAt: nil
+                        )
+                    )
+                }
+            }
+            lines = passLines + lines
+            descriptors = passDescriptors + descriptors
+            budget -= passBytes
+            if let cont = cont {
+                endOffset = cont
+            } else { break }
+            if lines.count >= 200 { break }
+        }
+        return ColdScanResult(
+            lines: lines,
+            descriptors: descriptors,
+            backscanContinuation: endOffset == fileSize ? nil : endOffset,
+            snapshotEOF: fileSize
+        )
     }
 
     private static func sessionID(from url: URL) -> String? {
