@@ -13,15 +13,16 @@ func runTranscriptEventReaderSelfTest() -> Never {
         try runJSONLFramerContractSelfTest()
         try runTranscriptReaderContractSelfTest()
         try runTranscriptIndexContractSelfTest()
+        try runTranscriptRestartEquivalenceSelfTest()
     } catch {
         fputs("transcript-events-self-test: \(error)\n", stderr)
         exit(1)
     }
     print(
         "transcript-events-self-test: providers=5 transcript=4 hook-only=1"
-            + " utf8-boundary=pass partial=pass oversized-discard=pass"
             + " rotation=pass reader-forward=pass reader-identity=pass"
-            + " index=metadata-only budgets=8MiB/64MiB/4MiB memory=32/64KiB"
+            + " index=metadata-only restart=index-hit+cold-scan+incremental-tail"
+            + " budgets=8MiB/64MiB/4MiB memory=32/64KiB"
     )
     exit(0)
 }
@@ -517,5 +518,152 @@ private func runTranscriptIndexContractSelfTest() throws {
     }
     guard rawData.count <= TranscriptIndexStore.maximumFileBytes else {
         throw TranscriptEventSelfTestError.failed("index exceeds 512 KiB")
+    }
+}
+
+// MARK: Index-hit / cold-scan / incremental-tail 等价回归
+
+private func runTranscriptRestartEquivalenceSelfTest() throws {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-restart-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    try manager.createDirectory(at: temp, withIntermediateDirectories: true)
+
+    let url = temp.appendingPathComponent("session.jsonl")
+    // 小预算：回扫上限 128 KiB。头部消息在 256 KiB padding 之后，
+    // 超出回扫预算（模拟 >64 MiB cold-scan 不可达）。
+    let smallBudget = TranscriptReadBudget(
+        chunkBytes: 4_096,
+        maximumBytesPerPass: 16_384,
+        maximumAutomaticBackscanBytes: 128 * 1_024,
+        maximumRecordBytes: 4 * 1_048_576,
+        softWallTime: 0.05
+    )
+
+    // 头部 public message（超出回扫预算，冷扫不可达）
+    let headLine = #"{"role":"assistant","content":[{"type":"text","text":"头部消息超出回扫预算"}]}"# + "\n"
+    // 256 KiB padding（确保头部消息在回扫窗口之外）
+    let padding = String(repeating: "{\"i\":0}\n", count: 20_000)
+    // 尾部 public message（回扫可达）
+    let tailLine = #"{"role":"assistant","content":[{"type":"text","text":"尾部消息在回扫窗口内"}]}"# + "\n"
+
+    try Data((headLine + padding + tailLine).utf8).write(to: url)
+
+    // 1) Cold-scan：从 EOF 回扫，只恢复尾部消息
+    guard let coldReader = TranscriptEventReader.make(
+        at: url, budget: smallBudget
+    ) else {
+        throw TranscriptEventSelfTestError.failed("restart: cold reader make failed")
+    }
+    let fileSize = (try? manager.attributesOfItem(
+        atPath: url.path
+    )[.size] as? NSNumber)?.uint64Value ?? 0
+    coldReader.setCommittedOffset(fileSize)
+    var coldRecords: [TranscriptRecordRange] = []
+    var cont: UInt64? = fileSize
+    var budget = smallBudget.maximumAutomaticBackscanBytes
+    while budget > 0, let end = cont, end > 0 {
+        let passBytes = min(budget, smallBudget.maximumBytesPerPass)
+        let result = try XCTUnwrapResult(coldReader.readBackwardPass(
+            fromEnd: end, maximumBytes: passBytes
+        ))
+        coldRecords = result.records + coldRecords
+        cont = result.continuation
+        budget -= passBytes
+        if cont == nil { break }
+    }
+    let coldTexts = coldRecords.compactMap {
+        String(data: $0.data, encoding: .utf8)
+    }
+    // 头部消息不可达（超出回扫预算），只恢复尾部消息
+    let coldHasTail = coldTexts.contains { $0.contains("尾部消息") }
+    let coldHasHead = coldTexts.contains { $0.contains("头部消息") }
+    guard coldHasTail, !coldHasHead else {
+        throw TranscriptEventSelfTestError.failed(
+            "restart cold-scan: hasTail=\(coldHasTail) hasHead=\(coldHasHead)"
+        )
+    }
+
+    let descriptors = coldRecords.compactMap { record -> TranscriptRecordLocation? in
+        guard let text = String(data: record.data, encoding: .utf8),
+              text.contains("尾部消息") || text.contains("头部消息")
+        else { return nil }
+        return TranscriptRecordLocation(
+            startOffset: record.startOffset,
+            byteCount: UInt32(record.byteCount),
+            sourceOrder: record.sourceOrder,
+            eventClass: .publicMessage,
+            occurredAt: nil
+        )
+    }
+    let store = TranscriptIndexStore(rootDirectory: temp, fileManager: manager)
+
+    let checkpoint = TranscriptIndexStore.Checkpoint(
+        schemaVersion: TranscriptIndexStore.schemaVersion,
+        agentID: .codex,
+        sessionKeyDigest: "test-restart",
+        sourceIdentity: coldReader.identity,
+        observedSize: fileSize,
+        observedMTime: 0,
+        committedOffset: fileSize,
+        backscanContinuationOffset: cont,
+        publicMessageDescriptors: descriptors,
+        currentToolDescriptor: nil,
+        terminalDescriptor: nil,
+        metadataDescriptor: nil,
+        oversizedRecords: 0
+    )
+    try store.save(checkpoint, agentID: .codex, sessionKey: "test-restart")
+
+    // 3) Index-hit：加载 checkpoint，从 descriptor 回读
+    let loaded = store.load(agentID: .codex, sessionKey: "test-restart")
+    guard let loaded = loaded,
+          loaded.sourceIdentity == coldReader.identity
+    else {
+        throw TranscriptEventSelfTestError.failed("restart: checkpoint load/identity failed")
+    }
+    guard let hitReader = TranscriptEventReader.make(
+        at: url, budget: smallBudget
+    ) else {
+        throw TranscriptEventSelfTestError.failed("restart: hit reader make failed")
+    }
+    hitReader.setCommittedOffset(loaded.committedOffset)
+    let hitRecords = loaded.publicMessageDescriptors.compactMap {
+        hitReader.readRange($0)
+    }
+    let hitTexts = hitRecords.compactMap {
+        String(data: $0, encoding: .utf8)
+    }
+    // Index-hit 应与 cold-scan 等价：恢复尾部消息，不恢复头部
+    let hitHasTail = hitTexts.contains { $0.contains("尾部消息") }
+    let hitHasHead = hitTexts.contains { $0.contains("头部消息") }
+    guard hitHasTail, !hitHasHead else {
+        throw TranscriptEventSelfTestError.failed(
+            "restart index-hit: hasTail=\(hitHasTail) hasHead=\(hitHasHead)"
+        )
+    }
+
+    // 4) Incremental-tail：追加新消息，前向 pass 只读追加字节
+    let appendLine = #"{"role":"assistant","content":[{"type":"text","text":"增量追加的新消息"}]}"# + "\n"
+    let appendHandle = try FileHandle(forWritingTo: url)
+    try appendHandle.seekToEnd()
+    try appendHandle.write(contentsOf: Data(appendLine.utf8))
+    try appendHandle.close()
+
+    let forwardResult = try XCTUnwrapResult(hitReader.readForwardPass())
+    let forwardTexts = forwardResult.compactMap {
+        String(data: $0.data, encoding: .utf8)
+    }
+    // 增量 pass 只恢复新追加的消息
+    guard forwardTexts.count == 1,
+          forwardTexts.first?.contains("增量追加的新消息") == true
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "restart incremental-tail: count=\(forwardTexts.count)"
+            + " texts=\(forwardTexts)"
+        )
     }
 }
