@@ -42,6 +42,8 @@ enum CursorLocalWorkspace {
 
     private static let cacheLock = NSLock()
     private static var contentCache: [String: CachedTranscript] = [:]
+    static var mockIndexRootDirectory: URL?
+
 
     private struct CachedTranscript {
         let modificationDate: Date
@@ -96,7 +98,11 @@ enum CursorLocalWorkspace {
         let nativeID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
         let metadata = conversationMetadata?(nativeID)
         let parsed = match.transcriptURL.flatMap {
-            cachedContent(at: $0, fileManager: fileManager)
+            cachedContent(
+                at: $0,
+                fileManager: fileManager,
+                indexRootDirectory: CursorLocalWorkspace.mockIndexRootDirectory
+            )
         } ?? CursorLocalSessionContent(
             title: nil,
             activityText: nil,
@@ -408,8 +414,11 @@ enum CursorLocalWorkspace {
 
     private static func cachedContent(
         at url: URL,
-        fileManager: FileManager
+        fileManager: FileManager,
+        indexRootDirectory: URL? = nil
     ) -> CursorLocalSessionContent? {
+        let indexRoot = indexRootDirectory
+            ?? TranscriptIndexStore.defaultRootDirectory
         let attributes = try? fileManager.attributesOfItem(atPath: url.path)
         let modificationDate = attributes?[.modificationDate] as? Date
             ?? Date.distantPast
@@ -434,7 +443,7 @@ enum CursorLocalWorkspace {
         // record data（index-hit），跳过回扫。
         let sessionKey = url.deletingPathExtension().lastPathComponent
         let indexStore = TranscriptIndexStore(
-            rootDirectory: TranscriptIndexStore.defaultRootDirectory,
+            rootDirectory: indexRoot,
             fileManager: fileManager
         )
         let checkpoint = indexStore.load(
@@ -450,9 +459,40 @@ enum CursorLocalWorkspace {
                     restoredData = data + restoredData
                 }
             }
-            if !restoredData.isEmpty {
-                let text = String(data: restoredData, encoding: .utf8)
-                    ?? String(decoding: restoredData, as: UTF8.self)
+            // Index-hit 后从旧 committedOffset 做 forward-tail，读取
+            // checkpoint 到当前 EOF 之间的追加字节（§4.2）。
+            reader.setCommittedOffset(checkpoint.committedOffset)
+            let forwardResult = reader.readForwardPass()
+            var appendedData = Data()
+            var appendedDescriptors: [TranscriptRecordLocation] = []
+            if case .success(let forwardRecords) = forwardResult {
+                for record in forwardRecords {
+                    appendedData += record.data
+                    appendedDescriptors.append(
+                        TranscriptRecordLocation(
+                            startOffset: record.startOffset,
+                            byteCount: UInt32(record.byteCount),
+                            sourceOrder: record.sourceOrder,
+                            eventClass: .publicMessage,
+                            occurredAt: nil
+                        )
+                    )
+                }
+            }
+            // 合并旧 descriptors + 追加 descriptors，截断到上限。
+            var allDescriptors = checkpoint.publicMessageDescriptors
+                + appendedDescriptors
+            if allDescriptors.count
+                > TranscriptIndexStore.maximumPublicMessages
+            {
+                allDescriptors = Array(allDescriptors.suffix(
+                    TranscriptIndexStore.maximumPublicMessages
+                ))
+            }
+            if !restoredData.isEmpty || !appendedData.isEmpty {
+                let allData = restoredData + appendedData
+                let text = String(data: allData, encoding: .utf8)
+                    ?? String(decoding: allData, as: UTF8.self)
                 let content = parseTranscript(text)
                 cacheLock.lock()
                 contentCache[cacheKey] = CachedTranscript(
@@ -460,7 +500,7 @@ enum CursorLocalWorkspace {
                     content: content
                 )
                 cacheLock.unlock()
-                // 保存 checkpoint（更新 mtime/size）。
+                // 保存 checkpoint：committedOffset 推进到当前 fileSize。
                 let mtime = (attributes?[.modificationDate] as? Date)?
                     .timeIntervalSince1970 ?? 0
                 let cp = TranscriptIndexStore.Checkpoint(
@@ -472,7 +512,7 @@ enum CursorLocalWorkspace {
                     observedMTime: UInt64(mtime),
                     committedOffset: fileSize,
                     backscanContinuationOffset: nil,
-                    publicMessageDescriptors: checkpoint.publicMessageDescriptors,
+                    publicMessageDescriptors: allDescriptors,
                     currentToolDescriptor: nil,
                     terminalDescriptor: nil,
                     metadataDescriptor: nil,

@@ -687,6 +687,27 @@ final class ClaudeTaskProgressReader {
                             }
                         }
                         probeReader.setCommittedOffset(checkpoint.committedOffset)
+                        // Index-hit 后从旧 committedOffset 做 forward-tail，
+                        // 读取 checkpoint 到当前 EOF 之间的追加字节（§4.2）。
+                        let forwardResult = probeReader.readForwardPass()
+                        if case .success(let forwardRecords) = forwardResult {
+                            for record in forwardRecords {
+                                if let line = String(
+                                    data: record.data, encoding: .utf8
+                                ) {
+                                    restoredLines.append(line)
+                                    descriptors.append(
+                                        TranscriptRecordLocation(
+                                            startOffset: record.startOffset,
+                                            byteCount: UInt32(record.byteCount),
+                                            sourceOrder: record.sourceOrder,
+                                            eventClass: .publicMessage,
+                                            occurredAt: nil
+                                        )
+                                    )
+                                }
+                            }
+                        }
                         reader = probeReader
                         reducer = ClaudeReducerState(
                             modificationDate: candidate.modificationDate
@@ -697,7 +718,9 @@ final class ClaudeTaskProgressReader {
                                 modificationDate: candidate.modificationDate
                             )
                         }
-                        descriptors = checkpoint.publicMessageDescriptors
+                        descriptors = Array(descriptors.suffix(
+                            TranscriptIndexStore.maximumPublicMessages
+                        ))
                         backscanCont = checkpoint.backscanContinuationOffset
                         snapEOF = checkpoint.observedSize
                     } else {

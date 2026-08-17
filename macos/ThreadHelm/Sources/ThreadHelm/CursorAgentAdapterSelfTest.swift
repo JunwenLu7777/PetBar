@@ -247,6 +247,7 @@ func runCursorAgentAdapterSelfTest() {
         runCursorSignalMappingSelfTest()
         runCursorTransportSelfTest()
         runCursorOpenSelfTest()
+        runCursorIndexTailAppendSelfTest()
     } catch {
         failCursorAdapterSelfTest("unexpected error: \(error)")
     }
@@ -685,6 +686,90 @@ private func runCursorOpenSelfTest() {
         }
     } catch {
         failCursorAdapterSelfTest("Cursor conversation metadata setup: \(error)")
+    }
+}
+
+private func runCursorIndexTailAppendSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-index-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    do {
+        // 真实路径：projectsRoot/<project>/agent-transcripts/<sessionID>.jsonl
+        let projectsRoot = temp.appendingPathComponent(
+            "cursor-projects", isDirectory: true
+        )
+        let sessionID = "cursor-index-append-session"
+        let projectDir = projectsRoot.appendingPathComponent(
+            "test-workspace", isDirectory: true
+        )
+        let transcriptsDir = projectDir.appendingPathComponent(
+            "agent-transcripts", isDirectory: true
+        )
+        let transcriptURL = transcriptsDir.appendingPathComponent(
+            "\(sessionID).jsonl"
+        )
+        try manager.createDirectory(
+            at: transcriptsDir,
+            withIntermediateDirectories: true
+        )
+        // 索引 sidecar 写入隔离 temp 目录，不污染真实 ~/Library。
+        let indexRoot = temp.appendingPathComponent(
+            "index-root", isDirectory: true
+        )
+        let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
+        CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
+        defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+
+        let firstLine = #"{"role":"assistant","content":[{"type":"text","text":"初始公开消息"}]}"# + "\n"
+        try Data(firstLine.utf8).write(to: transcriptURL)
+
+        // Call 1: cold start。第一次调用应保存 checkpoint（index-hit 快照）。
+        guard let first = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), first.activityText?.contains("初始公开消息") == true else {
+            failCursorAdapterSelfTest("Cursor index: cold start must recover first message")
+        }
+
+        // 追加新消息（同 inode，仅增长）。
+        let appendedLine = #"{"role":"assistant","content":[{"type":"text","text":"追加尾部消息"}]}"# + "\n"
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(appendedLine.utf8))
+        try handle.close()
+
+        // Call 2: index-hit + forward-tail。必须恢复追加的消息。
+        guard let second = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), second.activityText?.contains("追加尾部消息") == true else {
+            failCursorAdapterSelfTest(
+                "Cursor index: appended tail must survive index-hit restart"
+            )
+        }
+
+        // Call 3: 再次追加 + 再次 index-hit，验证连续追加不丢。
+        let thirdLine = #"{"role":"assistant","content":[{"type":"text","text":"再次追加消息"}]}"# + "\n"
+        let handle2 = try FileHandle(forWritingTo: transcriptURL)
+        try handle2.seekToEnd()
+        try handle2.write(contentsOf: Data(thirdLine.utf8))
+        try handle2.close()
+        guard let third = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), third.activityText?.contains("再次追加消息") == true else {
+            failCursorAdapterSelfTest(
+                "Cursor index: second append must also survive index-hit"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor index tail append test: \(error)")
     }
 }
 
