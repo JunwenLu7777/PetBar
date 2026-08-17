@@ -302,7 +302,214 @@ final class ClaudeTaskProgressReader {
         var inferredActivityExpiresAt: Date?
         var item: TaskProgressItem?
         var reader: TranscriptEventReader?
-        var recoveredLines: [String]
+        var reducer: ClaudeReducerState
+    }
+
+    /// 增量 reducer 状态：只 apply 新 records，不保存原始历史行。
+    /// events 限制为最近 32 条（AC-15）。
+    struct ClaudeReducerState {
+        var latestUserTitle: String?
+        var detectedWorkingDirectory: String?
+        var publicActivity = ""
+        var activeTools: [String: (text: String, updatedAt: Date)] = [:]
+        var pendingUserInputCalls = Set<String>()
+        var lastUpdatedAt: Date
+        var lastStopReason: String?
+        var lastMeaningfulRole: String?
+        var failed = false
+        var events: [TaskActivityEvent] = []
+
+        init(modificationDate: Date) {
+            lastUpdatedAt = modificationDate
+        }
+
+        mutating func apply(_ line: String, modificationDate: Date) {
+            guard let data = line.data(using: .utf8),
+                  let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            let timestamp = ClaudeTaskProgressReader.timestamp(from: record) ?? lastUpdatedAt
+            lastUpdatedAt = max(lastUpdatedAt, timestamp)
+            if let cwd = record["cwd"] as? String, cwd.hasPrefix("/") {
+                detectedWorkingDirectory = cwd
+            }
+            let type = (record["type"] as? String)?.lowercased()
+            if type == "user",
+               let message = record["message"] as? [String: Any] {
+                if let content = message["content"] as? String,
+                   let title = ClaudeTaskProgressReader.taskTitle(from: content) {
+                    latestUserTitle = title
+                    lastMeaningfulRole = "user"
+                } else if let content = message["content"] as? [[String: Any]] {
+                    var containsToolResult = false
+                    for block in content {
+                        let blockType = (block["type"] as? String)?.lowercased()
+                        if blockType == "tool_result" {
+                            containsToolResult = true
+                            if let toolUseID = block["tool_use_id"] as? String {
+                                activeTools.removeValue(forKey: toolUseID)
+                                pendingUserInputCalls.remove(toolUseID)
+                            }
+                        }
+                    }
+                    if !containsToolResult,
+                       let title = ClaudeTaskProgressReader.taskTitle(from: content.compactMap({
+                           ($0["type"] as? String) == "text" ? $0["text"] as? String : nil
+                       }).joined(separator: " ")) {
+                        latestUserTitle = title
+                        lastMeaningfulRole = "user"
+                    }
+                }
+                return
+            }
+            if type == "assistant",
+               let message = record["message"] as? [String: Any] {
+                lastMeaningfulRole = "assistant"
+                lastStopReason = message["stop_reason"] as? String
+                if message["error"] != nil || record["error"] != nil {
+                    failed = true
+                }
+                guard let content = message["content"] as? [[String: Any]]
+                else { return }
+                for block in content {
+                    let blockType = (block["type"] as? String)?.lowercased()
+                    if blockType == "text",
+                       let text = block["text"] as? String,
+                       let paragraph = safePublicActivityParagraph(from: text) {
+                        publicActivity = appendingTaskActivityParagraph(paragraph, to: publicActivity)
+                        events = appendingTaskActivityEvent(
+                            TaskActivityEvent(kind: .commentary, occurredAt: timestamp, text: paragraph),
+                            to: events
+                        )
+                        if events.count > 32 {
+                            // AC-04/AC-15：tool-only 增量不得清空已恢复正文。
+                            // 保留全部 commentary，裁剪最旧的 tool/lifecycle。
+                            let commentary = events.filter { $0.kind == .commentary }
+                            let nonCommentary = events.filter { $0.kind != .commentary }
+                            let room = max(0, 32 - commentary.count)
+                            events = commentary + Array(nonCommentary.suffix(room))
+                            events.sort {
+                                if $0.occurredAt == $1.occurredAt {
+                                    return false
+                                }
+                                return $0.occurredAt < $1.occurredAt
+                            }
+                        }
+                    } else if blockType == "tool_use",
+                              let name = block["name"] as? String {
+                        let callID = block["id"] as? String ?? UUID().uuidString
+                        if ClaudeTaskProgressReader.isUserInputTool(name) {
+                            pendingUserInputCalls.insert(callID)
+                            events = appendingTaskActivityEvent(
+                                TaskActivityEvent(kind: .lifecycle, occurredAt: timestamp, text: "等待输入"),
+                                to: events
+                            )
+                        } else {
+                            let toolActivity = ClaudeTaskProgressReader.safeToolActivity(name: name)
+                            activeTools[callID] = (toolActivity, timestamp)
+                            events = appendingTaskActivityEvent(
+                                TaskActivityEvent(kind: .tool, occurredAt: timestamp, text: toolActivity),
+                                to: events
+                            )
+                        }
+                    }
+                }
+                return
+            }
+            if type == "system",
+               let subtype = (record["subtype"] as? String)?.lowercased(),
+               subtype.contains("error") {
+                failed = true
+            }
+        }
+
+        func buildItem(
+            sessionID: String, fallbackTitle: String, workingDirectory: String,
+            processID: Int32?, processStartIdentity: String?,
+            activeKind: TaskProgressKind?, startedAt: Date,
+            modificationDate: Date, now: Date,
+            statusOverride: String?, allowsAgentOpen: Bool
+        ) -> TaskProgressItem? {
+            let kind: TaskProgressKind
+            if failed {
+                kind = .failed
+            } else if !pendingUserInputCalls.isEmpty {
+                kind = .waitingForInput
+            } else if let activeKind {
+                if activeKind == .waitingForInput,
+                   lastStopReason == "end_turn",
+                   lastMeaningfulRole == "assistant" {
+                    kind = .completed
+                } else {
+                    kind = activeKind
+                }
+            } else if lastStopReason == "end_turn" {
+                kind = .completed
+            } else if (!activeTools.isEmpty || lastStopReason == "tool_use"),
+                      now.timeIntervalSince(modificationDate) <= 30 {
+                kind = .running
+            } else {
+                return nil
+            }
+            let activeTool = activeTools.values.max {
+                $0.updatedAt < $1.updatedAt
+            }?.text
+            let activityText: String?
+            if kind == .running {
+                let sections = [activeTool, publicActivity.isEmpty ? nil : publicActivity].compactMap { $0 }
+                activityText = sections.isEmpty ? "正在思考" : sections.joined(separator: " · ")
+            } else {
+                activityText = nil
+            }
+            let normalizedFallback = ClaudeTaskProgressReader.taskTitle(from: fallbackTitle)
+            let title = normalizedFallback == "Claude 会话"
+                ? (latestUserTitle ?? "Claude 会话")
+                : (normalizedFallback ?? latestUserTitle ?? "Claude 会话")
+            let cwd = workingDirectory.hasPrefix("/") ? workingDirectory : (detectedWorkingDirectory ?? "")
+            let activeToolEntry = activeTools.max {
+                if $0.value.updatedAt != $1.value.updatedAt { return $0.value.updatedAt < $1.value.updatedAt }
+                return $0.key < $1.key
+            }.map { callID, entry in
+                AgentActivityEntry(
+                    id: AgentActivityEventID(source: .claudeCode, sessionKey: sessionID.lowercased(),
+                        stableSourceKey: "active-tool-\(callID)"),
+                    occurredAt: entry.updatedAt, sourceOrder: 0, text: entry.text
+                )
+            }
+            let terminalEvent: AgentActivityEntry?
+            if kind == .completed || kind == .failed {
+                terminalEvent = events.last(where: { $0.kind == .lifecycle }).map {
+                    AgentActivityEntry(
+                        id: AgentActivityEventID(source: .claudeCode, sessionKey: sessionID.lowercased(),
+                            stableSourceKey: "terminal"),
+                        occurredAt: $0.occurredAt, sourceOrder: 0, text: $0.text
+                    )
+                }
+            } else { terminalEvent = nil }
+            var publicEntries = events.filter { $0.kind == .commentary }.enumerated().map { index, event in
+                AgentActivityEntry(
+                    id: AgentActivityEventID(source: .claudeCode, sessionKey: sessionID.lowercased(),
+                        stableSourceKey: "commentary-\(index)"),
+                    occurredAt: event.occurredAt, sourceOrder: UInt64(index), text: event.text
+                )
+            }
+            publicEntries.sort {
+                if $0.occurredAt != $1.occurredAt { return $0.occurredAt > $1.occurredAt }
+                return $0.sourceOrder > $1.sourceOrder
+            }
+            let projection = AgentActivityProjection(
+                publicMessages: publicEntries,
+                currentToolStatus: activeToolEntry,
+                terminalEvent: terminalEvent
+            )
+            return TaskProgressItem(
+                title: title, kind: kind, startedAt: startedAt, updatedAt: lastUpdatedAt,
+                source: .claudeCode, activityText: activityText, statusOverride: statusOverride,
+                sessionID: sessionID.lowercased(),
+                workingDirectory: cwd.isEmpty ? nil : cwd,
+                processID: processID, processStartIdentity: processStartIdentity,
+                projection: projection, allowsAgentOpen: allowsAgentOpen
+            )
+        }
     }
 
     private let fileManager = FileManager.default
@@ -390,40 +597,89 @@ final class ClaudeTaskProgressReader {
             {
                 item = cached.item
             } else {
-                // 有界回扫 + 全量 parse（不累积历史行，AC-15）。
-                guard let reader = TranscriptEventReader.make(
-                    at: candidate.url
-                ) else { continue }
-                let fileSize = (try? fileManager.attributesOfItem(
-                    atPath: candidate.url.path
-                )[.size] as? NSNumber)?.uint64Value ?? 0
-                reader.setCommittedOffset(fileSize)
-                var budget = TranscriptReadBudget.transcriptEvents
-                    .maximumAutomaticBackscanBytes
-                var endOffset = fileSize
-                var lines: [String] = []
-                while budget > 0, endOffset > 0 {
-                    let passBytes = min(budget, 8 * 1_048_576)
-                    let result = reader.readBackwardPass(
-                        fromEnd: endOffset,
-                        maximumBytes: passBytes
-                    )
-                    guard case .success(let (records, cont)) = result
-                    else { break }
-                    let passLines = records.compactMap {
-                        String(data: $0.data, encoding: .utf8)
-                    }
-                    lines = passLines + lines
-                    budget -= passBytes
-                    if let cont = cont {
-                        endOffset = cont
+                // 增量 reducer：有持久 reader 时做前向 pass，只 apply 新
+                // records 到持久 reducer 状态（不保存原始行，AC-15）。
+                // 无则冷启动回扫后 apply 全部回扫记录。
+                var reader: TranscriptEventReader?
+                var reducer: ClaudeReducerState
+                if let cached = parsedCache[cacheKey],
+                   let cachedReader = cached.reader
+                {
+                    let result = cachedReader.readForwardPass()
+                    if case .success(let records) = result {
+                        reducer = cached.reducer
+                        for record in records {
+                            if let line = String(data: record.data, encoding: .utf8) {
+                                reducer.apply(line, modificationDate: candidate.modificationDate)
+                            }
+                        }
+                        reader = cachedReader
                     } else {
-                        break
+                        // identity 变化：冷启动。
+                        guard let newReader = TranscriptEventReader.make(
+                            at: candidate.url
+                        ) else { continue }
+                        reader = newReader
+                        reducer = ClaudeReducerState(modificationDate: candidate.modificationDate)
+                        let fileSize = (try? fileManager.attributesOfItem(
+                            atPath: candidate.url.path
+                        )[.size] as? NSNumber)?.uint64Value ?? 0
+                        newReader.setCommittedOffset(fileSize)
+                        var budget = TranscriptReadBudget.transcriptEvents
+                            .maximumAutomaticBackscanBytes
+                        var endOffset = fileSize
+                        while budget > 0, endOffset > 0 {
+                            let passBytes = min(budget, 8 * 1_048_576)
+                            let result = newReader.readBackwardPass(
+                                fromEnd: endOffset,
+                                maximumBytes: passBytes
+                            )
+                            guard case .success(let (records, cont)) = result
+                            else { break }
+                            for record in records {
+                                if let line = String(data: record.data, encoding: .utf8) {
+                                    reducer.apply(line, modificationDate: candidate.modificationDate)
+                                }
+                            }
+                            budget -= passBytes
+                            if let cont = cont {
+                                endOffset = cont
+                            } else { break }
+                        }
                     }
-                    if lines.count >= 200 { break }
+                } else {
+                    guard let newReader = TranscriptEventReader.make(
+                        at: candidate.url
+                    ) else { continue }
+                    reader = newReader
+                    reducer = ClaudeReducerState(modificationDate: candidate.modificationDate)
+                    let fileSize = (try? fileManager.attributesOfItem(
+                        atPath: candidate.url.path
+                    )[.size] as? NSNumber)?.uint64Value ?? 0
+                    newReader.setCommittedOffset(fileSize)
+                    var budget = TranscriptReadBudget.transcriptEvents
+                        .maximumAutomaticBackscanBytes
+                    var endOffset = fileSize
+                    while budget > 0, endOffset > 0 {
+                        let passBytes = min(budget, 8 * 1_048_576)
+                        let result = newReader.readBackwardPass(
+                            fromEnd: endOffset,
+                            maximumBytes: passBytes
+                        )
+                        guard case .success(let (records, cont)) = result
+                        else { break }
+                        for record in records {
+                            if let line = String(data: record.data, encoding: .utf8) {
+                                reducer.apply(line, modificationDate: candidate.modificationDate)
+                            }
+                        }
+                        budget -= passBytes
+                        if let cont = cont {
+                            endOffset = cont
+                        } else { break }
+                    }
                 }
-                item = Self.parseTranscript(
-                    lines: lines,
+                item = reducer.buildItem(
                     sessionID: candidate.sessionID,
                     fallbackTitle: agent?.title ?? "Claude 会话",
                     workingDirectory: agent?.workingDirectory ?? "",
@@ -432,9 +688,9 @@ final class ClaudeTaskProgressReader {
                     activeKind: agent?.kind,
                     startedAt: agent?.startedAt ?? candidate.modificationDate,
                     modificationDate: candidate.modificationDate,
+                    now: now,
                     statusOverride: agent?.statusOverride,
-                    allowsAgentOpen: candidate.allowsAgentOpen,
-                    now: now
+                    allowsAgentOpen: candidate.allowsAgentOpen
                 )
                 parsedCache[cacheKey] = ParsedCacheEntry(
                     modificationDate: candidate.modificationDate,
@@ -448,8 +704,8 @@ final class ClaudeTaskProgressReader {
                             ? candidate.modificationDate.addingTimeInterval(30)
                             : nil,
                     item: item,
-                    reader: nil,
-                    recoveredLines: []
+                    reader: reader,
+                    reducer: reducer
                 )
             }
             if let item,

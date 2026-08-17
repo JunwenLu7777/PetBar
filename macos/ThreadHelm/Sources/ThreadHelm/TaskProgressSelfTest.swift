@@ -986,6 +986,53 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         exit(1)
     }
 
+    // Append-only reducer regression: public message behind >200 tool records
+    // must survive a tool-only append (AC-15: tool-only updates don't clear
+    // publicMessages; reducer retains state, doesn't truncate at 200 lines).
+    var claudeReducer = ClaudeTaskProgressReader.ClaudeReducerState(modificationDate: now)
+    // Public message at the head
+    claudeReducer.apply(
+        #"{"type":"assistant","timestamp":"2026-07-25T10:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"这是必须保留的公开消息"}]}}"#,
+        modificationDate: now
+    )
+    for i in 0..<205 {
+        let secs = i % 60
+        let mins = (i / 60) % 60
+        let hours = 10 + (i / 3600)
+        let ts = "2026-07-25T\(String(format: "%02d", hours)):\(String(format: "%02d", mins)):\(String(format: "%02d", secs)).000Z"
+        claudeReducer.apply(
+            #"{"type":"assistant","timestamp":"\#(ts)","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-\#(i)","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#,
+            modificationDate: now
+        )
+    }
+    // Append a final tool-only record (simulating incremental append)
+    claudeReducer.apply(
+        #"{"type":"assistant","timestamp":"2026-07-25T11:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-append","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#,
+        modificationDate: now
+    )
+    let appendItem = claudeReducer.buildItem(
+        sessionID: claudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/claude-project",
+        processID: nil,
+        processStartIdentity: nil,
+        activeKind: .running,
+        startedAt: now.addingTimeInterval(-30),
+        modificationDate: now,
+        now: now,
+        statusOverride: nil,
+        allowsAgentOpen: true
+    )
+    guard appendItem?.projection.publicMessages.contains(where: {
+        $0.text == "这是必须保留的公开消息"
+    }) == true,
+    appendItem?.projection.currentToolStatus?.id.stableSourceKey
+        == "active-tool-tool-append"
+    else {
+        fputs("Claude append-only reducer must retain public message behind 200+ tool records\n", stderr)
+        exit(1)
+    }
+
     let toolActive = CodexTaskProgressReader.parse(
         lines: [timestampedStarted, publicCommentary, commandStarted, hiddenReasoning],
         modificationDate: now,
