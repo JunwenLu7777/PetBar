@@ -33,6 +33,7 @@ enum OMPLocalSession {
         var backscanBudget: Int
         var recoveredWorkingDirectory: String?
         var metadataProbeComplete: Bool
+        var recoveredDescriptors: [TranscriptRecordLocation]
         var recoveredEvents: [TaskActivityEvent]
     }
 
@@ -119,20 +120,61 @@ enum OMPLocalSession {
         cacheLock.unlock()
 
         if state == nil {
-            // 冷启动：前向 reader 锁在 EOF fence（fileSize64），只读追加
-            // 部分；回扫从 EOF 向前，continuation 单独向后移动。
-            reader.setCommittedOffset(fileSize64)
-            state = SessionState(
-                identity: reader.identity,
-                snapshotEOF: fileSize64,
-                forwardReader: reader,
-                backscanContinuation: fileSize64,
-                backscanBudget: TranscriptReadBudget.transcriptEvents
-                    .maximumAutomaticBackscanBytes,
-                recoveredWorkingDirectory: nil,
-                metadataProbeComplete: false,
-                recoveredEvents: []
+            // 冷启动：先查 sidecar index（§4.2）。identity 匹配时从
+            // checkpoint.committedOffset 恢复前向游标，从 byte range
+            // descriptors 回读 record 重建 recoveredEvents（index-hit 路径）。
+            let indexStore = TranscriptIndexStore(
+                rootDirectory: TranscriptIndexStore.defaultRootDirectory,
+                fileManager: fileManager
             )
+            let checkpoint = indexStore.load(
+                agentID: .omp,
+                sessionKey: normalizedSessionID
+            )
+            if let checkpoint = checkpoint,
+               checkpoint.sourceIdentity == reader.identity,
+               checkpoint.committedOffset <= fileSize64
+            {
+                // Index-hit：从 descriptor 回读 record data。
+                var restoredEvents: [TaskActivityEvent] = []
+                for descriptor in checkpoint.publicMessageDescriptors {
+                    if let data = reader.readRange(descriptor),
+                       let decoded = decodeRecord(data),
+                       let event = decoded.event
+                    {
+                        restoredEvents.append(event)
+                    }
+                }
+                reader.setCommittedOffset(checkpoint.committedOffset)
+                state = SessionState(
+                        identity: reader.identity,
+                        snapshotEOF: fileSize64,
+                        forwardReader: reader,
+                        backscanContinuation: checkpoint.backscanContinuationOffset,
+                        backscanBudget: checkpoint.backscanContinuationOffset != nil
+                            ? TranscriptReadBudget.transcriptEvents.maximumAutomaticBackscanBytes
+                            : 0,
+                        recoveredWorkingDirectory: nil,
+                        metadataProbeComplete: false,
+                        recoveredDescriptors: [],
+                        recoveredEvents: restoredEvents
+                )
+            } else {
+                // 无 sidecar 或 identity 不匹配：冷启动回扫。
+                reader.setCommittedOffset(fileSize64)
+                state = SessionState(
+                        identity: reader.identity,
+                        snapshotEOF: fileSize64,
+                        forwardReader: reader,
+                        backscanContinuation: fileSize64,
+                        backscanBudget: TranscriptReadBudget.transcriptEvents
+                            .maximumAutomaticBackscanBytes,
+                        recoveredWorkingDirectory: nil,
+                        metadataProbeComplete: false,
+                        recoveredDescriptors: [],
+                        recoveredEvents: []
+                )
+            }
         }
 
         guard var state = state else { return nil }
@@ -158,9 +200,8 @@ enum OMPLocalSession {
                 maximumBytes: passBytes
             )
             if case .success(let (records, cont)) = result {
-                // readBackwardPass 返回 records 按字节升序。整批解码后
-                // 作为块前置，不逐条 insert(at:0)（否则同 pass 内顺序被反转）。
                 var batchEvents: [TaskActivityEvent] = []
+                var batchDescriptors: [TranscriptRecordLocation] = []
                 for record in records {
                     if let decoded = decodeRecord(record.data) {
                         if let cwd = decoded.workingDirectory {
@@ -168,15 +209,23 @@ enum OMPLocalSession {
                         }
                         if let event = decoded.event {
                             batchEvents.append(event)
+                            batchDescriptors.append(
+                                TranscriptRecordLocation(
+                                    startOffset: record.startOffset,
+                                    byteCount: UInt32(record.byteCount),
+                                    sourceOrder: record.sourceOrder,
+                                    eventClass: .publicMessage,
+                                    occurredAt: event.occurredAt
+                                )
+                            )
                         }
                     }
                 }
                 state.recoveredEvents = batchEvents + state.recoveredEvents
-                // 限制会话内存（AC-05/AC-15）。
+                state.recoveredDescriptors = batchDescriptors + state.recoveredDescriptors
                 if state.recoveredEvents.count > maximumVisibleEvents {
-                    state.recoveredEvents = Array(
-                        state.recoveredEvents.suffix(maximumVisibleEvents)
-                    )
+                    state.recoveredEvents = Array(state.recoveredEvents.suffix(maximumVisibleEvents))
+                    state.recoveredDescriptors = Array(state.recoveredDescriptors.suffix(maximumVisibleEvents))
                 }
                 state.backscanContinuation = cont
                 state.backscanBudget -= passBytes
@@ -199,16 +248,24 @@ enum OMPLocalSession {
                     }
                     if let event = decoded.event {
                         state.recoveredEvents.append(event)
+                        state.recoveredDescriptors.append(
+                            TranscriptRecordLocation(
+                                startOffset: record.startOffset,
+                                byteCount: UInt32(record.byteCount),
+                                sourceOrder: record.sourceOrder,
+                                eventClass: .publicMessage,
+                                occurredAt: event.occurredAt
+                            )
+                        )
                     }
                 }
             }
-            // 限制会话内存（AC-05/AC-15）。
             if state.recoveredEvents.count > maximumVisibleEvents {
-                state.recoveredEvents = Array(
-                    state.recoveredEvents.suffix(maximumVisibleEvents)
-                )
+                state.recoveredEvents = Array(state.recoveredEvents.suffix(maximumVisibleEvents))
+                state.recoveredDescriptors = Array(state.recoveredDescriptors.suffix(maximumVisibleEvents))
             }
         }
+
         // 更新 fence 到当前文件大小（只追加增长时安全）。
         let currentSize = (try? fileManager.attributesOfItem(
             atPath: transcriptURL.path
@@ -217,6 +274,34 @@ enum OMPLocalSession {
             state.snapshotEOF = currentSize
         }
 
+        // §4.2: 保存 checkpoint sidecar（committedOffset + continuation +
+        // publicMessage descriptors）。metadata-only，不含正文/工具参数。
+        let indexStore = TranscriptIndexStore(
+            rootDirectory: TranscriptIndexStore.defaultRootDirectory,
+            fileManager: fileManager
+        )
+        let mtime = (try? fileManager.attributesOfItem(
+            atPath: transcriptURL.path
+        )[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let descriptors = Array(state.recoveredDescriptors.prefix(
+            TranscriptIndexStore.maximumPublicMessages
+        ))
+        let checkpoint = TranscriptIndexStore.Checkpoint(
+            schemaVersion: TranscriptIndexStore.schemaVersion,
+            agentID: .omp,
+            sessionKeyDigest: normalizedSessionID,
+            sourceIdentity: state.identity,
+            observedSize: state.snapshotEOF,
+            observedMTime: UInt64(mtime),
+            committedOffset: state.forwardReader.committedOffset,
+            backscanContinuationOffset: state.backscanContinuation,
+            publicMessageDescriptors: descriptors,
+            currentToolDescriptor: nil,
+            terminalDescriptor: nil,
+            metadataDescriptor: nil,
+            oversizedRecords: 0
+        )
+        try? indexStore.save(checkpoint, agentID: .omp, sessionKey: normalizedSessionID)
         let events = Array(state.recoveredEvents.suffix(maximumVisibleEvents))
         let parsed = OMPLocalSessionContent(
             workingDirectory: state.recoveredWorkingDirectory,

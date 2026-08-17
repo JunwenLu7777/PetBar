@@ -367,6 +367,7 @@ final class TranscriptEventReader {
                     data: $0.data
                 )
             }
+
             diagnostics.recordsDecoded += records.count
             let continuation: UInt64? = lowerBound > 0 ? feedStart : nil
             return .success((records, continuation))
@@ -387,6 +388,21 @@ final class TranscriptEventReader {
     }
     func setBackscanContinuation(_ value: UInt64?) { backscanContinuationOffset = value }
     func resetPartialBytes() { framer.resetPending() }
+
+    /// 从指定 byte range 读回一条完整 record 的 raw data。
+    /// 用于 index-hit 路径：按 sidecar 中的 descriptor 回读原文件 record。
+    func readRange(_ location: TranscriptRecordLocation) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            return nil
+        }
+        defer { try? handle.close() }
+        do {
+            try handle.seek(toOffset: location.startOffset)
+            return try handle.read(upToCount: Int(location.byteCount))
+        } catch {
+            return nil
+        }
+    }
     func resetDiagnostics() { diagnostics = TranscriptReadDiagnostics() }
 
     private var wallClockNs: UInt64 {
