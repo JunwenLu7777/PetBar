@@ -14,14 +14,15 @@ func runTranscriptEventReaderSelfTest() -> Never {
         try runTranscriptReaderContractSelfTest()
         try runTranscriptIndexContractSelfTest()
         try runTranscriptRestartEquivalenceSelfTest()
+        try runSameSizeAtomicReplaceIdentitySelfTest()
     } catch {
         fputs("transcript-events-self-test: \(error)\n", stderr)
         exit(1)
     }
     print(
         "transcript-events-self-test: providers=5 transcript=4 hook-only=1"
-            + " rotation=pass reader-forward=pass reader-identity=pass"
             + " index=metadata-only restart=index-hit+cold-scan+incremental-tail"
+            + " samesize-replace=identityChanged"
             + " budgets=8MiB/64MiB/4MiB memory=32/64KiB"
     )
     exit(0)
@@ -664,6 +665,69 @@ private func runTranscriptRestartEquivalenceSelfTest() throws {
         throw TranscriptEventSelfTestError.failed(
             "restart incremental-tail: count=\(forwardTexts.count)"
             + " texts=\(forwardTexts)"
+        )
+    }
+}
+
+// MARK: 同大小原子替换 identity 回归
+
+/// reader 在 EOF（remaining == 0）时，路径被原子替换为同大小新 inode，
+/// readForwardPass 必须返回 .identityChanged——绝不能直接 .success([])，
+/// 否则 Codex/Claude 会把旧 reducer 以新 mtime 缓存并长期显示错误投影。
+private func runSameSizeAtomicReplaceIdentitySelfTest() throws {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-samesize-replace-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    try manager.createDirectory(at: temp, withIntermediateDirectories: true)
+    let url = temp.appendingPathComponent("session.jsonl")
+    let line = #"{"role":"assistant","content":[{"type":"text","text":"AAA"}]}"# + "\n"
+    try Data(line.utf8).write(to: url)
+
+    guard let reader = TranscriptEventReader.make(at: url) else {
+        throw TranscriptEventSelfTestError.failed("samesize: reader make failed")
+    }
+    // 读到 EOF。
+    let first = try XCTUnwrapResult(reader.readForwardPass())
+    guard first.count == 1 else {
+        throw TranscriptEventSelfTestError.failed(
+            "samesize: first pass count=\(first.count)"
+        )
+    }
+    guard reader.scanHeadReachedEOF else {
+        throw TranscriptEventSelfTestError.failed(
+            "samesize: reader must reach EOF after first pass"
+        )
+    }
+
+    // 同大小原子替换：新 inode、同 mtime/size。
+    let replacementURL = temp.appendingPathComponent("replacement.jsonl")
+    let replacement = #"{"role":"assistant","content":[{"type":"text","text":"BBB"}]}"# + "\n"
+    try Data(replacement.utf8).write(to: replacementURL)
+    // 等长才满足 same-size（两行文本等长，含 LF）。
+    guard (try? Data(contentsOf: replacementURL).count)
+            == (try? Data(contentsOf: url).count)
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "samesize: fixture lines must be equal length"
+        )
+    }
+    try manager.replaceItemAt(
+        url,
+        withItemAt: replacementURL,
+        backupItemName: nil,
+        options: []
+    )
+
+    // 第二次 pass：路径已被替换为同大小新 inode，
+    // remaining == 0（scanHead == 旧 fileSize == 新 fileSize），
+    // 但 identity 已变，必须失败。
+    let second = reader.readForwardPass()
+    guard case .failure(.identityChanged) = second else {
+        throw TranscriptEventSelfTestError.failed(
+            "samesize: expected .identityChanged, got \(second)"
         )
     }
 }

@@ -222,6 +222,7 @@ final class TranscriptEventReader {
         } catch {
             return .failure(.ioFailed)
         }
+        guard attrs.identity == identity else { return .failure(.identityChanged) }
         let readStart = scanHead
         guard attrs.fileSize >= readStart else { return .failure(.truncation) }
         let remaining = attrs.fileSize - readStart
