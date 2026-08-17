@@ -676,6 +676,71 @@ final class ClaudeTaskProgressReader {
         let cwd = workingDirectory.hasPrefix("/")
             ? workingDirectory
             : (detectedWorkingDirectory ?? "")
+        // 显式投影：正文只取 commentary（DESC），currentToolStatus 取
+        // activeTools 实时状态（tool_result 后已收敛为空，绝不显示陈旧工具），
+        // 终态取 lifecycle。legacy 混合数组无法表达 tool 收敛，故不走 bridge。
+        // 通过字典 (callID, value) 选最新活动工具：callID 纳入 stableSourceKey，
+        // 避免不同工具/调用复用同一事件 ID 造成跨事件误认（§4.4）。
+        let activeToolEntry = activeTools.max {
+            if $0.value.updatedAt != $1.value.updatedAt {
+                return $0.value.updatedAt < $1.value.updatedAt
+            }
+            return $0.key < $1.key
+        }.map { callID, entry in
+            AgentActivityEntry(
+                id: AgentActivityEventID(
+                    source: .claudeCode,
+                    sessionKey: sessionID.lowercased(),
+                    stableSourceKey: "active-tool-\(callID)"
+                ),
+                occurredAt: entry.updatedAt,
+                sourceOrder: 0,
+                text: entry.text
+            )
+        }
+        let terminalEvent: AgentActivityEntry?
+        if kind == .completed || kind == .failed {
+            terminalEvent = events.last(where: { $0.kind == .lifecycle }).map {
+                AgentActivityEntry(
+                    id: AgentActivityEventID(
+                        source: .claudeCode,
+                        sessionKey: sessionID.lowercased(),
+                        stableSourceKey: "terminal"
+                    ),
+                    occurredAt: $0.occurredAt,
+                    sourceOrder: 0,
+                    text: $0.text
+                )
+            }
+        } else {
+            terminalEvent = nil
+        }
+        var publicEntries = events
+            .filter { $0.kind == .commentary }
+            .enumerated()
+            .map { index, event in
+                AgentActivityEntry(
+                    id: AgentActivityEventID(
+                        source: .claudeCode,
+                        sessionKey: sessionID.lowercased(),
+                        stableSourceKey: "commentary-\(index)"
+                    ),
+                    occurredAt: event.occurredAt,
+                    sourceOrder: UInt64(index),
+                    text: event.text
+                )
+            }
+        publicEntries.sort {
+            if $0.occurredAt != $1.occurredAt {
+                return $0.occurredAt > $1.occurredAt
+            }
+            return $0.sourceOrder > $1.sourceOrder
+        }
+        let projection = AgentActivityProjection(
+            publicMessages: publicEntries,
+            currentToolStatus: activeToolEntry,
+            terminalEvent: terminalEvent
+        )
         return TaskProgressItem(
             title: title,
             kind: kind,
@@ -688,7 +753,7 @@ final class ClaudeTaskProgressReader {
             workingDirectory: cwd.isEmpty ? nil : cwd,
             processID: processID,
             processStartIdentity: processStartIdentity,
-            events: events,
+            projection: projection,
             allowsAgentOpen: allowsAgentOpen
         )
     }
@@ -798,7 +863,7 @@ final class ClaudeTaskProgressReader {
             homeDirectory: homeDirectory,
             fileManager: fileManager
         ).map {
-            TranscriptRoot(url: $0, allowsAgentOpen: false)
+            TranscriptRoot(url: $0, allowsAgentOpen: true)
         })
 
         var byPath: [String: TranscriptCandidate] = [:]

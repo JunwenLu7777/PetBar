@@ -30,7 +30,7 @@ func runTaskProgressSelfTest() -> Never {
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
     runDiscoveryCacheAndAutoIntegrationBackoffSelfTest()
-    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-desktop=local-session+view-only; claude-agents-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
+    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
     exit(0)
 }
 
@@ -430,8 +430,8 @@ private func runClaudeDesktopTaskDiscoverySelfTest() {
     guard item?.title == "Desktop 会话识别回归",
           item?.kind == .running,
           item?.activityText == "正在运行命令",
-          item?.allowsAgentOpen == false,
-          item?.canOpen == false
+          item?.allowsAgentOpen == true,
+          item?.canOpen == true
     else {
         fputs("Claude Desktop local session was not discovered safely\n", stderr)
         exit(1)
@@ -761,8 +761,16 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         now: now
     )
     guard parsedWithDirectory.items.first?.workingDirectory == "/tmp/threadhelm",
-          parsedWithDirectory.items.first?.events.count == 5,
-          parsedWithDirectory.items.first?.events.last?.text
+          let codexProjection = parsedWithDirectory.items.first?.projection,
+          codexProjection.publicMessages.map(\.text) == [
+              "最终结果已经准备完成。",
+              "继续检查最终构建与安装状态。",
+              "第一行会被后续输出覆盖。 第二行。 第三行。 第四行覆盖第一行。",
+          ],
+          codexProjection.currentToolStatus?.text == "正在运行命令",
+          codexProjection.terminalEvent == nil,
+          parsedWithDirectory.items.first?.events.count == 4,
+          parsedWithDirectory.items.first?.events.first?.text
             == "最终结果已经准备完成。",
           parsedWithDirectory.items.first?.events.allSatisfy({
               !$0.text.contains("secret")
@@ -815,8 +823,12 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         modificationDate: now,
         now: now
     )
-    guard currentTurnOnly.items.first?.events.map(\.text)
-        == ["任务开始", "继续检查最终构建与安装状态。"]
+    guard currentTurnOnly.items.first?.projection.publicMessages.map(\.text)
+            == ["继续检查最终构建与安装状态。"],
+          currentTurnOnly.items.first?.projection.currentToolStatus == nil,
+          currentTurnOnly.items.first?.projection.terminalEvent == nil,
+          currentTurnOnly.items.first?.events.map(\.text)
+            == ["继续检查最终构建与安装状态。"]
     else {
         fputs("Codex current-turn activity reset failed\n", stderr)
         exit(1)
@@ -882,22 +894,72 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         startedAt: now.addingTimeInterval(-30),
         modificationDate: now
     )
-    let claudeEvents = claudeWithEvents?.events ?? []
-    guard claudeEvents.count == 4,
-          claudeEvents.map(\.kind) == [
-              .commentary,
-              .tool,
-              .commentary,
-              .commentary,
+    guard let claudeProjection = claudeWithEvents?.projection,
+          claudeProjection.publicMessages.count == 3,
+          claudeProjection.publicMessages.map(\.text) == [
+              claudeLongPublicTextValue,
+              "继续整理公开状态",
+              "正在检查 Claude 任务",
           ],
-          claudeEvents.last?.text == claudeLongPublicTextValue,
-          (claudeEvents.last?.text.count ?? 0) > 280,
-          claudeEvents.allSatisfy({
+          // tool_result 已收敛：不显示陈旧工具状态
+          claudeProjection.currentToolStatus == nil,
+          claudeProjection.terminalEvent == nil,
+          claudeProjection.publicMessages.allSatisfy({
               !$0.text.contains("secret")
                   && !$0.text.contains("隐藏推理")
           }) == true
     else {
         fputs("Claude complete safe events or privacy filtering failed\n", stderr)
+        exit(1)
+    }
+
+    let claudeWaitingInput = #"{"type":"assistant","timestamp":"2026-07-25T10:08:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-wait-1","name":"request_user_input","input":{}}],"stop_reason":"tool_use"}}"#
+    let claudeWaitingItem = ClaudeTaskProgressReader.parseTranscript(
+        lines: [claudeWaitingInput],
+        sessionID: claudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/claude-project",
+        activeKind: .waitingForInput,
+        startedAt: now.addingTimeInterval(-30),
+        modificationDate: now
+    )
+    guard claudeWaitingItem?.kind == .waitingForInput,
+          claudeWaitingItem?.projection.terminalEvent == nil,
+          claudeWaitingItem?.projection.currentToolStatus == nil,
+          claudeWaitingItem?.projection.publicMessages.isEmpty == true,
+          claudeWaitingItem?.statusText == "等你确认"
+    else {
+        fputs("Claude waiting input must not fabricate terminal event\n", stderr)
+        exit(1)
+    }
+
+    // 两个不同活动工具必须产生不同事件 ID（§4.4 禁止跨事件误认）。
+    let claudeToolA = #"{"type":"assistant","timestamp":"2026-07-25T10:09:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-a","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#
+    let claudeToolB = #"{"type":"assistant","timestamp":"2026-07-25T10:10:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-b","name":"Edit","input":{}}],"stop_reason":"tool_use"}}"#
+    let claudeToolAItem = ClaudeTaskProgressReader.parseTranscript(
+        lines: [claudeToolA],
+        sessionID: claudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/claude-project",
+        activeKind: .running,
+        startedAt: now.addingTimeInterval(-30),
+        modificationDate: now
+    )
+    let claudeToolBItem = ClaudeTaskProgressReader.parseTranscript(
+        lines: [claudeToolA, claudeToolB],
+        sessionID: claudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/claude-project",
+        activeKind: .running,
+        startedAt: now.addingTimeInterval(-30),
+        modificationDate: now
+    )
+    guard claudeToolAItem?.projection.currentToolStatus?.id
+            != claudeToolBItem?.projection.currentToolStatus?.id,
+          claudeToolBItem?.projection.currentToolStatus?.id.stableSourceKey
+            == "active-tool-tool-b"
+    else {
+        fputs("Claude active tool must keep a stable per-call event ID\n", stderr)
         exit(1)
     }
 

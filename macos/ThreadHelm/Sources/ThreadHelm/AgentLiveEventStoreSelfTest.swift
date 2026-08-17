@@ -21,11 +21,27 @@ func runAgentLiveEventStoreSelfTest() {
         from: ompEscalation,
         receivedAt: base
     ), ompEvent.attentionReason == .none,
-       ompEvent.actionability == .viewOnly,
+       ompEvent.actionability == .openExactNativeSession,
        ompEvent.workingDirectory == nil,
        !ompEvent.title.contains("/")
     else {
-        failAgentLiveEventStoreSelfTest("OMP state-only capability boundary")
+        failAgentLiveEventStoreSelfTest("OMP navigation/control boundary")
+    }
+
+    let ompWithoutSession = makeLiveStoreEnvelope(
+        agentID: .omp,
+        eventID: "omp-without-session",
+        nativeSessionCandidate: nil,
+        sequence: 2,
+        state: .running,
+        actionability: .openExactNativeSession
+    )
+    guard let ompWithoutSessionEvent = AgentTransportEnvelopeProjection.event(
+        from: ompWithoutSession,
+        receivedAt: base
+    ), ompWithoutSessionEvent.actionability == .viewOnly
+    else {
+        failAgentLiveEventStoreSelfTest("OMP navigation requires safe session ID")
     }
 
     let invalidFailure = makeLiveStoreEnvelope(
@@ -319,29 +335,35 @@ func runAgentLiveEventStoreSelfTest() {
     let driftedClaudeItem = unvalidatedProjection.taskCollection.items.first {
         $0.source == .claudeCode
     }
-    guard driftedCodexItem?.kind == .running,
-          driftedCodexItem?.statusOverride == "版本未验证，仅显示状态",
-          driftedCodexItem?.canOpen == false,
+    guard driftedCodexItem?.kind == .waitingForInput,
+          driftedCodexItem?.statusText == "等你确认",
+          driftedCodexItem?.canOpen == true,
           driftedZCodeItem?.kind == .failed,
-          driftedZCodeItem?.canOpen == false,
-          driftedClaudeItem?.canOpen == false,
-          driftedClaudeItem?.openButtonTitle == "仅查看状态",
+          driftedZCodeItem?.canOpen == true,
+          driftedClaudeItem?.canOpen == true,
+          driftedClaudeItem?.kind == .waitingForInput,
+          driftedClaudeItem?.openButtonTitle == "回到终端",
+          unvalidatedProjection.taskCollection.items.filter({
+              $0.kind == .waitingForInput
+          }).count == 2,
           unvalidatedProjection.snapshots.allSatisfy({
-              $0.attentionReason == .none && $0.actionability == .viewOnly
+              $0.attentionReason == .none && $0.actionability != .viewOnly
           }),
           unvalidatedProjection.attentionItems.isEmpty
     else {
         failAgentLiveEventStoreSelfTest(
-            "unvalidated versions must stay visible without actions or alerts"
+            "unvalidated versions must preserve waiting state without alerts"
         )
     }
 
+    let ompFirstOutputAt = base.addingTimeInterval(-5)
+    let ompSecondOutputAt = base.addingTimeInterval(-1)
     let ompProjection = taskProgressItem(from: AgentSessionSnapshot(
         identity: AgentSessionIdentity(agentID: .omp, nativeID: "omp-one"),
         adapterVersion: "self-test",
         executionState: .running,
         attentionReason: .none,
-        actionability: .viewOnly,
+        actionability: .openExactNativeSession,
         evidenceQuality: .officialHook,
         freshness: Freshness(observedAt: base, expiresAt: nil),
         title: "OMP 会话",
@@ -349,9 +371,133 @@ func runAgentLiveEventStoreSelfTest() {
         workingDirectory: nil,
         latestEventID: "omp-event",
         updatedAt: base
-    ))
-    guard ompProjection.kind == .running, !ompProjection.canOpen else {
-        failAgentLiveEventStoreSelfTest("OMP dashboard remains state-only")
+    ), events: [
+        makeLiveStoreAgentEvent(
+            agentID: .omp,
+            nativeID: "omp-one",
+            eventID: "omp-tool-call-one",
+            eventType: "tool_call",
+            observedAt: base.addingTimeInterval(-4),
+            state: .running
+        ),
+        makeLiveStoreAgentEvent(
+            agentID: .omp,
+            nativeID: "omp-one",
+            eventID: "omp-tool-result-one",
+            eventType: "tool_result",
+            observedAt: base.addingTimeInterval(-3),
+            state: .running
+        ),
+        makeLiveStoreAgentEvent(
+            agentID: .omp,
+            nativeID: "omp-one",
+            eventID: "omp-tool-call-two",
+            eventType: "tool_call",
+            observedAt: base.addingTimeInterval(-2),
+            state: .running
+        ),
+        makeLiveStoreAgentEvent(
+            agentID: .omp,
+            nativeID: "omp-one",
+            eventID: "omp-tool-result-two",
+            eventType: "tool_result",
+            observedAt: base,
+            state: .running
+        ),
+    ], ompSessionContent: { sessionID in
+        guard sessionID == "omp-one" else { return nil }
+        return OMPLocalSessionContent(
+            workingDirectory: "/private/tmp/omp-project",
+            events: [
+                TaskActivityEvent(
+                    kind: .commentary,
+                    occurredAt: ompFirstOutputAt,
+                    text: "OMP 已完成第一轮检查"
+                ),
+                TaskActivityEvent(
+                    kind: .commentary,
+                    occurredAt: ompSecondOutputAt,
+                    text: "OMP 正在整理最终结果"
+                ),
+            ]
+        )
+    })
+    guard ompProjection.kind == .running,
+          ompProjection.canOpen,
+          ompProjection.openButtonTitle == "打开 OMP",
+          ompProjection.workingDirectory == "/private/tmp/omp-project",
+          ompProjection.projection.publicMessages.map(\.text) == [
+              "OMP 正在整理最终结果",
+              "OMP 已完成第一轮检查",
+          ],
+          ompProjection.projection.currentToolStatus?.text == "工具调用完成",
+          ompProjection.projection.terminalEvent == nil,
+          ompProjection.events.map(\.text) == [
+              "工具调用完成",
+              "OMP 正在整理最终结果",
+              "OMP 已完成第一轮检查",
+          ],
+          ompProjection.activityText == "工具调用完成"
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "OMP dashboard navigation/public output"
+        )
+    }
+
+    let completedOMPProjection = taskProgressItem(from: AgentSessionSnapshot(
+        identity: AgentSessionIdentity(agentID: .omp, nativeID: "omp-done"),
+        adapterVersion: "self-test",
+        executionState: .completed,
+        attentionReason: .none,
+        actionability: .openExactNativeSession,
+        evidenceQuality: .officialHook,
+        freshness: Freshness(observedAt: base, expiresAt: nil),
+        title: "OMP 会话",
+        activitySummary: nil,
+        workingDirectory: nil,
+        latestEventID: "omp-agent-end",
+        updatedAt: base
+    ), events: [
+        makeLiveStoreAgentEvent(
+            agentID: .omp,
+            nativeID: "omp-done",
+            eventID: "omp-done-tool-result",
+            eventType: "tool_result",
+            observedAt: base.addingTimeInterval(-2),
+            state: .running
+        ),
+        makeLiveStoreAgentEvent(
+            agentID: .omp,
+            nativeID: "omp-done",
+            eventID: "omp-agent-end",
+            eventType: "agent_end",
+            observedAt: base,
+            state: .completed
+        ),
+    ], ompSessionContent: { sessionID in
+        guard sessionID == "omp-done" else { return nil }
+        return OMPLocalSessionContent(
+            workingDirectory: "/private/tmp/omp-project",
+            events: [
+                TaskActivityEvent(
+                    kind: .commentary,
+                    occurredAt: base.addingTimeInterval(-1),
+                    text: "OMP 已完成全部工作"
+                ),
+            ]
+        )
+    })
+    guard completedOMPProjection.events.map(\.text) == [
+              "本轮结束",
+              "OMP 已完成全部工作",
+          ],
+          completedOMPProjection.projection.terminalEvent?.text == "本轮结束",
+          completedOMPProjection.projection.currentToolStatus == nil,
+          completedOMPProjection.activityText == nil
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "OMP local output keeps only the latest terminal hook event"
+        )
     }
 
     let cursorSession = "2cac76a3-df5f-469f-9f64-05972b086c2d"
@@ -406,7 +552,10 @@ func runAgentLiveEventStoreSelfTest() {
     guard cursorItem.title == "PetBar",
           cursorItem.workingDirectory == "/private/tmp/threadhelm-test/code/PetBar",
           cursorItem.startedAt == cursorStart,
-          cursorItem.events.map(\.text) == ["会话开始", "工具调用完成"],
+          cursorItem.events.map(\.text) == ["工具调用完成"],
+          cursorItem.projection.currentToolStatus?.text == "工具调用完成",
+          cursorItem.projection.terminalEvent == nil,
+          cursorItem.projection.publicMessages.isEmpty,
           cursorItem.activityText == "工具调用完成"
     else {
         failAgentLiveEventStoreSelfTest(
@@ -502,8 +651,12 @@ func runAgentLiveEventStoreSelfTest() {
     guard runningContentItem.title == "帮我看看监听为什么是空的",
           runningContentItem.activityText == "工具调用完成",
           runningContentItem.events.map(\.text) == [
+              "工具调用完成",
               "路径没填上，我去本机记录里读正文。",
-              "正在检查文件",
+          ],
+          runningContentItem.projection.currentToolStatus?.text == "工具调用完成",
+          runningContentItem.projection.publicMessages.map(\.text) == [
+              "路径没填上，我去本机记录里读正文。",
           ]
     else {
         failAgentLiveEventStoreSelfTest(
@@ -597,9 +750,13 @@ func runAgentLiveEventStoreSelfTest() {
     )
     guard completedContentItem.activityText == "本轮已完成",
           completedContentItem.events.map(\.text) == [
-              "路径没填上，我去本机记录里读正文。",
-              "正在检查文件",
               "本轮结束",
+              "路径没填上，我去本机记录里读正文。",
+          ],
+          completedContentItem.projection.terminalEvent?.text == "本轮结束",
+          completedContentItem.projection.currentToolStatus == nil,
+          completedContentItem.projection.publicMessages.map(\.text) == [
+              "路径没填上，我去本机记录里读正文。",
           ],
           !completedContentItem.events.contains(where: { $0.text.contains("/secret") }),
           !(completedContentItem.activityText ?? "").contains("/secret")
@@ -628,7 +785,8 @@ func runAgentLiveEventStoreSelfTest() {
     )
     guard completedNamedItem.title == "样式优化建议",
           completedNamedItem.activityText == "本轮已完成",
-          completedNamedItem.events.last?.text == "本轮结束"
+          completedNamedItem.projection.terminalEvent?.text == "本轮结束",
+          completedNamedItem.events.first?.text == "本轮结束"
     else {
         failAgentLiveEventStoreSelfTest(
             "completed Cursor card must show sidebar title and terminal summary"
@@ -754,11 +912,11 @@ func runAgentLiveEventStoreSelfTest() {
           boundedCursor?.title == "Cursor 会话",
           boundedCursor?.activityText == "正在执行",
           boundedCursor?.workingDirectory == nil,
-          boundedCursor?.canOpen == false,
+          boundedCursor?.canOpen == true,
           unvalidatedCursorProjection.taskCollection.items.count == 1
     else {
         failAgentLiveEventStoreSelfTest(
-            "unvalidated Cursor must not read local title, body, or working directory"
+            "unvalidated Cursor navigation must not read local private content"
         )
     }
 }
@@ -793,7 +951,7 @@ private func makeLiveStoreAgentEvent(
 private func makeLiveStoreEnvelope(
     agentID: AgentID,
     eventID: String,
-    nativeSessionCandidate: String = "session-one",
+    nativeSessionCandidate: String? = "session-one",
     sequence: Int?,
     state: ExecutionState,
     reason: AttentionReason = .none,

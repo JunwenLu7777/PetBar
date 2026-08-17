@@ -158,6 +158,162 @@ struct AgentActivityProjection: Equatable {
     }
 }
 
+extension AgentActivityProjection {
+    /// 集中应用计划 §4.3 的内存预算与脱敏后截断：正文最多 32 条、单条
+    /// 4 KiB、合计 64 KiB；工具状态 512 B；终态 256 B。legacy 与显式
+    /// projection 两条路径都必须经此收敛。
+    func budgeted() -> AgentActivityProjection {
+        // 0) 先按 occurredAt/sourceOrder DESC 排序，保证 prefix 保留最新；
+        //    再对正文脱敏（compactMap 丢弃脱敏失败项），最后才截断。
+        let sorted = publicMessages.sorted {
+            if $0.occurredAt != $1.occurredAt {
+                return $0.occurredAt > $1.occurredAt
+            }
+            return $0.sourceOrder > $1.sourceOrder
+        }
+        // 1) 脱敏 → 条目数上限 32 → 单条上限 4 KiB。
+        var messages = sorted.prefix(
+            AgentActivityBudget.maximumPublicMessages
+        ).compactMap { entry -> AgentActivityEntry? in
+            guard let sanitized = safePublicActivityParagraph(from: entry.text) else {
+                return nil
+            }
+            let text = safeUTF8Truncated(
+                sanitized,
+                to: AgentActivityBudget.maximumPublicMessageBytes
+            )
+            return AgentActivityEntry(
+                id: entry.id,
+                occurredAt: entry.occurredAt,
+                sourceOrder: entry.sourceOrder,
+                text: text
+            )
+        }
+        // 2) 合计上限 64 KiB：从尾部截断（截断后仍超则丢弃尾部条目）。
+        let total = messages.reduce(0) { $0 + $1.text.utf8.count }
+        if total > AgentActivityBudget.maximumPublicMessagesTotalBytes {
+            var consumed = 0
+            var budgeted: [AgentActivityEntry] = []
+            for entry in messages {
+                let room = AgentActivityBudget.maximumPublicMessagesTotalBytes - consumed
+                guard room > 0 else { break }
+                let text = safeUTF8Truncated(entry.text, to: room)
+                consumed += text.utf8.count
+                budgeted.append(
+                    AgentActivityEntry(
+                        id: entry.id,
+                        occurredAt: entry.occurredAt,
+                        sourceOrder: entry.sourceOrder,
+                        text: text
+                    )
+                )
+            }
+            messages = budgeted
+        }
+        let toolStatus = currentToolStatus.flatMap { entry -> AgentActivityEntry? in
+            guard let sanitized = safePublicActivityParagraph(from: entry.text) else {
+                return nil
+            }
+            return AgentActivityEntry(
+                id: entry.id,
+                occurredAt: entry.occurredAt,
+                sourceOrder: entry.sourceOrder,
+                text: safeUTF8Truncated(
+                    sanitized,
+                    to: AgentActivityBudget.maximumToolStatusBytes
+                )
+            )
+        }
+        let terminal = terminalEvent.flatMap { entry -> AgentActivityEntry? in
+            guard let sanitized = safePublicActivityParagraph(from: entry.text) else {
+                return nil
+            }
+            return AgentActivityEntry(
+                id: entry.id,
+                occurredAt: entry.occurredAt,
+                sourceOrder: entry.sourceOrder,
+                text: safeUTF8Truncated(
+                    sanitized,
+                    to: AgentActivityBudget.maximumTerminalBytes
+                )
+            )
+        }
+        return AgentActivityProjection(
+            publicMessages: messages,
+            currentToolStatus: toolStatus,
+            terminalEvent: terminal
+        )
+    }
+}
+extension AgentActivityProjection {
+    /// 迁移期 bridge：把旧 provider 的混合 `events` 按 kind 路由到三通道，
+    /// 用 provider+session+insertion index 生成仅进程内有效的 legacy ID，
+    /// 并把 index 写入 sourceOrder。不能落 sidecar，不能用于跨刷新去重；
+    /// provider 迁移后必须删除。
+    ///
+    /// `.lifecycle` 在 Codex/Claude 里表示“任务开始/等待输入”，不只完成/
+    /// 失败；只有 `kind` 为 `.completed`/`.failed` 时才把最新 lifecycle
+    /// 提为 `terminalEvent`（并清空 `currentToolStatus`），否则只当普通
+    /// 公开消息。publicMessages 规范化为 occurredAt DESC、sourceOrder DESC。
+    static func legacy(
+        bridging events: [TaskActivityEvent],
+        source: AgentID,
+        sessionKey: String?,
+        kind: TaskProgressKind
+    ) -> AgentActivityProjection {
+        var publicMessages: [AgentActivityEntry] = []
+        var currentToolStatus: AgentActivityEntry?
+        var terminalEvent: AgentActivityEntry?
+        let session = sessionKey ?? ""
+        let hasTerminalKind = kind == .completed || kind == .failed
+        for (index, event) in events.enumerated() {
+            let stableSourceKey: String
+            switch event.kind {
+            case .tool:
+                stableSourceKey = "tool-\(index)"
+            case .lifecycle:
+                stableSourceKey = "lifecycle-\(index)"
+            case .commentary:
+                stableSourceKey = "commentary-\(index)"
+            }
+            let id = AgentActivityEventID(
+                source: source,
+                sessionKey: session,
+                stableSourceKey: stableSourceKey
+            )
+            let entry = AgentActivityEntry(
+                id: id,
+                occurredAt: event.occurredAt,
+                sourceOrder: UInt64(index),
+                text: event.text
+            )
+            switch event.kind {
+            case .commentary:
+                publicMessages.append(entry)
+            case .tool:
+                currentToolStatus = entry
+            case .lifecycle:
+                if hasTerminalKind {
+                    terminalEvent = entry
+                    currentToolStatus = nil
+                }
+                // 非终态 lifecycle（会话开始/任务开始/等待输入）是状态/
+                // metadata，不是 transcript 正文：忽略，不进入 publicMessages。
+            }
+        }
+        publicMessages.sort {
+            if $0.occurredAt != $1.occurredAt {
+                return $0.occurredAt > $1.occurredAt
+            }
+            return $0.sourceOrder > $1.sourceOrder
+        }
+        return AgentActivityProjection(
+            publicMessages: publicMessages,
+            currentToolStatus: currentToolStatus,
+            terminalEvent: terminalEvent
+        )
+    }
+}
 struct TaskProgressCollectionSnapshot: Equatable {
     let items: [TaskProgressItem]
 

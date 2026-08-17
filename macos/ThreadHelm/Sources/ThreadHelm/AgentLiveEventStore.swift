@@ -36,13 +36,15 @@ enum AgentTransportEnvelopeProjection {
         var actionability = envelope.redactedPayload["actionability"]
             .flatMap(Actionability.init(rawValue:)) ?? defaultActionability(
                 for: envelope.agentID,
-                metadata: metadata
+                metadata: metadata,
+                nativeSessionCandidate: envelope.nativeSessionCandidate
             )
         let evidence = envelope.redactedPayload["evidenceQuality"]
             .flatMap(EvidenceQuality.init(rawValue:)) ?? .officialHook
 
         enforceCapabilityBoundary(
             agentID: envelope.agentID,
+            nativeSessionCandidate: envelope.nativeSessionCandidate,
             state: &state,
             reason: &reason,
             actionability: &actionability
@@ -86,9 +88,14 @@ enum AgentTransportEnvelopeProjection {
 
     private static func defaultActionability(
         for agentID: AgentID,
-        metadata: AgentMetadata
+        metadata: AgentMetadata,
+        nativeSessionCandidate: String?
     ) -> Actionability {
-        guard agentID != .omp else { return .viewOnly }
+        if agentID == .omp {
+            return nativeSessionCandidate.flatMap(normalizedOMPSessionID) != nil
+                ? .openExactNativeSession
+                : .viewOnly
+        }
         return metadata.capabilities.supports(.nativeNavigation)
             ? .openNativeApp
             : .viewOnly
@@ -96,6 +103,7 @@ enum AgentTransportEnvelopeProjection {
 
     private static func enforceCapabilityBoundary(
         agentID: AgentID,
+        nativeSessionCandidate: String?,
         state: inout ExecutionState,
         reason: inout AttentionReason,
         actionability: inout Actionability
@@ -127,7 +135,10 @@ enum AgentTransportEnvelopeProjection {
             if ![.taskFailure, .reviewReady, .none].contains(reason) {
                 reason = .none
             }
-            actionability = .viewOnly
+            actionability = nativeSessionCandidate
+                .flatMap(normalizedOMPSessionID) != nil
+                ? .openExactNativeSession
+                : .viewOnly
         case .codex, .claudeCode:
             break
         default:
@@ -194,6 +205,9 @@ func agentDashboardProjection(
     },
     cursorSessionContent: (String) -> CursorLocalSessionContent? = {
         CursorLocalWorkspace.sessionContent(sessionID: $0)
+    },
+    ompSessionContent: (String) -> OMPLocalSessionContent? = {
+        OMPLocalSession.content(sessionID: $0)
     }
 ) -> AgentDashboardProjection {
     let polledCollection = collection
@@ -259,14 +273,16 @@ func agentDashboardProjection(
                 from: snapshot,
                 events: events,
                 cursorWorkingDirectory: { _ in nil },
-                cursorSessionContent: { _ in nil }
+                cursorSessionContent: { _ in nil },
+                ompSessionContent: ompSessionContent
             )
         } else {
             item = taskProgressItem(
                 from: snapshot,
                 events: events,
                 cursorWorkingDirectory: cursorWorkingDirectory,
-                cursorSessionContent: cursorSessionContent
+                cursorSessionContent: cursorSessionContent,
+                ompSessionContent: ompSessionContent
             )
         }
         return validationBoundedTaskProgressItem(
@@ -301,7 +317,7 @@ private func validationBoundedSnapshot(
             adapterVersion: snapshot.adapterVersion,
             executionState: snapshot.executionState,
             attentionReason: .none,
-            actionability: .viewOnly,
+            actionability: snapshot.actionability,
             evidenceQuality: snapshot.evidenceQuality,
             freshness: snapshot.freshness,
             title: snapshot.title,
@@ -321,26 +337,21 @@ private func validationBoundedTaskProgressItem(
     compatibility: AgentCompatibility?
 ) -> TaskProgressItem {
     guard compatibility == .validated else {
-        let kind = item.kind == .waitingForInput
-            ? TaskProgressKind.running
-            : item.kind
         return TaskProgressItem(
             title: item.title,
-            kind: kind,
+            kind: item.kind,
             startedAt: item.startedAt,
             updatedAt: item.updatedAt,
             source: item.source,
-            activityText: validationBoundedTaskActivityText(for: kind),
-            statusOverride: item.kind == .waitingForInput
-                ? "版本未验证，仅显示状态"
-                : item.statusOverride,
+            activityText: validationBoundedTaskActivityText(for: item.kind),
+            statusOverride: item.statusOverride,
             threadID: item.threadID,
             sessionID: item.sessionID,
             workingDirectory: item.workingDirectory,
             processID: item.processID,
             processStartIdentity: item.processStartIdentity,
             events: item.events,
-            allowsAgentOpen: false
+            allowsAgentOpen: item.canOpen
         )
     }
     return item
@@ -400,6 +411,9 @@ func taskProgressItem(
     },
     cursorSessionContent: (String) -> CursorLocalSessionContent? = {
         CursorLocalWorkspace.sessionContent(sessionID: $0)
+    },
+    ompSessionContent: (String) -> OMPLocalSessionContent? = {
+        OMPLocalSession.content(sessionID: $0)
     }
 ) -> TaskProgressItem {
     let kind: TaskProgressKind
@@ -440,6 +454,9 @@ func taskProgressItem(
     let localContent = snapshot.identity.agentID == .cursor
         ? cursorSessionContent(snapshot.identity.nativeID)
         : nil
+    let localOMPContent = snapshot.identity.agentID == .omp
+        ? ompSessionContent(snapshot.identity.nativeID)
+        : nil
     let hookEvents = CursorLocalWorkspace.activityEvents(from: sessionEvents)
     var activityEvents: [TaskActivityEvent]
     if let localContent, !localContent.fragments.isEmpty {
@@ -448,18 +465,43 @@ func taskProgressItem(
             startedAt: startedAt,
             updatedAt: snapshot.updatedAt
         )
-        if !kind.isActive {
+        if kind.isActive {
+            // §4.5：有正文时保留 local commentary，同时用最新 Hook 工具
+            // 状态覆盖 currentToolStatus（tool-only 更新不得清空正文）。
+            let latestHookTool = hookEvents.last(where: { $0.kind == .tool })
+            if let latestHookTool {
+                activityEvents.append(latestHookTool)
+            }
+        } else {
             let terminal = hookEvents.filter { $0.kind == .lifecycle }
             activityEvents.append(contentsOf: terminal)
         }
     } else {
         activityEvents = hookEvents
     }
+    if let localOMPContent, !localOMPContent.events.isEmpty {
+        activityEvents = localOMPContent.events
+        if let latestHookEvent = hookEvents.max(by: {
+            if $0.occurredAt == $1.occurredAt { return $0.text < $1.text }
+            return $0.occurredAt < $1.occurredAt
+        }) {
+            activityEvents.append(latestHookEvent)
+        }
+        activityEvents.sort {
+            if $0.occurredAt == $1.occurredAt { return $0.text < $1.text }
+            return $0.occurredAt < $1.occurredAt
+        }
+        activityEvents = Array(
+            activityEvents.suffix(OMPLocalSession.maximumVisibleEvents)
+        )
+    }
     let resolvedDirectory: String?
     if let existing = snapshot.workingDirectory {
         resolvedDirectory = existing
     } else if snapshot.identity.agentID == .cursor {
         resolvedDirectory = cursorWorkingDirectory(snapshot.identity.nativeID)
+    } else if snapshot.identity.agentID == .omp {
+        resolvedDirectory = localOMPContent?.workingDirectory
     } else {
         resolvedDirectory = nil
     }
