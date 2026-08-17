@@ -308,7 +308,6 @@ final class ClaudeTaskProgressReader {
     private let environment: [String: String]
     private let claudeExecutable: () -> URL?
     private let nowProvider: () -> Date
-    private let maximumTailBytes: UInt64 = 1_048_576
     private let transcriptRescanInterval: TimeInterval = 5
     private let completedTaskVisibility = completedTaskPanelRetention
     private var cachedCandidates: [TranscriptCandidate] = []
@@ -914,27 +913,36 @@ final class ClaudeTaskProgressReader {
     }
 
     private func readTailLines(from url: URL) -> [String]? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-        let fileSize = (try? handle.seekToEnd()) ?? 0
-        let startOffset = fileSize > maximumTailBytes
-            ? fileSize - maximumTailBytes
-            : 0
-        do {
-            try handle.seek(toOffset: startOffset)
-            guard var data = try handle.readToEnd(), !data.isEmpty else {
-                return []
-            }
-            if startOffset > 0, let firstNewline = data.firstIndex(of: 0x0A) {
-                data.removeSubrange(...firstNewline)
-            }
-            guard let text = String(data: data, encoding: .utf8) else {
-                return nil
-            }
-            return text.split(whereSeparator: \.isNewline).map(String.init)
-        } catch {
+        guard let reader = TranscriptEventReader.make(at: url) else {
             return nil
         }
+        let fileSize = (try? FileManager.default.attributesOfItem(
+            atPath: url.path
+        )[.size] as? NSNumber)?.uint64Value ?? 0
+        var budget = TranscriptReadBudget.transcriptEvents
+            .maximumAutomaticBackscanBytes
+        var endOffset = fileSize
+        var lines: [String] = []
+        while budget > 0, endOffset > 0 {
+            let passBytes = min(budget, 8 * 1_048_576)
+            let result = reader.readBackwardPass(
+                fromEnd: endOffset,
+                maximumBytes: passBytes
+            )
+            guard case .success(let (records, cont)) = result else { break }
+            let passLines = records.compactMap {
+                String(data: $0.data, encoding: .utf8)
+            }
+            lines = passLines + lines
+            budget -= passBytes
+            if let cont = cont {
+                endOffset = cont
+            } else {
+                break
+            }
+            if lines.count >= 200 { break }
+        }
+        return lines.isEmpty ? nil : lines
     }
 
     private static func sessionID(from url: URL) -> String? {

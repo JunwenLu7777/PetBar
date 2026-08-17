@@ -46,7 +46,6 @@ final class CodexTaskProgressReader {
     }
 
     private let fileManager = FileManager.default
-    private let maximumTailBytes: UInt64 = 1_048_576
     private let rolloutRescanInterval: TimeInterval = codexTaskProgressRescanInterval
     private let activeTaskFreshness: TimeInterval = 30 * 60
     private let completedTaskVisibility = completedTaskPanelRetention
@@ -80,7 +79,8 @@ final class CodexTaskProgressReader {
             {
                 snapshot = cached.snapshot
             } else {
-                guard let lines = readTailLines(from: candidate.url) else { continue }
+                guard let lines = readTailLinesViaReader(from: candidate.url)
+                else { continue }
                 snapshot = Self.parse(
                     lines: lines,
                     modificationDate: candidate.modificationDate,
@@ -779,24 +779,38 @@ final class CodexTaskProgressReader {
         cachedSessionMetadata[url.path] = metadata
         return metadata
     }
-
-    private func readTailLines(from url: URL) -> [String]? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-
-        let fileSize = (try? handle.seekToEnd()) ?? 0
-        let startOffset = fileSize > maximumTailBytes ? fileSize - maximumTailBytes : 0
-        do {
-            try handle.seek(toOffset: startOffset)
-            guard var data = try handle.readToEnd(), !data.isEmpty else { return [] }
-            if startOffset > 0, let firstNewline = data.firstIndex(of: 0x0A) {
-                data.removeSubrange(...firstNewline)
-            }
-            guard let text = String(data: data, encoding: .utf8) else { return nil }
-            return text.split(whereSeparator: \.isNewline).map(String.init)
-        } catch {
+    private func readTailLinesViaReader(from url: URL) -> [String]? {
+        guard let reader = TranscriptEventReader.make(at: url) else {
             return nil
         }
+        let fileSize = (try? FileManager.default.attributesOfItem(
+            atPath: url.path
+        )[.size] as? NSNumber)?.uint64Value ?? 0
+        // 有界回扫：从 EOF 向前读 8 MiB/pass，最多 64 MiB。
+        var budget = TranscriptReadBudget.transcriptEvents
+            .maximumAutomaticBackscanBytes
+        var endOffset = fileSize
+        var lines: [String] = []
+        while budget > 0, endOffset > 0 {
+            let passBytes = min(budget, 8 * 1_048_576)
+            let result = reader.readBackwardPass(
+                fromEnd: endOffset,
+                maximumBytes: passBytes
+            )
+            guard case .success(let (records, cont)) = result else { break }
+            let passLines = records.compactMap {
+                String(data: $0.data, encoding: .utf8)
+            }
+            lines = passLines + lines
+            budget -= passBytes
+            if let cont = cont {
+                endOffset = cont
+            } else {
+                break
+            }
+            if lines.count >= 200 { break }
+        }
+        return lines.isEmpty ? nil : lines
     }
 
     private static let iso8601WithFractional: ISO8601DateFormatter = {
