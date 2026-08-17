@@ -515,13 +515,16 @@ func appendingTaskActivityEvent(
     _ event: TaskActivityEvent,
     to events: [TaskActivityEvent]
 ) -> [TaskActivityEvent] {
-    var next = events.filter {
-        !($0.kind == event.kind && $0.text == event.text)
-    }
+    // §4.4: 禁止文本去重和文本字典序 tie-breaker。相同文本但不同
+    // 稳定 ID 的消息必须同时保留。投影的 budgeted() 按 stable ID 处理。
+    var next = events
     next.append(event)
-    next.sort {
-        if $0.occurredAt == $1.occurredAt { return $0.text < $1.text }
-        return $0.occurredAt < $1.occurredAt
-    }
-    return next
+    // 稳定排序：occurredAt 升序，同时间保持插入顺序（非文本字典序）。
+    let indexed = next.enumerated().sorted {
+        if $0.element.occurredAt == $1.element.occurredAt {
+            return $0.offset < $1.offset
+        }
+        return $0.element.occurredAt < $1.element.occurredAt
+    }.map(\.element)
+    return indexed
 }

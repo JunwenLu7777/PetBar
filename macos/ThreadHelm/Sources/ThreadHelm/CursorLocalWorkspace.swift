@@ -572,9 +572,9 @@ private func appendingCursorFragment(
     _ fragment: CursorLocalActivityFragment,
     to fragments: [CursorLocalActivityFragment]
 ) -> [CursorLocalActivityFragment] {
-    var next = fragments.filter {
-        !($0.kind == fragment.kind && $0.text == fragment.text)
-    }
+    // §4.4: 禁止 kind+text 去重。相同文本但不同 byte range 的消息
+    // 必须同时保留。
+    var next = fragments
     next.append(fragment)
     return next
 }
