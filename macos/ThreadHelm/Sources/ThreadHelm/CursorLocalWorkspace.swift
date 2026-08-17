@@ -539,10 +539,12 @@ enum CursorLocalWorkspace {
                 ?? checkpoint.currentToolDescriptor
             if !restoredData.isEmpty || !appendedData.isEmpty
                 || !restoredCurrentToolData.isEmpty {
-                // tool 记录放最后：parseTranscript 的 latestTool 取文本
-                // 末尾的 tool，activityText = latestPublicText ?? latestTool
-                // 才能显示最近的活动工具。
-                let allData = restoredData + appendedData + restoredCurrentToolData
+                // 顺序与冷扫描一致（chronological）：current-tool 记录在
+                // public 文本之前（mixed 记录含 text，拼在末尾会覆盖
+                // latestPublicText）。latestTool 按文本中最后 tool 取，
+                // 顺序正确时自然指向最近的 tool。
+                let allData = restoredCurrentToolData
+                    + restoredData + appendedData
                 let text = String(data: allData, encoding: .utf8)
                     ?? String(decoding: allData, as: UTF8.self)
                 let content = parseTranscript(text)
@@ -656,6 +658,11 @@ enum CursorLocalWorkspace {
                 break
             }
         }
+        // 冷扫描完成：提交点推进到回扫覆盖的末尾。无 trailing partial
+        // 时 = fileSize；有 partial 时 = 最后完整 LF。与 Codex/Claude
+        // cold scan 一致——否则 checkpoint 保存 reader.committedOffset(0)，
+        // index-hit 会从文件头 forward 重放。
+        reader.setCommittedOffset(committedAfterScan)
         // 持久 checkpoint 停在最后完整 LF 后（末尾未完成行不计入）。
         // tool 记录放最后：parseTranscript 的 latestTool 取末尾 tool。
         let allData = recoveredData + currentToolData

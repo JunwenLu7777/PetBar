@@ -932,6 +932,16 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
                 "Cursor tool evict: cold scan must persist current-tool descriptor"
             )
         }
+        let fileSize1 = (try? manager.attributesOfItem(
+            atPath: transcriptURL.path
+        )[.size] as? NSNumber)?.uint64Value ?? 0
+        guard cp1?.committedOffset == fileSize1,
+              cp1?.committedOffset != 0
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: cold scan must commit to EOF (no trailing partial)"
+            )
+        }
 
         // Call 2: fresh restart（无追加）。index-hit 恢复后 fragments
         // 仍含 tool（来自 current-tool descriptor 或 public 恢复）。
@@ -952,6 +962,16 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
                 "Cursor tool evict: index-hit restart must preserve tool descriptor"
             )
         }
+        let fileSize2 = (try? manager.attributesOfItem(
+            atPath: transcriptURL.path
+        )[.size] as? NSNumber)?.uint64Value ?? 0
+        guard cp2?.committedOffset == fileSize2,
+              cp2?.committedOffset != 0
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: index-hit restart must commit to EOF"
+            )
+        }
 
         // Call 3: 第二次 fresh restart（无追加）。链仍保留 tool fragment。
         CursorLocalWorkspace.resetInMemoryStateForTesting()
@@ -969,6 +989,43 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
         guard cp3?.currentToolDescriptor != nil else {
             failCursorAdapterSelfTest(
                 "Cursor tool evict: second fresh restart must preserve tool descriptor"
+            )
+        }
+        let fileSize3 = (try? manager.attributesOfItem(
+            atPath: transcriptURL.path
+        )[.size] as? NSNumber)?.uint64Value ?? 0
+        guard cp3?.committedOffset == fileSize3,
+              cp3?.committedOffset != 0
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: cold scan must commit to EOF on every pass"
+            )
+        }
+
+        // 追加 tail 后 fresh restart：index-hit 只应消费追加字节，
+        // tool fragment 与 latest public 文本保留。
+        let appended = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"尾部追加消息\"}]}}\n"
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(appended.utf8))
+        try handle.close()
+        let fileSize4 = fileSize3 + UInt64(appended.utf8.count)
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        guard let tailed = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), tailed.fragments.contains(where: { $0.kind == .tool }),
+           tailed.activityText?.contains("尾部追加消息") == true
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: appended tail must show after index-hit"
+            )
+        }
+        let cpAfterTail = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard cpAfterTail?.committedOffset == fileSize4 else {
+            failCursorAdapterSelfTest(
+                "Cursor tool evict: tail append must advance committedOffset"
             )
         }
     } catch {
