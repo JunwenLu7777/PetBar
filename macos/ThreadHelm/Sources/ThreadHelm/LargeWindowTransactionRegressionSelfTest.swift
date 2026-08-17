@@ -158,8 +158,7 @@ private func runCursorLargeToolTailRecoverySelfTest() throws {
     )
     let body = ([userLine, sentinelLine] + toolTail).map { $0 + "\n" }.joined()
     let data = Data(body.utf8)
-    guard data.count > CursorLocalWorkspace.maximumTailBytes,
-          data.count >= 7 * 1_048_576
+    guard data.count >= 7 * 1_048_576
     else {
         throw LargeWindowSelfTestError.failed(
             "Cursor fixture must exceed fixed 1 MiB tail and have >= 7 MiB to EOF"

@@ -39,7 +39,6 @@ struct CursorLocalSessionContent: Equatable {
 
 enum CursorLocalWorkspace {
     static let maximumVisibleEvents = 32
-    static let maximumTailBytes: UInt64 = 1_048_576
 
     private static let cacheLock = NSLock()
     private static var contentCache: [String: CachedTranscript] = [:]
@@ -423,8 +422,49 @@ enum CursorLocalWorkspace {
             return cached.content
         }
         cacheLock.unlock()
-        guard let text = tailedUTF8String(at: url, fileManager: fileManager)
-        else { return nil }
+
+        guard let reader = TranscriptEventReader.make(
+            at: url,
+            fileManager: fileManager
+        ) else { return nil }
+
+        // 有界回扫：从 EOF 向前读 8 MiB/pass，最多 64 MiB。
+        // 只收集完整 LF 记录（片段由 reader 丢弃），拼成文本交给
+        // 现有 parseTranscript——替代旧的 1 MiB 固定尾读。
+        let fileSize = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+        var backscanBudget = TranscriptReadBudget.transcriptEvents
+            .maximumAutomaticBackscanBytes
+        var endOffset = fileSize
+        var recoveredData = Data()
+        var enoughContent = false
+        while backscanBudget > 0, endOffset > 0 {
+            let passBytes = min(backscanBudget, 8 * 1_048_576)
+            let result = reader.readBackwardPass(
+                fromEnd: endOffset,
+                maximumBytes: passBytes
+            )
+            guard case .success(let (records, cont)) = result else { break }
+            for record in records {
+                recoveredData = record.data + recoveredData
+            }
+            backscanBudget -= passBytes
+            if let cont = cont {
+                endOffset = cont
+            } else {
+                break
+            }
+            if recoveredData.count
+                >= Int(TranscriptReadBudget.transcriptEvents.maximumBytesPerPass)
+            {
+                enoughContent = true
+                break
+            }
+        }
+
+        guard !recoveredData.isEmpty else { return nil }
+        let text = String(data: recoveredData, encoding: .utf8)
+            ?? String(decoding: recoveredData, as: UTF8.self)
+
         let content = parseTranscript(text)
         cacheLock.lock()
         contentCache[cacheKey] = CachedTranscript(
@@ -433,30 +473,6 @@ enum CursorLocalWorkspace {
         )
         cacheLock.unlock()
         return content
-    }
-
-    private static func tailedUTF8String(
-        at url: URL,
-        fileManager: FileManager
-    ) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-        let size = (try? fileManager.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?
-            .uint64Value ?? 0
-        if size > maximumTailBytes {
-            try? handle.seek(toOffset: size - maximumTailBytes)
-        }
-        let data = (try? handle.readToEnd()) ?? Data()
-        guard !data.isEmpty else { return nil }
-        if let text = String(data: data, encoding: .utf8) {
-            if size > maximumTailBytes,
-               let newline = text.firstIndex(of: "\n")
-            {
-                return String(text[text.index(after: newline)...])
-            }
-            return text
-        }
-        return String(decoding: data, as: UTF8.self)
     }
 
     private static func parseTranscript(_ text: String) -> CursorLocalSessionContent {

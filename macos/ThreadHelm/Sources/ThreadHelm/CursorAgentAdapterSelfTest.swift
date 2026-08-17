@@ -560,7 +560,7 @@ private func runCursorOpenSelfTest() {
         try Data("""
         {"role":"user","message":{"content":[{"type":"text","text":"把卡片补上正文"}]}}
         {"role":"assistant","message":{"content":[{"type":"text","text":"我去读本机会话记录。"},{"type":"tool_use","name":"Read","input":{"path":"/secret"}}]}}
-        """.utf8).write(to: jsonl)
+        """.utf8 + [0x0A]).write(to: jsonl)
         defer { try? manager.removeItem(at: lookupRoot) }
         let diskContent = CursorLocalWorkspace.sessionContent(
             sessionID: sessionID,
