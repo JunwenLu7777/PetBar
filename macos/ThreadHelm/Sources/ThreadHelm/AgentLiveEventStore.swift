@@ -481,15 +481,16 @@ func taskProgressItem(
     }
     if let localOMPContent, !localOMPContent.events.isEmpty {
         activityEvents = localOMPContent.events
-        if let latestHookEvent = hookEvents.max(by: {
-            if $0.occurredAt == $1.occurredAt { return $0.text < $1.text }
-            return $0.occurredAt < $1.occurredAt
-        }) {
-            activityEvents.append(latestHookEvent)
-        }
-        activityEvents.sort {
-            if $0.occurredAt == $1.occurredAt { return $0.text < $1.text }
-            return $0.occurredAt < $1.occurredAt
+        if kind.isActive {
+            // §4.5：有正文时保留 local commentary，同时用最新 Hook 工具
+            // 状态覆盖 currentToolStatus（tool-only 更新不得清空正文）。
+            let latestHookTool = hookEvents.last(where: { $0.kind == .tool })
+            if let latestHookTool {
+                activityEvents.append(latestHookTool)
+            }
+        } else {
+            let terminal = hookEvents.filter { $0.kind == .lifecycle }
+            activityEvents.append(contentsOf: terminal)
         }
         activityEvents = Array(
             activityEvents.suffix(OMPLocalSession.maximumVisibleEvents)
