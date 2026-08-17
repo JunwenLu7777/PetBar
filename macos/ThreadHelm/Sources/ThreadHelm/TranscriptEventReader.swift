@@ -331,13 +331,34 @@ final class TranscriptEventReader {
             ) ?? Data()
             diagnostics.bytesRead += data.count
             diagnostics.rawChunksRead += 1
+
+            // 当 lowerBound > 0 时，数据头部是被前一轮截断的半行 JSONL
+            // 片段。丢弃第一个 LF 之前的所有字节（AC-07：跨边界记录不得损坏），
+            // 只喂完整记录；continuation 设为第一个完整记录的起点，下一轮
+            // 从该点继续向前回扫（与本轮有重叠，但不重复读取完整记录）。
+            let feedStart: UInt64
+            let feedData: Data
+            if lowerBound > 0 {
+                guard let firstLF = data.firstIndex(of: 0x0A) else {
+                    // 整个区间无 LF：全是片段，不产生记录。
+                    let continuation: UInt64? = lowerBound > 0 ? lowerBound : nil
+                    return .success(([], continuation))
+                }
+                let fragmentEnd = firstLF + 1
+                feedStart = lowerBound + UInt64(fragmentEnd)
+                feedData = data.subdata(in: fragmentEnd..<data.count)
+            } else {
+                feedStart = lowerBound
+                feedData = data
+            }
+
             var records: [TranscriptRecordRange] = []
             var framer = JSONLFramer(
                 maximumRecordBytes: budget.maximumRecordBytes,
-                committedOffset: lowerBound,
+                committedOffset: feedStart,
                 sourceOrder: self.sourceOrder
             )
-            framer.feed(data, chunkStart: lowerBound)
+            framer.feed(feedData, chunkStart: feedStart)
             records = framer.records.map {
                 TranscriptRecordRange(
                     startOffset: $0.startOffset,
@@ -347,7 +368,7 @@ final class TranscriptEventReader {
                 )
             }
             diagnostics.recordsDecoded += records.count
-            let continuation: UInt64? = lowerBound > 0 ? lowerBound : nil
+            let continuation: UInt64? = lowerBound > 0 ? feedStart : nil
             return .success((records, continuation))
         } catch {
             return .failure(.ioFailed)

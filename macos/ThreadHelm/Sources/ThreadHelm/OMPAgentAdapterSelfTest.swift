@@ -2,7 +2,7 @@
 //  OMPAgentAdapterSelfTest.swift
 //  ThreadHelm
 //
-//  模块职责：OMP state-only adapter 的隔离配置、传输和归一化自测。
+//  模块职责：OMP adapter 的隔离配置、传输、归一化和会话跳转自测。
 //
 
 import Foundation
@@ -16,11 +16,13 @@ func runOMPAgentAdapterSelfTest() {
         let extensionLoad = try runOMPGeneratedExtensionLoadSelfTest()
         try runOMPEventReductionSelfTest()
         try runOMPTransportContractSelfTest()
+        try runOMPLocalSessionContentSelfTest()
         print(
             "omp-agent-adapter-self-test: lifecycle=install+repeat+status+repair+repeat-uninstall+partial+preserve+live-home-guard "
-                + "state-only=open-unavailable+no-control-fields+"
+                + "navigation=resume-dispatch+no-control-fields+"
                 + "installed-jiti-load=\(extensionLoad.rawValue) "
-                + "events=offline+slow+malformed+duplicate+out-of-order+shutdown-stale"
+                + "events=offline+slow+malformed+duplicate+out-of-order+shutdown-stale "
+                + "public-output=text-only+cwd+bounded-local-read"
         )
     } catch {
         fputs("omp-agent-adapter-self-test failed: \(error)\n", stderr)
@@ -239,12 +241,13 @@ private func runOMPIntegrationLifecycleSelfTest() throws {
 
 private func runOMPStateOnlyContractSelfTest() throws {
     let now = Date(timeIntervalSince1970: 1_786_532_400)
+    var resumedSessionID: String?
     let adapter = OMPAgentAdapter(
         discovery: {
             AgentDiscovery(
-                isInstalled: false,
-                version: nil,
-                compatibility: .unknown
+                isInstalled: true,
+                version: "17.3.2",
+                compatibility: .validated
             )
         },
         readEvents: {
@@ -258,21 +261,35 @@ private func runOMPStateOnlyContractSelfTest() throws {
                 actionability: .inApp,
                 workingDirectory: "/private/should-not-pass"
             )]
+        },
+        resumeSession: {
+            resumedSessionID = $0
+            return true
         }
     )
     let observation = try adapter.observe()
+    let report = observation.snapshots.first.map(adapter.open(session:))
     guard observation.snapshots.count == 1,
           let snapshot = observation.snapshots.first,
           snapshot.identity.agentID == .omp,
           snapshot.attentionReason == .none,
-          snapshot.actionability == .viewOnly,
+          snapshot.actionability == .openExactNativeSession,
           snapshot.workingDirectory == nil,
-          adapter.open(session: snapshot).result == .unavailable,
-          !adapter.open(session: snapshot).exactAttempted,
-          !adapter.open(session: snapshot).independentlyConfirmedIdentity,
-          adapter.diagnostics().health == .unavailable
+          report?.result == .unknown,
+          report?.exactAttempted == true,
+          report?.independentlyConfirmedIdentity == false,
+          resumedSessionID == "omp-session-1",
+          adapter.diagnostics().health == .healthy,
+          ompResumeCommand(
+              sessionID: "omp-session-1",
+              executablePath: "/opt/homebrew/bin/omp"
+          ) == "exec '/opt/homebrew/bin/omp' --resume 'omp-session-1'",
+          ompResumeCommand(
+              sessionID: "bad session; rm -rf",
+              executablePath: "/opt/homebrew/bin/omp"
+          ) == nil
     else {
-        throw OMPAgentAdapterSelfTestError.failed("state-only open/diagnostics")
+        throw OMPAgentAdapterSelfTestError.failed("resume navigation/diagnostics")
     }
 
     let generatedFiles = OMPExtensionConfiguration.generatedFilesForSelfTest()
@@ -543,7 +560,7 @@ private func runOMPEventReductionSelfTest() throws {
           reduction.processedEventCount == 3,
           reduction.snapshots.first?.executionState == .failed,
           reduction.snapshots.first?.attentionReason == .taskFailure,
-          reduction.snapshots.first?.actionability == .viewOnly,
+          reduction.snapshots.first?.actionability == .openExactNativeSession,
           reduction.attentionItems.count == 1,
           reduction.attentionItems.first?.isInterrupting == true
     else {
@@ -598,7 +615,7 @@ private func runOMPEventReductionSelfTest() throws {
           parsed.identity.nativeID == "omp-envelope-session",
           parsed.executionState == .failed,
           parsed.attentionReason == .taskFailure,
-          parsed.actionability == .viewOnly,
+          parsed.actionability == .openExactNativeSession,
           parsed.workingDirectory == nil,
           parsed.activitySummary == nil
     else {
@@ -663,6 +680,99 @@ private func runOMPTransportContractSelfTest() throws {
     }
 }
 
+private func runOMPLocalSessionContentSelfTest() throws {
+    let sessionID = "01a00dcf-f7ab-7000-9273-9c7707ab6193"
+    let transcript = """
+    {"type":"session","timestamp":"2026-08-17T03:42:08.299Z","cwd":"/private/tmp/omp-public-project"}
+    {"type":"message","timestamp":"2026-08-17T03:45:24.944Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"隐藏推理不能显示"},{"type":"text","text":"正在整理 OMP 的公开结果"},{"type":"toolCall","name":"bash","arguments":{"cmd":"echo secret"}}]}}
+    {"type":"message","timestamp":"2026-08-17T03:45:25.000Z","message":{"role":"toolResult","content":[{"type":"text","text":"工具输出不能显示"}]}}
+    {"type":"message","timestamp":"2026-08-17T03:46:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"access_token=omp-secret-value"}]}}
+    {"type":"message","timestamp":"2026-08-17T03:47:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"{\\"password\\":\\"raw-json-secret\\"}"}]}}
+    """
+    let parsed = OMPLocalSession.content(fromJSONL: transcript)
+    guard parsed.workingDirectory == "/private/tmp/omp-public-project",
+          parsed.events.map(\.text) == [
+              "正在整理 OMP 的公开结果",
+              "access_token=[已隐藏]",
+          ],
+          !parsed.events.contains(where: {
+              $0.text.contains("隐藏推理")
+                  || $0.text.contains("工具输出")
+                  || $0.text.contains("echo secret")
+                  || $0.text.contains("raw-json-secret")
+          })
+    else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "OMP local transcript privacy projection"
+        )
+    }
+
+    let manager = FileManager.default
+    let root = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-omp-session-self-test-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: root) }
+    let project = root.appendingPathComponent("project", isDirectory: true)
+    try manager.createDirectory(at: project, withIntermediateDirectories: true)
+    let transcriptURL = project.appendingPathComponent(
+        "2026-08-17T03-42-08-299Z_\(sessionID).jsonl"
+    )
+    try Data(transcript.utf8).write(to: transcriptURL)
+    let located = OMPLocalSession.content(
+        sessionID: sessionID,
+        sessionsRoot: root,
+        fileManager: manager
+    )
+    guard located == parsed,
+          OMPLocalSession.content(
+              sessionID: "bad session; unsafe",
+              sessionsRoot: root,
+              fileManager: manager
+          ) == nil
+    else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "OMP bounded local transcript lookup"
+        )
+    }
+
+    let largeSessionID = "01a00e24-d9a5-7000-a897-cc3f8baf2a75"
+    let privateFiller = String(repeating: "隐藏填充", count: 100_000)
+    var splitUTF8Data: Data?
+    for leadingPadding in ["", "x", "xx"] {
+        let candidate = """
+        {"type":"session","timestamp":"2026-08-17T05:14:51.173Z","cwd":"/private/tmp/omp-large-project"}
+        {"type":"message","timestamp":"2026-08-17T05:15:00.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"\(leadingPadding)\(privateFiller)"}]}}
+        {"type":"message","timestamp":"2026-08-17T05:16:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"尾部公开结果仍可读取"}]}}
+        """ + "\n"
+        let data = Data(candidate.utf8)
+        let largeTranscriptURL = project.appendingPathComponent(
+            "2026-08-17T05:14:51-173Z_\(largeSessionID).jsonl"
+        )
+        try data.write(to: largeTranscriptURL)
+        let largeLocated = OMPLocalSession.content(
+            sessionID: largeSessionID,
+            sessionsRoot: root,
+            fileManager: manager
+        )
+        if largeLocated?.workingDirectory == "/private/tmp/omp-large-project",
+           largeLocated?.events.map(\.text) == ["尾部公开结果仍可读取"],
+           !(largeLocated?.events.contains(where: {
+               $0.text.contains("隐藏填充")
+           }) ?? true)
+        {
+            splitUTF8Data = data
+            break
+        }
+    }
+    guard let splitUTF8Data else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "OMP large transcript recovery via shared reader failed"
+        )
+    }
+    _ = splitUTF8Data
+}
+
 private func ompSelfTestEvent(
     eventID: String,
     eventType: String,
@@ -672,7 +782,7 @@ private func ompSelfTestEvent(
     attentionReason: AttentionReason,
     evidenceQuality: EvidenceQuality = .officialHook,
     stale: Bool = false,
-    actionability: Actionability = .viewOnly,
+    actionability: Actionability = .openExactNativeSession,
     workingDirectory: String? = nil
 ) -> AgentEvent {
     AgentEvent(

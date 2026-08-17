@@ -341,6 +341,108 @@ private func runTranscriptReaderContractSelfTest() throws {
                 + " scanHead=\(truncReader.scanHead)"
         )
     }
+
+    // 6) readBackwardPass 跨边界：用小 budget 强制 lowerBound > 0，
+    //    验证头部片段被丢弃、continuation 指向第一个完整记录起点，
+    //    跨边界记录不丢失（AC-07）。
+    let backURL = temp.appendingPathComponent("back.jsonl")
+    // 三条记录：rec0 短、rec1 长（跨越 budget 边界）、rec2 短。
+    let rec0 = Data("{\"i\":0}\n".utf8)
+    let rec1Body = String(repeating: "x", count: 300)
+    let rec1 = Data("{\"i\":1,\"d\":\"\(rec1Body)\"}\n".utf8)
+    let rec2 = Data("{\"i\":2}\n".utf8)
+    var backFile = rec0
+    backFile.append(rec1)
+    backFile.append(rec2)
+    try backFile.write(to: backURL)
+
+    let rec0End = UInt64(rec0.count)
+    let rec1End = UInt64(rec0.count + rec1.count)
+    let rec2End = UInt64(backFile.count)
+
+    // 第一轮 backward pass：从 EOF 读 rec2 + rec1 的尾部。
+    // budget 刚好读完 rec2 + 部分进入 rec1 但不到 rec0。
+    let backBudget = TranscriptReadBudget(
+        chunkBytes: 1_048_576,
+        maximumBytesPerPass: 8 * 1_048_576,
+        maximumAutomaticBackscanBytes: 64 * 1_048_576,
+        maximumRecordBytes: 4 * 1_048_576,
+        softWallTime: 0.05
+    )
+    guard let backReader = TranscriptEventReader.make(
+        at: backURL,
+        budget: backBudget
+    ) else {
+        throw TranscriptEventSelfTestError.failed("reader back make failed")
+    }
+    // pass 1：从 EOF 向前读 rec2.size + 部分 rec1（但不完整）。
+    // 只读 rec2 这条完整记录：rec1 的尾部是片段，被丢弃。
+    let pass1Bytes = rec2.count + 10 // 只进入 rec1 的尾部
+    let backResult1 = try XCTUnwrapResult(backReader.readBackwardPass(
+        fromEnd: rec2End,
+        maximumBytes: pass1Bytes
+    ))
+    let (backRecords1, cont1) = backResult1
+    // 只应恢复 rec2（rec1 尾部片段被丢弃）。
+    guard backRecords1.count == 1,
+          backRecords1[0].data == rec2
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "backward pass1: count=\(backRecords1.count)"
+                + " data=\(backRecords1.map { String(data: $0.data, encoding: .utf8) ?? "?" })"
+        )
+    }
+    // continuation 指向 rec2 的起点（= rec1 结束位置）。
+    guard cont1 == rec1End else {
+        throw TranscriptEventSelfTestError.failed(
+            "backward pass1 continuation: got \(cont1 ?? 0) expected \(rec1End)"
+        )
+    }
+
+    // pass 2：从 rec1End 向前读 rec1 + rec0 尾部（5 bytes）。
+    // lowerBound = rec0End - 5 > 0，所以 rec0 尾部片段被丢弃。
+    // rec1 完整恢复（片段后第一个 LF 标记 rec1 起点）。
+    let pass2Bytes = rec1.count + 5
+    let backResult2 = try XCTUnwrapResult(backReader.readBackwardPass(
+        fromEnd: cont1!,
+        maximumBytes: pass2Bytes
+    ))
+    let (backRecords2, cont2) = backResult2
+    guard backRecords2.count == 1,
+          backRecords2[0].data == rec1
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "backward pass2: count=\(backRecords2.count)"
+                + " data=\(backRecords2.map { String(data: $0.data, encoding: .utf8) ?? "?" })"
+        )
+    }
+    // continuation 指向 rec1 的起点（= rec0 结束位置）。
+    guard cont2 == rec0End else {
+        throw TranscriptEventSelfTestError.failed(
+            "backward pass2 continuation: got \(cont2 ?? 0) expected \(rec0End)"
+        )
+    }
+
+    // pass 3：从 rec0End 向前读 rec0（lowerBound == 0，无片段丢弃）。
+    let backResult3 = try XCTUnwrapResult(backReader.readBackwardPass(
+        fromEnd: cont2!,
+        maximumBytes: rec0.count
+    ))
+    let (backRecords3, cont3) = backResult3
+    guard backRecords3.count == 1,
+          backRecords3[0].data == rec0
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "backward pass3: count=\(backRecords3.count)"
+                + " data=\(backRecords3.map { String(data: $0.data, encoding: .utf8) ?? "?" })"
+        )
+    }
+    // lowerBound == 0 → continuation == nil（到达文件头）。
+    guard cont3 == nil else {
+        throw TranscriptEventSelfTestError.failed(
+            "backward pass3 continuation: got \(cont3 ?? 0) expected nil"
+        )
+    }
 }
 
 private func XCTUnwrapResult<T>(
