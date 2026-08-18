@@ -247,8 +247,12 @@ func runCursorAgentAdapterSelfTest() {
         runCursorSignalMappingSelfTest()
         runCursorTransportSelfTest()
         runCursorOpenSelfTest()
+        runCursorSidecarDeletionSelfTest()
         runCursorIndexTailAppendSelfTest()
+        runCursorAtomicReplaceAndActualBackscanBudgetSelfTest()
+        runCursorIndexHitRefreshBudgetSelfTest()
         runCursorPartialTailCompletionSelfTest()
+        runCursorSinglePassBackscanContinuationSelfTest()
         runCursorToolSurvivesWindowEvictionSelfTest()
         runCursorMixedThenPureToolOrderingSelfTest()
         runCursorColdScanPureThenMixedToolSelfTest()
@@ -640,7 +644,8 @@ private func runCursorOpenSelfTest() {
                     title: "旧标题",
                     activityText: "transcript 里的旧正文",
                     completedActivityText: "transcript 里的旧正文",
-                    fragments: []
+                    fragments: [],
+                    projection: .empty
                 ),
                 with: metadata
               ).completedActivityText == "完整的 Cursor 可见正文，不应退化为预览。"
@@ -691,6 +696,136 @@ private func runCursorOpenSelfTest() {
         }
     } catch {
         failCursorAdapterSelfTest("Cursor conversation metadata setup: \(error)")
+    }
+}
+
+private func runCursorSidecarDeletionSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-sidecar-delete-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    do {
+        let projectsRoot = temp.appendingPathComponent(
+            "cursor-projects", isDirectory: true
+        )
+        let transcriptsDir = projectsRoot
+            .appendingPathComponent("test-workspace", isDirectory: true)
+            .appendingPathComponent("agent-transcripts", isDirectory: true)
+        try manager.createDirectory(
+            at: transcriptsDir,
+            withIntermediateDirectories: true
+        )
+        let indexRoot = temp.appendingPathComponent(
+            "index-root", isDirectory: true
+        )
+        let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
+        CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
+        defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
+
+        let store = TranscriptIndexStore(
+            rootDirectory: indexRoot,
+            fileManager: manager
+        )
+        let checkpoint = TranscriptIndexStore.Checkpoint(
+            schemaVersion: TranscriptIndexStore.schemaVersion,
+            agentID: .cursor,
+            sessionKeyDigest: "",
+            sourceIdentity: TranscriptSourceIdentity(
+                device: 1,
+                inode: 2,
+                birthSeconds: 3,
+                birthNanoseconds: 4
+            ),
+            observedSize: 1,
+            observedMTime: 1,
+            committedOffset: 1,
+            backscanContinuationOffset: nil,
+            publicMessageDescriptors: [],
+            currentToolDescriptor: nil,
+            terminalDescriptor: nil,
+            metadataDescriptor: nil,
+            oversizedRecords: 0
+        )
+
+        let deletedTranscriptSession = "cursor-sidecar-missing-file"
+        let sessionDirectory = transcriptsDir.appendingPathComponent(
+            deletedTranscriptSession,
+            isDirectory: true
+        )
+        try manager.createDirectory(
+            at: sessionDirectory,
+            withIntermediateDirectories: true
+        )
+        try store.flush(
+            checkpoint,
+            agentID: .cursor,
+            sessionKey: deletedTranscriptSession
+        )
+        guard store.load(
+            agentID: .cursor,
+            sessionKey: deletedTranscriptSession
+        ) != nil else {
+            failCursorAdapterSelfTest(
+                "Cursor sidecar delete: setup missing-file checkpoint"
+            )
+        }
+        let metadataContent = CursorLocalWorkspace.sessionContent(
+            sessionID: deletedTranscriptSession,
+            projectsRoot: projectsRoot,
+            fileManager: manager,
+            conversationMetadata: { id in
+                id == deletedTranscriptSession
+                    ? CursorConversationMetadata(
+                        title: "metadata fallback title",
+                        activityText: "metadata fallback body"
+                    )
+                    : nil
+            }
+        )
+        guard metadataContent?.title == "metadata fallback title",
+              metadataContent?.activityText == "metadata fallback body",
+              store.load(
+                agentID: .cursor,
+                sessionKey: deletedTranscriptSession
+              ) == nil
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor sidecar delete: missing transcript must delete sidecar and keep metadata fallback"
+            )
+        }
+
+        let missingSourceSession = "cursor-sidecar-source-gone"
+        try store.flush(
+            checkpoint,
+            agentID: .cursor,
+            sessionKey: missingSourceSession
+        )
+        guard store.load(
+            agentID: .cursor,
+            sessionKey: missingSourceSession
+        ) != nil else {
+            failCursorAdapterSelfTest(
+                "Cursor sidecar delete: setup missing-source checkpoint"
+            )
+        }
+        let missingContent = CursorLocalWorkspace.sessionContent(
+            sessionID: missingSourceSession,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        )
+        guard missingContent == nil,
+              store.load(agentID: .cursor, sessionKey: missingSourceSession) == nil
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor sidecar delete: missing source must delete sidecar"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor sidecar delete test: \(error)")
     }
 }
 
@@ -795,6 +930,229 @@ private func runCursorIndexTailAppendSelfTest() {
     }
 }
 
+private func runCursorAtomicReplaceAndActualBackscanBudgetSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-replace-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    do {
+        let projectsRoot = temp.appendingPathComponent(
+            "cursor-projects", isDirectory: true
+        )
+        let sessionID = "cursor-replace-session"
+        let transcriptsDir = projectsRoot
+            .appendingPathComponent("test-workspace", isDirectory: true)
+            .appendingPathComponent("agent-transcripts", isDirectory: true)
+        let transcriptURL = transcriptsDir.appendingPathComponent(
+            "\(sessionID).jsonl"
+        )
+        try manager.createDirectory(
+            at: transcriptsDir,
+            withIntermediateDirectories: true
+        )
+        let indexRoot = temp.appendingPathComponent(
+            "index-root", isDirectory: true
+        )
+        let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
+        CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
+        defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
+
+        let firstData = Data(
+            (#"{"role":"assistant","content":[{"type":"text","text":"AAAA"}]}"#
+                + "\n").utf8
+        )
+        let replacementData = Data(
+            (#"{"role":"assistant","content":[{"type":"text","text":"BBBB"}]}"#
+                + "\n").utf8
+        )
+        guard firstData.count == replacementData.count else {
+            failCursorAdapterSelfTest(
+                "Cursor replace: fixtures must be the same size"
+            )
+        }
+        let fixedDate = Date(timeIntervalSince1970: 1_786_600_000)
+        try firstData.write(to: transcriptURL)
+        try manager.setAttributes(
+            [.modificationDate: fixedDate],
+            ofItemAtPath: transcriptURL.path
+        )
+        guard let firstIdentity = TranscriptEventReader.make(
+            at: transcriptURL
+        )?.identity,
+              let first = CursorLocalWorkspace.sessionContent(
+                sessionID: sessionID,
+                projectsRoot: projectsRoot,
+                fileManager: manager
+              ),
+              first.activityText?.contains("AAAA") == true
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor replace: cold read failed"
+            )
+        }
+        let firstBackscanBytes = CursorLocalWorkspace
+            .lifecycleBackscanBytesForTesting(at: transcriptURL)
+        guard firstBackscanBytes > 0,
+              firstBackscanBytes < TranscriptReadBudget.transcriptEvents
+                .maximumBytesPerPass
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor replace: lifecycle used planned rather than actual bytes"
+            )
+        }
+
+        try replacementData.write(to: transcriptURL, options: .atomic)
+        try manager.setAttributes(
+            [.modificationDate: fixedDate],
+            ofItemAtPath: transcriptURL.path
+        )
+        guard let replacementIdentity = TranscriptEventReader.make(
+            at: transcriptURL
+        )?.identity,
+              replacementIdentity != firstIdentity,
+              let replacement = CursorLocalWorkspace.sessionContent(
+                sessionID: sessionID,
+                projectsRoot: projectsRoot,
+                fileManager: manager
+              ),
+              replacement.activityText?.contains("BBBB") == true,
+              replacement.activityText?.contains("AAAA") != true
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor replace: same-size identity change reused stale cache"
+            )
+        }
+        let replacementBackscanBytes = CursorLocalWorkspace
+            .lifecycleBackscanBytesForTesting(at: transcriptURL)
+        guard replacementBackscanBytes > 0,
+              replacementBackscanBytes < TranscriptReadBudget.transcriptEvents
+                .maximumBytesPerPass
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor replace: identity reset kept planned lifecycle bytes"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest(
+            "Cursor replace/actual backscan budget test: \(error)"
+        )
+    }
+}
+
+private func runCursorIndexHitRefreshBudgetSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-refresh-budget-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    do {
+        let projectsRoot = temp.appendingPathComponent(
+            "cursor-projects", isDirectory: true
+        )
+        let sessionID = "cursor-refresh-budget-session"
+        let transcriptsDir = projectsRoot
+            .appendingPathComponent("test-workspace", isDirectory: true)
+            .appendingPathComponent("agent-transcripts", isDirectory: true)
+        let transcriptURL = transcriptsDir.appendingPathComponent(
+            "\(sessionID).jsonl"
+        )
+        try manager.createDirectory(
+            at: transcriptsDir,
+            withIntermediateDirectories: true
+        )
+        let indexRoot = temp.appendingPathComponent(
+            "index-root", isDirectory: true
+        )
+        let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
+        CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
+        defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
+
+        var transcript = Data()
+        var descriptors: [TranscriptRecordLocation] = []
+        let payload = String(repeating: "x", count: 4_193_000)
+        for index in 0..<3 {
+            let start = UInt64(transcript.count)
+            let line = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"descriptor-\(index) \(payload)\"}]}}\n"
+            let lineData = Data(line.utf8)
+            transcript.append(lineData)
+            descriptors.append(TranscriptRecordLocation(
+                startOffset: start,
+                byteCount: UInt32(lineData.count),
+                sourceOrder: UInt64(index),
+                eventClass: .publicMessage,
+                occurredAt: nil
+            ))
+        }
+        try transcript.write(to: transcriptURL)
+        let committedBeforeAppend = UInt64(transcript.count)
+
+        let store = TranscriptIndexStore(
+            rootDirectory: indexRoot,
+            fileManager: manager
+        )
+        guard let reader = TranscriptEventReader.make(
+            at: transcriptURL,
+            fileManager: manager
+        ) else {
+            failCursorAdapterSelfTest(
+                "Cursor refresh budget: reader setup failed"
+            )
+        }
+        try store.flush(
+            TranscriptIndexStore.Checkpoint(
+                schemaVersion: TranscriptIndexStore.schemaVersion,
+                agentID: .cursor,
+                sessionKeyDigest: "",
+                sourceIdentity: reader.identity,
+                observedSize: committedBeforeAppend,
+                observedMTime: 1,
+                committedOffset: committedBeforeAppend,
+                backscanContinuationOffset: nil,
+                publicMessageDescriptors: descriptors,
+                currentToolDescriptor: nil,
+                terminalDescriptor: nil,
+                metadataDescriptor: nil,
+                oversizedRecords: 0
+            ),
+            agentID: .cursor,
+            sessionKey: sessionID
+        )
+
+        let appended = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"appended-over-budget " + String(repeating: "y", count: 4096) + "\"}]}}\n"
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(appended.utf8))
+        try handle.close()
+
+        guard let content = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), content.activityText?.contains("descriptor-2") == true,
+           content.activityText?.contains("appended-over-budget") != true
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor refresh budget: descriptor restore must not exceed 8 MiB into forward tail"
+            )
+        }
+        let cp = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard cp?.committedOffset == committedBeforeAppend else {
+            failCursorAdapterSelfTest(
+                "Cursor refresh budget: committedOffset must not advance when forward tail is over budget"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor refresh budget test: \(error)")
+    }
+}
+
 private func runCursorPartialTailCompletionSelfTest() {
     let manager = FileManager.default
     let temp = manager.temporaryDirectory.appendingPathComponent(
@@ -863,6 +1221,102 @@ private func runCursorPartialTailCompletionSelfTest() {
         }
     } catch {
         failCursorAdapterSelfTest("Cursor partial tail completion test: \(error)")
+    }
+}
+
+private func runCursorSinglePassBackscanContinuationSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-cursor-single-pass-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: temp) }
+    do {
+        let projectsRoot = temp.appendingPathComponent(
+            "cursor-projects", isDirectory: true
+        )
+        let sessionID = "cursor-single-pass-session"
+        let transcriptsDir = projectsRoot
+            .appendingPathComponent("test-workspace", isDirectory: true)
+            .appendingPathComponent("agent-transcripts", isDirectory: true)
+        let transcriptURL = transcriptsDir.appendingPathComponent(
+            "\(sessionID).jsonl"
+        )
+        try manager.createDirectory(
+            at: transcriptsDir,
+            withIntermediateDirectories: true
+        )
+        let indexRoot = temp.appendingPathComponent(
+            "index-root", isDirectory: true
+        )
+        let previousMock = CursorLocalWorkspace.mockIndexRootDirectory
+        CursorLocalWorkspace.mockIndexRootDirectory = indexRoot
+        defer { CursorLocalWorkspace.mockIndexRootDirectory = previousMock }
+        CursorLocalWorkspace.resetInMemoryStateForTesting()
+        defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
+
+        var transcript = #"{"role":"assistant","content":[{"type":"text","text":"最近公开窗口"}]}"# + "\n"
+        let payload = String(repeating: "x", count: 1024)
+        var toolTailBytes = 0
+        var index = 0
+        let targetTailBytes =
+            TranscriptReadBudget.transcriptEvents.maximumBytesPerPass
+            + 1_048_576
+        while toolTailBytes < targetTailBytes {
+            let line = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"echo \(index)-\(payload)\"}}]}}\n"
+            transcript += line
+            toolTailBytes += line.utf8.count
+            index += 1
+        }
+        try Data(transcript.utf8).write(to: transcriptURL)
+
+        let store = TranscriptIndexStore(
+            rootDirectory: indexRoot,
+            fileManager: manager
+        )
+
+        // Call 1: cold scan 只能做一个 8 MiB backward pass。尾部全是
+        // tool-only，因此不能恢复更早 public，也不能缓存/清空 continuation。
+        guard let first = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), first.activityText?.contains("最近公开窗口") != true else {
+            failCursorAdapterSelfTest(
+                "Cursor single-pass: first pass must not cross 8 MiB to public"
+            )
+        }
+        let cp1 = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard cp1?.publicMessageDescriptors.isEmpty == true,
+              cp1?.currentToolDescriptor != nil,
+              cp1?.backscanContinuationOffset != nil
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor single-pass: tool-only pass must persist continuation"
+            )
+        }
+
+        // Call 2: 同一 app lifecycle 的后续显式读取继续从 continuation
+        // 做一个 backward pass，找到最近 public window 后清空 continuation。
+        guard let second = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), second.activityText?.contains("最近公开窗口") == true else {
+            failCursorAdapterSelfTest(
+                "Cursor single-pass: second explicit read must continue to public"
+            )
+        }
+        let cp2 = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard cp2?.publicMessageDescriptors.isEmpty == false,
+              cp2?.backscanContinuationOffset == nil
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor single-pass: public window must clear continuation"
+            )
+        }
+    } catch {
+        failCursorAdapterSelfTest("Cursor single-pass continuation test: \(error)")
     }
 }
 
@@ -948,9 +1402,8 @@ private func runCursorToolSurvivesWindowEvictionSelfTest() {
 
         // Call 2: fresh restart（无追加）。index-hit 恢复后 fragments
         // 仍含 tool（来自 current-tool descriptor 或 public 恢复），
-        // 且最终 projection（legacy bridging 消费 datedEvents）的
-        // currentToolStatus 必须保留 tool——混合数组整体 suffix(32)
-        // 会裁掉中间的 tool。
+        // 且最终 projection 的 currentToolStatus 必须保留 tool；工具状态
+        // 使用独立 descriptor，不受 public message 32 条配额裁剪。
         CursorLocalWorkspace.resetInMemoryStateForTesting()
         guard let second = CursorLocalWorkspace.sessionContent(
             sessionID: sessionID,
@@ -1287,10 +1740,11 @@ private func runCursorColdScanPureThenMixedToolSelfTest() {
     }
 }
 
-/// 跨 8 MiB pass：文件 = pure tool A（旧，pass3） + >4MiB 超限记录
-/// （pass1/pass2 被丢弃，recoveredData < 8MiB 使回扫继续）+ mixed tool B
-/// （新，pass1）。旧逻辑在 pass3 无条件覆盖 descriptor 且拼入 A 的 data，
-/// latestTool 倒退为 A；修复后按最大 startOffset 保留 B。
+/// 跨 8 MiB pass：文件 = user title + pure tool A（旧）+ public message
+/// + >8 MiB pure tool-only tail（最新 Bash 在 EOF）。首个 cold pass 只能
+/// 看到尾部 tool，因此必须保存 continuation；第二次显式读取找到更早
+/// public window 后，activityText 必须来自 public，且 current tool 仍是
+/// 最大 startOffset 的 Bash，不能被更旧的 Read 覆盖。
 private func runCursorColdScanCrossPassToolSelfTest() {
     let manager = FileManager.default
     let temp = manager.temporaryDirectory.appendingPathComponent(
@@ -1322,11 +1776,9 @@ private func runCursorColdScanCrossPassToolSelfTest() {
         CursorLocalWorkspace.resetInMemoryStateForTesting()
         defer { CursorLocalWorkspace.resetInMemoryStateForTesting() }
 
-        // fixture: user → pure Read A → 5 MiB 小 public 记录组 →
-        // 6 MiB oversized 单行（framer 丢弃，制造 pass1 恢复亏空）→
-        // mixed Bash B（EOF，最新）。pass1 恢复 <8 MiB 继续回扫，
-        // pass2 处理 A；旧逻辑无条件覆盖使 A 顶替 B。
-        try manager.createFile(atPath: transcriptURL.path, contents: nil)
+        // fixture: user → pure Read A → public → >8 MiB pure Bash tail。
+        // pass1 只能恢复 tool-only tail；pass2 才能恢复 public + A。
+        _ = manager.createFile(atPath: transcriptURL.path, contents: nil)
         let handle = try FileHandle(forWritingTo: transcriptURL)
         try handle.write(contentsOf: Data(
             "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"标题\"}]}}\n".utf8
@@ -1334,35 +1786,57 @@ private func runCursorColdScanCrossPassToolSelfTest() {
         try handle.write(contentsOf: Data(
             "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"path\":\"/a\"}}]}}\n".utf8
         ))
-        let filler = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + String(repeating: "g", count: 5000) + "\"}]}}\n"
-        var fillerLines: [String] = []
-        for _ in 0..<1000 { fillerLines.append(filler) }
-        try handle.write(contentsOf: Data(fillerLines.joined().utf8))
-        let hugeText = String(repeating: "x", count: 6 * 1_048_576)
-        let hugeRecord = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + hugeText + "\"}]}}\n"
-        try handle.write(contentsOf: Data(hugeRecord.utf8))
         try handle.write(contentsOf: Data(
-            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"跑命令说明\"},{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}]}}\n".utf8
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"跨 pass 公开消息\"}]}}\n".utf8
         ))
+        let payload = String(repeating: "x", count: 1024)
+        var toolTailBytes = 0
+        var index = 0
+        let targetTailBytes =
+            TranscriptReadBudget.transcriptEvents.maximumBytesPerPass
+            + 1_048_576
+        while toolTailBytes < targetTailBytes {
+            let line = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"echo \(index)-\(payload)\"}}]}}\n"
+            try handle.write(contentsOf: Data(line.utf8))
+            toolTailBytes += line.utf8.count
+            index += 1
+        }
         try handle.close()
 
-        guard let content = CursorLocalWorkspace.sessionContent(
+        guard let first = CursorLocalWorkspace.sessionContent(
             sessionID: sessionID,
             projectsRoot: projectsRoot,
             fileManager: manager
-        ), content.title == "标题" else {
+        ), first.activityText?.contains("跨 pass 公开消息") != true else {
             failCursorAdapterSelfTest(
-                "Cursor cross-pass cold: must return content"
+                "Cursor cross-pass cold: first pass must stop before public"
             )
         }
         let store = TranscriptIndexStore(
             rootDirectory: indexRoot,
             fileManager: manager
         )
-        let cp = store.load(agentID: .cursor, sessionKey: sessionID)
-        guard let cp, cp.currentToolDescriptor != nil else {
+        let cp1 = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard let cp1,
+              cp1.currentToolDescriptor != nil,
+              cp1.publicMessageDescriptors.isEmpty,
+              cp1.backscanContinuationOffset != nil
+        else {
             failCursorAdapterSelfTest(
-                "Cursor cross-pass cold: must persist current-tool descriptor"
+                "Cursor cross-pass cold: first pass must persist tool continuation"
+            )
+        }
+
+        guard let content = CursorLocalWorkspace.sessionContent(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: manager
+        ), content.title == "标题",
+           content.activityText?.contains("跨 pass 公开消息") == true,
+           content.activityText?.contains("正在运行命令") != true
+        else {
+            failCursorAdapterSelfTest(
+                "Cursor did not recover public message or leaked tool text"
             )
         }
         let toolFragments = content.fragments.filter { $0.kind == .tool }
@@ -1372,9 +1846,10 @@ private func runCursorColdScanCrossPassToolSelfTest() {
             )
         }
         // checkpoint 的 currentToolDescriptor 必须指向 B（max startOffset）。
-        guard cp.currentToolDescriptor.map({ $0.startOffset })
-                == cp.currentToolDescriptor.map({ $0.startOffset }),
-              toolFragments.last?.text == "正在运行命令"
+        let cp2 = store.load(agentID: .cursor, sessionKey: sessionID)
+        guard cp2?.currentToolDescriptor?.startOffset
+                == cp1.currentToolDescriptor?.startOffset,
+              cp2?.backscanContinuationOffset == nil
         else {
             failCursorAdapterSelfTest(
                 "Cursor cross-pass cold: checkpoint tool descriptor mismatch"

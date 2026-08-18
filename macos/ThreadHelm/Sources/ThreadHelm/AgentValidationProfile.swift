@@ -134,9 +134,9 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
         AgentValidationProfile(
             agentID: .omp,
             testedVersion: "17.3.2",
-            supportedCapabilitiesSummary: "支持：只读状态",
+            supportedCapabilitiesSummary: "支持：状态、原生会话跳转",
             knownLimitation:
-                "限制：不支持审批、输入、取消、导航或精确返回"
+                "限制：跳转通过 resume 发起；精确落点未独立确认"
         ),
     ]
     return Dictionary(uniqueKeysWithValues: profiles.map {

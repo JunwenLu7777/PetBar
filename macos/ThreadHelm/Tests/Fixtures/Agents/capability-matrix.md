@@ -8,7 +8,7 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 | Claude Code | 2.1.226 | `claude --version`, `claude agents --json` | Agent snapshot, top-level transcript, live process, and existing permission hook | Supported: Claude session ID plus a separately checked live process |
 | Cursor | Desktop 3.15.19; Agent CLI 2026.04.15-dccdccd | Application bundle plus separate desktop and Agent CLI commands | The managed hook adapter normalizes official session/tool/stop signals into the bounded local event store; installed-hook replay remains pending | Candidate `session_id` is documented; resumable identity mapping remains unknown until an end-to-end fixture passes |
 | ZCode | 3.7.6 (build 3.7.6.4691) | Application bundle `dev.zcode.app`; bundled CLI exists inside the app | The managed hook adapter observes the documented lifecycle subset without inventing SessionEnd; installed-hook replay remains pending | Unknown; no stable session identity has been proven from this installed version |
-| OMP | 17.3.2 | `omp --version`, installed package, bundled extension documentation | The state-only extension adapter observes session, agent, tool, compact, and shutdown events; `agent_end.willContinue` distinguishes continuing from terminal turns; installed-extension replay remains pending | Candidate session ID/path exists in the CLI; exact mapping remains unknown until an end-to-end fixture passes |
+| OMP | 17.3.2 | `omp --version`, installed package, bundled extension documentation | The classification-only extension observes session, agent, tool, compact, and shutdown events; the GUI separately performs a bounded read of public assistant text and cwd from the matching local transcript; `agent_end.willContinue` distinguishes continuing from terminal turns; installed-extension replay remains pending | Candidate session ID/path exists in the CLI; exact mapping remains unknown until an end-to-end fixture passes |
 
 ## Exact return
 
@@ -18,7 +18,7 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 | Claude Code | Exact only when a matching live process plus process-start identity is located at its exact terminal tab. Launching `claude --resume` remains Unknown until the destination identity is checked independently. |
 | Cursor | Unknown. `cursor agent --resume [chatId]` exists, but arbitrary desktop-session mapping is not proven. |
 | ZCode | Unknown. The `zcode` URL scheme and bundled CLI do not prove arbitrary-session return. |
-| OMP | Unsupported by the state-only adapter. `--resume` and `--session` exist, but ThreadHelm does not call them. |
+| OMP | Unknown. ThreadHelm dispatches `omp --resume <session-id>` in the preferred terminal, but does not independently confirm the destination session. |
 
 ## Fallback return
 
@@ -28,7 +28,7 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 | Claude Code | Resume by session when possible, then open the recorded project location in a terminal as an explicitly labeled fallback. |
 | Cursor | Open/focus Cursor or open a project location; do not report an arbitrary IDE window as exact. |
 | ZCode | Focus ZCode, then use a project-location fallback only when locally available. |
-| OMP | Unsupported in the first state-only adapter. ThreadHelm does not focus a terminal, navigate, or call OMP session APIs. |
+| OMP | Open the preferred terminal and dispatch the native session resume target; existing-terminal process focus remains unsupported. |
 
 ## Permission / question / plan
 
@@ -38,7 +38,7 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 | Claude Code | Existing ThreadHelm behavior supports a bounded local permission/question/plan queue and the verified in-app response path. |
 | Cursor | Native handling only in the first local adapter. Detection of blocked/input states is unknown until an official payload proves it. |
 | ZCode | PermissionRequest exists in bundled hook documentation, but the first local adapter intentionally does not register or intercept it. Question/plan semantics are unknown. |
-| OMP | Unsupported by ThreadHelm. The first adapter is state-only and must not invoke approval, message, cancellation, navigation, or session-mutation APIs. |
+| OMP | ThreadHelm may dispatch resume navigation, but must not invoke approval, message, cancellation, or other session-control APIs. |
 
 ## Quota
 
@@ -88,14 +88,16 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 | Claude Code | Permission, question, plan approval, task-level failure | Running, ordinary tool failure, completion/review-ready, idle |
 | Cursor | Verified task-level failure only; blocked/input remains unknown | Lifecycle churn, ordinary tool failure, completion/review-ready |
 | ZCode | Verified task-level failure only in the first adapter | Lifecycle churn, ordinary tool failure, completion/review-ready |
-| OMP | Verified terminal `agent_end` task-level failure only; state-only | Lifecycle churn, continuing `agent_end`, ordinary tool failure, completion/review-ready |
+| OMP | Verified terminal `agent_end` task-level failure only; no approval/input interception | Lifecycle churn, continuing `agent_end`, ordinary tool failure, completion/review-ready |
 
 ## Unsupported or unknown
 
 - Cursor cloud agents are out of scope; Cursor in-app approval and arbitrary IDE-session deep links are not claimed.
 - ZCode user CLI configuration was absent at capture time. Its absence does not mean ZCode is uninstalled, and discovery must not create the file.
 - ZCode exact return, already-running-session hook pickup, question/plan semantics, and SessionEnd are unknown or unavailable in the observed surface.
-- OMP approval, input injection, cancellation, navigation, exact return, and other session mutation are intentionally unsupported.
+- OMP approval, input injection, cancellation, and other session controls remain unsupported. Resume navigation is supported; exact landing remains unknown.
+- OMP transcript projection is local and read-only: public assistant text and cwd are allowed after redaction; thinking, tool arguments, tool results, raw JSON payloads, and detected credentials are excluded.
+- Version drift does not change an observed waiting/running classification; it limits capability claims, automatic interaction, and interrupting attention.
 - No adapter may turn a normal tool failure into a task failure, an app focus into exact success, or an inferred state into official evidence.
 
 This matrix must be revalidated whenever any listed installed version changes.

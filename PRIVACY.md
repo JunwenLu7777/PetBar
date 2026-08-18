@@ -14,8 +14,8 @@
 - Claude Code 只在 `~/.claude/settings.json` 管理自己的 `PermissionRequest` Hook；Cursor 只在 `~/.cursor/hooks.json` 管理带所有权标记的生命周期 Hook；ZCode 只在 `~/.zcode/cli/config.json` 管理状态观察 Hook；OMP 只管理 `~/.omp/agent/extensions/threadhelm-state-observer/`。所有非 ThreadHelm 条目和显式禁用设置都会保留。
 - Claude 额度探针禁用工具、使用固定隔离会话和独立缓存目录，并清理探针自己生成的 transcript；ThreadHelm 不记录或展示探针原始终端输出。
 - 启用 Claude Code 权限确认 Hook 时，ThreadHelm 会在 `~/.claude/settings.json` 的 ThreadHelm HTTP Hook 条目中写入一个随机安装 token，并要求本机 `127.0.0.1:27841/threadhelm/claude/permission` 请求携带 `X-ThreadHelm-Hook-Token` header。该 token 只用于本机 Hook 请求鉴权，不写入 ThreadHelm 日志、不上传，也不会包含在返回给 Claude 的 Hook 响应中。Hook 服务只监听 `127.0.0.1`，单次请求正文上限为 256 KiB，待处理请求队列上限为 16 个。
-- 任务状态在本机读取 Codex 会话状态，以及 Claude CLI `agents --json` 与 `~/.claude/projects` 下的顶层会话 transcript，用于显示执行中、等待确认、已完成和执行失败。
-- Claude 任务只提取公开的 assistant `text` 作为悬停预览；不读取或展示 thinking、工具参数和原始工具输出，也会排除 subagent 与 ThreadHelm 额度探针 transcript。
+- 任务状态会在本机有界、只读地读取 Codex、Claude Code/Desktop、Cursor 和 OMP 的原生 transcript；ZCode 继续只使用 classification-only Hook 事件。ThreadHelm 只把完整 JSONL record 交给对应 Agent 解码器，并仅展示经过脱敏的公开 assistant 文本；不展示 thinking、工具参数、工具结果或原始 Hook payload。Claude 路径还会排除 subagent 与 ThreadHelm 额度探针 transcript。
+- 为恢复大 transcript 中的最近公开消息，ThreadHelm 会在 `~/Library/Application Support/ThreadHelm/Transcript Index/v1/` 保存可重建的 metadata-only 索引。目录和文件权限分别为 `0700`、`0600`，根目录排除系统备份，单文件最大 512 KiB。索引只含文件身份、byte range、offset、事件分类和计数；不含正文、标题、cwd、工具名、工具参数/结果、thinking、partial bytes、原始 session ID、SQLite 字段或 Hook payload，也不写日志、不上传。索引损坏、权限过宽、源文件替换或删除时会被安全丢弃或清理。
 - 任务名称、任务文字、已读状态、额度百分比和重置时间不写入 ThreadHelm 日志，也不上传。
 - 用户主动打开任务时，ThreadHelm 会在 `~/Library/Application Support/ThreadHelm/open-measurements-v1.json` 记录仅由 Agent 类型、打开结果类型和数字组成的本地汇总计数，用于区分精确返回、应用聚焦、目录 fallback、未知和不可用。该文件权限为当前用户只读写（`0600`），不含标题、提示词、命令、路径、session/thread ID、时间线或时间戳，也不上传。
 - 安装、修复、卸载或手工恢复受管集成前，ThreadHelm 会在 `~/Library/Application Support/ThreadHelm/Integration Backups/` 保存本机恢复点。更新期间还会在 `~/Library/Application Support/ThreadHelm/Install Transactions/` 临时保存旧 App、LaunchAgent、健康文件和 Codex 本机状态；成功或完整回滚后删除，回滚不完整时保留并打印路径供手工恢复。备份和事务目录权限为 `0700`，清单为 `0600`；其中可能包含原厂商配置或 Codex 本机状态中已有的私密值，只留在本机，不写日志、不上传。

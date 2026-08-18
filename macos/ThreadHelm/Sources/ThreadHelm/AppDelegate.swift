@@ -906,7 +906,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                   permissionQueue: dashboardStore.snapshot.permissionQueue
               )
         else { return .unavailable }
-        let report = adapter.openSessionForValidatedVersion(session: snapshot) {
+        let report = adapter.openSessionIfInstalled(session: snapshot) {
             if item.source == .claudeCode {
                 lastClaudePermissionOpenResult = nil
                 if claudePermissionCoordinator?

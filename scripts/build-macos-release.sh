@@ -101,13 +101,15 @@ verify_app_self_tests() {
     '--self-test-claude-hook|claude-hook-self-test:'
     '--self-test-client-contract|client-contract-self-test:'
     '--self-test-threadhelm-edition|threadhelm-edition-self-test:'
+    '--self-test-transcript-events|transcript-events-self-test:'
+    '--self-test-large-window-regression|large-window-regression:'
     '--self-test-dynamic-island|dynamic-island:'
     '--self-test-agent-integration-manager|agent-integration-manager-self-test:'
   )
   for check in "${checks[@]}"; do
     flag="${check%%|*}"
     marker="${check#*|}"
-    output="$("$binary" "$flag")" \
+    output="$("$binary" "$flag" 2>&1)" \
       || fail "ThreadHelm App self-test failed: $flag"
     [[ "$output" == *"$marker"* ]] \
       || fail "ThreadHelm App self-test summary is incomplete: $flag"

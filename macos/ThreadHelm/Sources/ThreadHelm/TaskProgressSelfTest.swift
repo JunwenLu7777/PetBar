@@ -19,6 +19,8 @@ func runTaskProgressSelfTest() -> Never {
     let started = #"{"type":"event_msg","payload":{"type":"task_started"}}"#
     runAgentIntegrationSelfTest()
     runTaskProgressSelfTestPhase1(now: now, started: started)
+    runCodexClaudeTranscriptProviderRegressionSelfTest(now: now, started: started)
+    runCodexClaudeAtomicReplaceCacheSelfTest()
     runCodexTailMetadataBackfillSelfTest(now: now, started: started)
     runTaskProgressSelfTestPhase2(now: now, started: started)
     runTaskProgressRefreshGateSelfTest()
@@ -30,7 +32,7 @@ func runTaskProgressSelfTest() -> Never {
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
     runDiscoveryCacheAndAutoIntegrationBackoffSelfTest()
-    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
+    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; provider-atomic-replace=codex+claude; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
     exit(0)
 }
 
@@ -420,6 +422,9 @@ private func runClaudeDesktopTaskDiscoverySelfTest() {
 
     let reader = ClaudeTaskProgressReader(
         homeDirectory: home,
+        indexRootDirectory: home.appendingPathComponent(
+            "transcript-index", isDirectory: true
+        ),
         environment: [:],
         claudeExecutable: { nil },
         now: { currentTime }
@@ -484,7 +489,11 @@ private func runCodexTailMetadataBackfillSelfTest(now: Date, started: String) {
     }
 
     setenv(environmentKey, rolloutURL.path, 1)
-    let item = CodexTaskProgressReader().readCollection().items.first
+    let item = CodexTaskProgressReader(
+        indexRootDirectory: directory.appendingPathComponent(
+            "transcript-index", isDirectory: true
+        )
+    ).readCollection().items.first
     guard item?.workingDirectory == "/tmp/threadhelm-tail-project",
           item?.activityText == "正在验证大型会话"
     else {
@@ -644,6 +653,333 @@ private func runRuntimeHealthWriterFailureSelfTest() {
           messages[0].contains("ThreadHelm health write failed")
     else {
         fputs("runtime health writer failure logging failed\n", stderr)
+        exit(1)
+    }
+}
+
+private func runCodexClaudeTranscriptProviderRegressionSelfTest(
+    now: Date,
+    started: String
+) {
+    let duplicateA = #"{"timestamp":"2026-07-25T10:02:00Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"重复公开消息"}}"#
+    let duplicateB = #"{"timestamp":"2026-07-25T10:03:00Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"重复公开消息"}}"#
+    let duplicateCodex = CodexTaskProgressReader.parse(
+        lines: [started, duplicateA, duplicateB],
+        modificationDate: now,
+        now: now
+    )
+    guard duplicateCodex.items.first?.projection.publicMessages.map(\.text)
+        == ["重复公开消息", "重复公开消息"]
+    else {
+        fputs("Codex duplicate public messages with different source records were collapsed\n", stderr)
+        exit(1)
+    }
+
+    var boundedCodex = CodexTaskProgressReader.CodexReducerState(
+        modificationDate: now
+    )
+    boundedCodex.apply(started)
+    let longText = String(repeating: "甲", count: 5_000)
+    for index in 0..<40 {
+        boundedCodex.apply(
+            #"{"timestamp":"2026-07-25T10:\#(String(format: "%02d", index % 60)):00Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"\#(longText)"}}"#
+        )
+    }
+    for index in 0..<80 {
+        boundedCodex.apply(
+            #"{"timestamp":"2026-07-25T11:\#(String(format: "%02d", index % 60)):00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"tool-\#(index)"}}"#
+        )
+    }
+    let boundedCodexItem = boundedCodex.snapshot(
+        modificationDate: now,
+        now: now,
+        sessionKey: "codex-budget"
+    ).items.first
+    guard let boundedProjection = boundedCodexItem?.projection,
+          boundedProjection.publicMessages.count == 32,
+          boundedProjection.publicMessages.allSatisfy({
+              $0.text.utf8.count <= AgentActivityBudget.maximumPublicMessageBytes
+          }),
+          (boundedCodexItem?.activityText?.utf8.count ?? 0)
+              <= AgentActivityBudget.maximumPublicMessagesTotalBytes
+                + AgentActivityBudget.maximumToolStatusBytes
+    else {
+        fputs("Codex reducer public/tool/text budgets failed\n", stderr)
+        exit(1)
+    }
+
+    let fileManager = FileManager.default
+    let temp = fileManager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-provider-regression-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    do {
+        try fileManager.createDirectory(
+            at: temp,
+            withIntermediateDirectories: true
+        )
+        defer { try? fileManager.removeItem(at: temp) }
+        let transcriptURL = temp.appendingPathComponent("rollout-test.jsonl")
+        let publicLine = duplicateA + "\n"
+        let toolLines = (0..<40).map {
+            #"{"timestamp":"2026-07-25T10:10:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"tool-tail-\#($0)"}}"#
+        }.joined(separator: "\n") + "\n"
+        try Data((publicLine + toolLines).utf8).write(to: transcriptURL)
+        guard let reader = TranscriptEventReader.make(at: transcriptURL),
+              case .success(let records) = reader.readForwardPass()
+        else {
+            fputs("provider regression transcript reader failed\n", stderr)
+            exit(1)
+        }
+        var reducer = CodexTaskProgressReader.CodexReducerState(
+            modificationDate: now
+        )
+        var publicDescriptors: [TranscriptRecordLocation] = []
+        for record in records {
+            guard let line = String(data: record.data, encoding: .utf8) else {
+                continue
+            }
+            let location = TranscriptRecordLocation(
+                startOffset: record.startOffset,
+                byteCount: UInt32(record.byteCount),
+                sourceOrder: record.sourceOrder,
+                eventClass: .publicMessage,
+                occurredAt: nil
+            )
+            if reducer.apply(
+                line,
+                location: location,
+                sessionKey: "stable-session"
+            ) == .publicMessage {
+                publicDescriptors.append(location)
+            }
+        }
+        let item = reducer.snapshot(
+            modificationDate: now,
+            now: now,
+            sessionKey: "stable-session"
+        ).items.first
+        guard publicDescriptors.count == 1,
+              item?.projection.publicMessages.first?.id.stableSourceKey
+                == "bytes-\(publicDescriptors[0].startOffset)-\(publicDescriptors[0].byteCount)",
+              item?.projection.publicMessages.first?.id.sessionKey
+                == "stable-session"
+        else {
+            fputs("Codex provider descriptor classification or stable byte ID failed\n", stderr)
+            exit(1)
+        }
+    } catch {
+        fputs("provider regression fixture setup failed: \(error)\n", stderr)
+        exit(1)
+    }
+
+    let claudeSessionID = "2af8c2f6-1fd8-4d55-94dd-57efbb866c7b"
+    var claudeReducer = ClaudeTaskProgressReader.ClaudeReducerState(
+        modificationDate: now
+    )
+    claudeReducer.apply(
+        #"{"type":"assistant","timestamp":"2026-07-25T10:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Claude 必须保留的公开消息"}]}}"#,
+        modificationDate: now,
+        location: TranscriptRecordLocation(
+            startOffset: 10,
+            byteCount: 20,
+            sourceOrder: 1,
+            eventClass: .publicMessage,
+            occurredAt: nil
+        ),
+        sessionKey: claudeSessionID
+    )
+    for index in 0..<80 {
+        claudeReducer.apply(
+            #"{"type":"assistant","timestamp":"2026-07-25T10:10:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-\#(index)","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#,
+            modificationDate: now,
+            sessionKey: claudeSessionID
+        )
+    }
+    let claudeItem = claudeReducer.buildItem(
+        sessionID: claudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/claude",
+        processID: nil,
+        processStartIdentity: nil,
+        activeKind: .running,
+        startedAt: now,
+        modificationDate: now,
+        now: now,
+        statusOverride: nil,
+        allowsAgentOpen: true
+    )
+    guard claudeItem?.projection.publicMessages.first?.text
+            == "Claude 必须保留的公开消息",
+          claudeItem?.projection.publicMessages.first?.id.stableSourceKey
+            == "bytes-10-20",
+          claudeReducer.activeTools.count == 32
+    else {
+        fputs("Claude reducer budget or stable byte ID failed\n", stderr)
+        exit(1)
+    }
+}
+
+private func runCodexClaudeAtomicReplaceCacheSelfTest() {
+    let manager = FileManager.default
+    let temp = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-provider-replace-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let rolloutEnvironmentKey = "THREADHELM_TASK_ROLLOUT_FILE"
+    let previousRollout = getenv(rolloutEnvironmentKey).map {
+        String(cString: $0)
+    }
+    defer {
+        if let previousRollout {
+            setenv(rolloutEnvironmentKey, previousRollout, 1)
+        } else {
+            unsetenv(rolloutEnvironmentKey)
+        }
+        try? manager.removeItem(at: temp)
+    }
+
+    do {
+        try manager.createDirectory(at: temp, withIntermediateDirectories: true)
+        let fixedDate = Date()
+        let indexRoot = temp.appendingPathComponent("index", isDirectory: true)
+
+        let codexSessionID = "11111111-2222-4333-8444-555555555555"
+        let codexURL = temp.appendingPathComponent(
+            "rollout-2026-08-18T00-00-00-\(codexSessionID).jsonl"
+        )
+        func codexData(_ text: String) -> Data {
+            let lines = [
+                #"{"type":"session_meta","payload":{"cwd":"/private/tmp/threadhelm-\#(text)","thread_source":"root"}}"#,
+                #"{"timestamp":"2026-08-18T00:00:00Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+                #"{"timestamp":"2026-08-18T00:00:01Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"\#(text)"}}"#,
+            ]
+            return Data((lines.joined(separator: "\n") + "\n").utf8)
+        }
+        let codexFirstData = codexData("AAAA")
+        let codexReplacementData = codexData("BBBB")
+        guard codexFirstData.count == codexReplacementData.count else {
+            fputs("Codex atomic replace fixtures differ in size\n", stderr)
+            exit(1)
+        }
+        try codexFirstData.write(to: codexURL)
+        try manager.setAttributes(
+            [.modificationDate: fixedDate],
+            ofItemAtPath: codexURL.path
+        )
+        setenv(rolloutEnvironmentKey, codexURL.path, 1)
+        guard let codexFirstIdentity = TranscriptEventReader.make(
+            at: codexURL
+        )?.identity else {
+            fputs("Codex atomic replace identity setup failed\n", stderr)
+            exit(1)
+        }
+        let codexReader = CodexTaskProgressReader(indexRootDirectory: indexRoot)
+        let codexFirst = codexReader.readCollection().items.first
+        guard codexFirst?.projection.publicMessages.contains(where: {
+            $0.text.contains("AAAA")
+        }) == true,
+              codexFirst?.workingDirectory == "/private/tmp/threadhelm-AAAA"
+        else {
+            fputs("Codex atomic replace initial projection failed\n", stderr)
+            exit(1)
+        }
+        try codexReplacementData.write(to: codexURL, options: .atomic)
+        try manager.setAttributes(
+            [.modificationDate: fixedDate],
+            ofItemAtPath: codexURL.path
+        )
+        guard TranscriptEventReader.make(at: codexURL)?.identity
+                != codexFirstIdentity,
+              let codexReplacement = codexReader.readCollection().items.first,
+              codexReplacement.projection.publicMessages.contains(where: {
+                  $0.text.contains("BBBB")
+              }),
+              !codexReplacement.projection.publicMessages.contains(where: {
+                  $0.text.contains("AAAA")
+              }),
+              codexReplacement.workingDirectory
+                == "/private/tmp/threadhelm-BBBB"
+        else {
+            fputs("Codex same-size atomic replace reused stale cache\n", stderr)
+            exit(1)
+        }
+
+        let claudeSessionID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        let claudeProject = temp
+            .appendingPathComponent("claude-home", isDirectory: true)
+            .appendingPathComponent(".claude/projects/test", isDirectory: true)
+        let claudeURL = claudeProject.appendingPathComponent(
+            "\(claudeSessionID).jsonl"
+        )
+        try manager.createDirectory(
+            at: claudeProject,
+            withIntermediateDirectories: true
+        )
+        func claudeData(_ text: String) -> Data {
+            let lines = [
+                #"{"type":"user","message":{"role":"user","content":"Replace cache test"}}"#,
+                #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\#(text)"}],"stop_reason":"end_turn"}}"#,
+            ]
+            return Data((lines.joined(separator: "\n") + "\n").utf8)
+        }
+        let claudeFirstData = claudeData("AAAA")
+        let claudeReplacementData = claudeData("BBBB")
+        guard claudeFirstData.count == claudeReplacementData.count else {
+            fputs("Claude atomic replace fixtures differ in size\n", stderr)
+            exit(1)
+        }
+        try claudeFirstData.write(to: claudeURL)
+        try manager.setAttributes(
+            [.modificationDate: fixedDate],
+            ofItemAtPath: claudeURL.path
+        )
+        guard let claudeFirstIdentity = TranscriptEventReader.make(
+            at: claudeURL
+        )?.identity else {
+            fputs("Claude atomic replace identity setup failed\n", stderr)
+            exit(1)
+        }
+        let claudeHome = temp.appendingPathComponent(
+            "claude-home", isDirectory: true
+        )
+        let claudeReader = ClaudeTaskProgressReader(
+            homeDirectory: claudeHome,
+            indexRootDirectory: indexRoot,
+            environment: [:],
+            claudeExecutable: { nil },
+            now: { fixedDate }
+        )
+        guard claudeReader.readCollection().items.first(where: {
+            $0.sessionID == claudeSessionID
+        })?.projection.publicMessages.contains(where: {
+            $0.text.contains("AAAA")
+        }) == true else {
+            fputs("Claude atomic replace initial projection failed\n", stderr)
+            exit(1)
+        }
+        try claudeReplacementData.write(to: claudeURL, options: .atomic)
+        try manager.setAttributes(
+            [.modificationDate: fixedDate],
+            ofItemAtPath: claudeURL.path
+        )
+        let claudeReplacement = claudeReader.readCollection().items.first {
+            $0.sessionID == claudeSessionID
+        }
+        guard TranscriptEventReader.make(at: claudeURL)?.identity
+                != claudeFirstIdentity,
+              claudeReplacement?.projection.publicMessages.contains(where: {
+                  $0.text.contains("BBBB")
+              }) == true,
+              claudeReplacement?.projection.publicMessages.contains(where: {
+                  $0.text.contains("AAAA")
+              }) != true
+        else {
+            fputs("Claude same-size atomic replace reused stale cache\n", stderr)
+            exit(1)
+        }
+    } catch {
+        fputs("Codex/Claude atomic replace cache fixture failed: \(error)\n", stderr)
         exit(1)
     }
 }

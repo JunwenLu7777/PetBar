@@ -2,7 +2,7 @@
 //  OMPAgentAdapter.swift
 //  ThreadHelm
 //
-//  模块职责：OMP 的本地只读发现、隔离 extension 生命周期和 state-only 事件归一化。
+//  模块职责：OMP 的本地发现、隔离 extension 生命周期、状态归一化和会话跳转。
 //
 
 import Foundation
@@ -12,6 +12,7 @@ struct OMPAgentAdapter: AgentAdapter {
     private let discoveryProvider: () -> AgentDiscovery
     private let readEvents: () throws -> [AgentEvent]
     private let executablePath: () -> String
+    private let resumeSession: (String) -> Bool
 
     var managedIntegrationRelativePaths: [String] {
         [".omp/agent/extensions/threadhelm-state-observer"]
@@ -29,12 +30,14 @@ struct OMPAgentAdapter: AgentAdapter {
         readEvents: @escaping () throws -> [AgentEvent] = { [] },
         executablePath: @escaping () -> String = {
             Bundle.main.executableURL?.path ?? "/usr/bin/true"
-        }
+        },
+        resumeSession: @escaping (String) -> Bool = openOMPSession
     ) {
         self.metadata = metadata!
         discoveryProvider = discovery
         self.readEvents = readEvents
         self.executablePath = executablePath
+        self.resumeSession = resumeSession
     }
 
     func discover() -> AgentDiscovery {
@@ -108,11 +111,23 @@ struct OMPAgentAdapter: AgentAdapter {
     }
 
     func openValidated(session: AgentSessionSnapshot) -> AgentOpenReport {
-        AgentOpenReport(
+        guard session.identity.agentID == .omp,
+              normalizedOMPSessionID(session.identity.nativeID) != nil
+        else {
+            return AgentOpenReport(
+                agentID: metadata.id,
+                advertisedActionability: session.actionability,
+                result: .unavailable,
+                invokedExactTarget: false,
+                independentlyConfirmedIdentity: false
+            )
+        }
+        let didLaunch = resumeSession(session.identity.nativeID)
+        return AgentOpenReport(
             agentID: metadata.id,
             advertisedActionability: session.actionability,
-            result: .unavailable,
-            invokedExactTarget: false,
+            result: didLaunch ? .unknown : .failed,
+            invokedExactTarget: didLaunch,
             independentlyConfirmedIdentity: false
         )
     }
@@ -382,7 +397,9 @@ private func ompStateOnlyEvent(_ event: AgentEvent) -> AgentEvent? {
         monotonicNanoseconds: event.monotonicNanoseconds,
         executionState: state,
         attentionReason: reason,
-        actionability: .viewOnly,
+        actionability: normalizedOMPSessionID(event.identity.nativeID) != nil
+            ? .openExactNativeSession
+            : .viewOnly,
         evidenceQuality: event.evidenceQuality,
         freshness: event.freshness,
         title: "OMP 会话",
@@ -415,7 +432,9 @@ func ompAgentEvent(
     } else {
         reason = .none
     }
-    let actionability = Actionability.viewOnly
+    let actionability: Actionability = envelope.nativeSessionCandidate.flatMap {
+        normalizedOMPSessionID($0) != nil ? .openExactNativeSession : nil
+    } ?? .viewOnly
     let evidence = envelope.redactedPayload["evidenceQuality"]
         .flatMap { EvidenceQuality(rawValue: $0) } ?? .officialHook
     let freshnessClass = envelope.redactedPayload["freshness"] ?? "fresh"

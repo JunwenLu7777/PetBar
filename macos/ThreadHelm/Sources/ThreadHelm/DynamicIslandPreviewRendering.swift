@@ -424,10 +424,20 @@ private func dynamicIslandPreviewTasks(now: Date) -> (
     completed: TaskProgressItem,
     failed: TaskProgressItem
 ) {
-    func event(_ minutesAgo: TimeInterval, _ text: String) -> TaskActivityEvent {
-        TaskActivityEvent(
-            kind: .commentary,
+    func publicMessage(
+        _ minutesAgo: TimeInterval,
+        _ text: String,
+        source: AgentID,
+        sessionKey: String
+    ) -> AgentActivityEntry {
+        AgentActivityEntry(
+            id: AgentActivityEventID(
+                source: source,
+                sessionKey: sessionKey,
+                stableSourceKey: "message-\(Int(minutesAgo * 60))"
+            ),
             occurredAt: now.addingTimeInterval(-minutesAgo * 60),
+            sourceOrder: UInt64(minutesAgo * 60),
             text: text
         )
     }
@@ -440,21 +450,50 @@ private func dynamicIslandPreviewTasks(now: Date) -> (
         activityText: "正在运行验证并整理结果",
         threadID: "thread-threadhelm-dynamic-island",
         workingDirectory: dynamicIslandPreviewWorkingDirectory,
-        events: [
-            event(9, "读取 Dynamic Island 计划"),
-            event(8, "核对 Codex 与 Claude 的公开活动事件映射"),
-            event(7, "更新任务筛选与运行状态识别"),
-            event(6, "运行构建检查"),
-            event(
+        projection: AgentActivityProjection(publicMessages: [
+            publicMessage(
+                9,
+                "读取 Dynamic Island 计划",
+                source: .codex,
+                sessionKey: "thread-threadhelm-dynamic-island"
+            ),
+            publicMessage(
+                8,
+                "核对 Codex 与 Claude 的公开活动事件映射",
+                source: .codex,
+                sessionKey: "thread-threadhelm-dynamic-island"
+            ),
+            publicMessage(
+                7,
+                "更新任务筛选与运行状态识别",
+                source: .codex,
+                sessionKey: "thread-threadhelm-dynamic-island"
+            ),
+            publicMessage(
+                6,
+                "运行构建检查",
+                source: .codex,
+                sessionKey: "thread-threadhelm-dynamic-island"
+            ),
+            publicMessage(
                 4,
-                "验证长活动内容完整换行显示，不截断公开输出，并保留所有安全事件供滚动查看"
+                "验证长活动内容完整换行显示，不截断公开输出，并保留所有安全事件供滚动查看",
+                source: .codex,
+                sessionKey: "thread-threadhelm-dynamic-island"
             ),
-            event(2, "检查模型图标、按钮间距与额度页面布局"),
-            event(
+            publicMessage(
+                2,
+                "检查模型图标、按钮间距与额度页面布局",
+                source: .codex,
+                sessionKey: "thread-threadhelm-dynamic-island"
+            ),
+            publicMessage(
                 1,
-                "正在整理本地验证摘要，核对构建、自测、隐私检查与界面预览结果；继续检查 Codex 与 Claude 最新公开输出是否及时替换；确认长内容不再按字符截断，并通过滚动区域保留全部细节；最后汇总任务状态、开始时间、持续时间和所有安全事件"
+                "正在整理本地验证摘要，核对构建、自测、隐私检查与界面预览结果；继续检查 Codex 与 Claude 最新公开输出是否及时替换；确认长内容不再按字符截断，并通过滚动区域保留全部细节；最后汇总任务状态、开始时间、持续时间和所有安全事件",
+                source: .codex,
+                sessionKey: "thread-threadhelm-dynamic-island"
             ),
-        ]
+        ])
     )
     let waiting = TaskProgressItem(
         title: "确认 Claude 操作",
@@ -465,7 +504,14 @@ private func dynamicIslandPreviewTasks(now: Date) -> (
         activityText: "等待工具授权",
         sessionID: "87654321-4321-4321-4321-cba987654321",
         workingDirectory: dynamicIslandPreviewWorkingDirectory,
-        events: [event(2, "Claude 请求确认下一步")]
+        projection: AgentActivityProjection(
+            publicMessages: [publicMessage(
+                2,
+                "Claude 请求确认下一步",
+                source: .claudeCode,
+                sessionKey: "87654321-4321-4321-4321-cba987654321"
+            )]
+        )
     )
     let completed = TaskProgressItem(
         title: "生成设计快照",
@@ -475,7 +521,14 @@ private func dynamicIslandPreviewTasks(now: Date) -> (
         source: .codex,
         threadID: "thread-threadhelm-preview-done",
         workingDirectory: dynamicIslandPreviewWorkingDirectory,
-        events: [event(14, "预览矩阵已生成")]
+        projection: AgentActivityProjection(
+            publicMessages: [publicMessage(
+                14,
+                "预览矩阵已生成",
+                source: .codex,
+                sessionKey: "thread-threadhelm-preview-done"
+            )]
+        )
     )
     let failed = TaskProgressItem(
         title: "同步远端状态",
@@ -486,7 +539,14 @@ private func dynamicIslandPreviewTasks(now: Date) -> (
         activityText: "终端返回错误，等待查看",
         sessionID: "12345678-1234-1234-1234-123456789abc",
         workingDirectory: dynamicIslandPreviewWorkingDirectory,
-        events: [event(9, "命令退出，需要人工确认")]
+        projection: AgentActivityProjection(
+            publicMessages: [publicMessage(
+                9,
+                "命令退出，需要人工确认",
+                source: .claudeCode,
+                sessionKey: "12345678-1234-1234-1234-123456789abc"
+            )]
+        )
     )
     return (running, waiting, completed, failed)
 }

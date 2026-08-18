@@ -1146,7 +1146,7 @@ private struct AgentTruthSignalNormalizer {
         case .cursor, .zcode:
             return .openNativeApp
         case .omp:
-            return .viewOnly
+            return .openExactNativeSession
         default:
             return .viewOnly
         }
@@ -1231,13 +1231,10 @@ private struct AgentTruthSignalNormalizer {
             invokedExactTarget = true
             confirmed = true
         case .returnUnknown:
-            if agentID == .omp {
-                result = .unavailable
-                invokedExactTarget = false
-            } else {
-                result = .unknown
-                invokedExactTarget = agentID == .codex || agentID == .claudeCode
-            }
+            result = .unknown
+            invokedExactTarget = agentID == .codex
+                || agentID == .claudeCode
+                || agentID == .omp
             confirmed = false
         case .appFallback:
             result = .appFocused

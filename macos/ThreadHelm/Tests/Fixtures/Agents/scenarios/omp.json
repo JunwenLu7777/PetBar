@@ -30,7 +30,7 @@
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "session_start lifecycle event with synthetic identity candidate"},
-      "expected": {"executionState": "idle", "attentionReason": "none", "actionability": "viewOnly", "evidenceQuality": "officialHook", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
+      "expected": {"executionState": "idle", "attentionReason": "none", "actionability": "openExactNativeSession", "evidenceQuality": "officialHook", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
       "evidence": [{"kind": "bundledDocumentation", "reference": "OMP extensions documentation: session_start"}],
       "explicitUnknowns": ["Exact resume mapping is not proven end to end."]
     },
@@ -43,7 +43,7 @@
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "agent_start lifecycle event"},
-      "expected": {"executionState": "running", "attentionReason": "none", "actionability": "viewOnly", "evidenceQuality": "officialHook", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
+      "expected": {"executionState": "running", "attentionReason": "none", "actionability": "openExactNativeSession", "evidenceQuality": "officialHook", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
       "evidence": [{"kind": "bundledDocumentation", "reference": "OMP extensions documentation: agent_start"}],
       "explicitUnknowns": []
     },
@@ -56,7 +56,7 @@
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "tool_call lifecycle event; arguments excluded"},
-      "expected": {"executionState": "running", "attentionReason": "none", "actionability": "viewOnly", "evidenceQuality": "officialHook", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
+      "expected": {"executionState": "running", "attentionReason": "none", "actionability": "openExactNativeSession", "evidenceQuality": "officialHook", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
       "evidence": [{"kind": "bundledDocumentation", "reference": "OMP extensions documentation: tool_call"}],
       "explicitUnknowns": []
     },
@@ -69,7 +69,7 @@
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "tool_result classified failed; later agent activity possible"},
-      "expected": {"executionState": "running", "attentionReason": "none", "actionability": "viewOnly", "evidenceQuality": "inferred", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
+      "expected": {"executionState": "running", "attentionReason": "none", "actionability": "openExactNativeSession", "evidenceQuality": "inferred", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
       "evidence": [{"kind": "syntheticPolicy", "reference": "truth specification: ordinary tool failure is not task failure"}],
       "explicitUnknowns": []
     },
@@ -82,7 +82,7 @@
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "agent_end observed with willContinue=true"},
-      "expected": {"executionState": "running", "attentionReason": "none", "actionability": "viewOnly", "evidenceQuality": "officialHook", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
+      "expected": {"executionState": "running", "attentionReason": "none", "actionability": "openExactNativeSession", "evidenceQuality": "officialHook", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
       "evidence": [{"kind": "bundledDocumentation", "reference": "OMP agent_end event: willContinue=true"}],
       "explicitUnknowns": []
     },
@@ -95,7 +95,7 @@
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "agent_end with willContinue=false and no assistant error"},
-      "expected": {"executionState": "completed", "attentionReason": "reviewReady", "actionability": "viewOnly", "evidenceQuality": "officialHook", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
+      "expected": {"executionState": "completed", "attentionReason": "reviewReady", "actionability": "openExactNativeSession", "evidenceQuality": "officialHook", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "nonInterrupt"},
       "evidence": [{"kind": "bundledDocumentation", "reference": "OMP agent_end event: willContinue and assistant stopReason"}],
       "explicitUnknowns": []
     },
@@ -108,7 +108,7 @@
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "agent_end with willContinue=false and final assistant stopReason=error"},
-      "expected": {"executionState": "failed", "attentionReason": "taskFailure", "actionability": "viewOnly", "evidenceQuality": "inferred", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "interrupt"},
+      "expected": {"executionState": "failed", "attentionReason": "taskFailure", "actionability": "openExactNativeSession", "evidenceQuality": "inferred", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "interrupt"},
       "evidence": [{"kind": "syntheticPolicy", "reference": "truth specification verified terminal agent_end task-failure rule"}],
       "explicitUnknowns": []
     },
@@ -121,7 +121,7 @@
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "same session candidate and terminal agent_end task failure repeated"},
-      "expected": {"executionState": "failed", "attentionReason": "taskFailure", "actionability": "viewOnly", "evidenceQuality": "inferred", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "interrupt"},
+      "expected": {"executionState": "failed", "attentionReason": "taskFailure", "actionability": "openExactNativeSession", "evidenceQuality": "inferred", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "interrupt"},
       "evidence": [{"kind": "syntheticPolicy", "reference": "truth specification 60-second duplicate merge"}],
       "explicitUnknowns": []
     },
@@ -134,7 +134,7 @@
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "terminal agent_end task failure followed by older tool_call event"},
-      "expected": {"executionState": "failed", "attentionReason": "taskFailure", "actionability": "viewOnly", "evidenceQuality": "inferred", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "interrupt"},
+      "expected": {"executionState": "failed", "attentionReason": "taskFailure", "actionability": "openExactNativeSession", "evidenceQuality": "inferred", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "interrupt"},
       "evidence": [{"kind": "syntheticPolicy", "reference": "truth specification monotonic terminal-state rule"}],
       "explicitUnknowns": ["Broad native event ordering guarantees remain undocumented."]
     },
@@ -147,7 +147,7 @@
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "fresh terminal agent_end task failure restored at app launch"},
-      "expected": {"executionState": "failed", "attentionReason": "taskFailure", "actionability": "viewOnly", "evidenceQuality": "inferred", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "interrupt"},
+      "expected": {"executionState": "failed", "attentionReason": "taskFailure", "actionability": "openExactNativeSession", "evidenceQuality": "inferred", "freshness": "fresh", "openResult": "notAttempted", "interruptDecision": "interrupt"},
       "evidence": [{"kind": "syntheticPolicy", "reference": "truth specification app-restart replay contract"}],
       "explicitUnknowns": []
     },
@@ -178,42 +178,42 @@
       "explicitUnknowns": ["Cold offline startup behavior remains version-bounded and unverified."]
     },
     {
-      "id": "omp-exact-return-unsupported",
+      "id": "omp-exact-return-dispatch-unknown",
       "agentId": "omp",
-      "capabilityStatus": "unsupported",
-      "scenario": "OMP resume/session CLI flags exist, but the state-only ThreadHelm adapter does not advertise or invoke exact return.",
+      "capabilityStatus": "unknown",
+      "scenario": "ThreadHelm invokes OMP resume with the native session candidate, while the exact destination remains unconfirmed.",
       "captureSource": "bundled CLI documentation and local help",
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "synthetic session identity candidate with no end-to-end confirmation"},
-      "expected": {"executionState": "unknown", "attentionReason": "none", "actionability": "viewOnly", "evidenceQuality": "officialAPI", "freshness": "unknown", "openResult": "unavailable", "interruptDecision": "nonInterrupt"},
+      "expected": {"executionState": "unknown", "attentionReason": "none", "actionability": "openExactNativeSession", "evidenceQuality": "officialAPI", "freshness": "unknown", "openResult": "unknown", "interruptDecision": "nonInterrupt"},
       "evidence": [{"kind": "bundledDocumentation", "reference": "OMP usage and sessions documentation: resume/session flags"}],
-      "explicitUnknowns": ["OMP navigation remains outside the state-only adapter boundary."]
+      "explicitUnknowns": ["Resume dispatch is not independent proof of the destination session."]
     },
     {
-      "id": "omp-terminal-process-fallback-unsupported",
+      "id": "omp-existing-terminal-focus-unsupported",
       "agentId": "omp",
       "capabilityStatus": "unsupported",
-      "scenario": "The first state-only OMP adapter does not focus a terminal or process as a fallback.",
+      "scenario": "OMP resume opens a preferred terminal, but ThreadHelm does not identify and focus an already-running OMP terminal process.",
       "captureSource": "owner-only product contract",
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "terminal/process fallback capability queried"},
       "expected": {"executionState": "unknown", "attentionReason": "none", "actionability": "viewOnly", "evidenceQuality": "inferred", "freshness": "notApplicable", "openResult": "unavailable", "interruptDecision": "nonInterrupt"},
-      "evidence": [{"kind": "syntheticPolicy", "reference": "five-agent roadmap OMP state-only and no-navigation boundary"}],
-      "explicitUnknowns": ["A later separately gated capability may revisit return behavior."]
+      "evidence": [{"kind": "syntheticPolicy", "reference": "OMP resume navigation does not include process-to-terminal identity mapping"}],
+      "explicitUnknowns": ["Exact focus of an already-running OMP terminal remains unavailable."]
     },
     {
       "id": "omp-session-controls-unsupported",
       "agentId": "omp",
       "capabilityStatus": "unsupported",
-      "scenario": "The first OMP adapter cannot approve, inject messages, cancel, navigate, or mutate sessions.",
-      "captureSource": "owner-only state-only capability contract",
+      "scenario": "The OMP adapter cannot approve, inject messages, cancel, or otherwise control sessions beyond user-triggered resume navigation.",
+      "captureSource": "owner-only resume-only capability contract",
       "capturedAt": "2026-08-12T09:31:19Z",
       "observedAgentVersion": "17.3.2",
       "input": {"redacted": true, "signal": "OMP control capability queried"},
       "expected": {"executionState": "unknown", "attentionReason": "unknown", "actionability": "viewOnly", "evidenceQuality": "unknown", "freshness": "notApplicable", "openResult": "unavailable", "interruptDecision": "nonInterrupt"},
-      "evidence": [{"kind": "syntheticPolicy", "reference": "five-agent roadmap OMP state-only boundary"}],
+      "evidence": [{"kind": "syntheticPolicy", "reference": "five-agent OMP resume-only control boundary"}],
       "explicitUnknowns": ["OMP native/default permission behavior remains authoritative."]
     }
   ]

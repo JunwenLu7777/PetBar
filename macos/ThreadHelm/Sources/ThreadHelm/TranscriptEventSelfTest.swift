@@ -9,12 +9,24 @@
 import Darwin
 import Foundation
 func runTranscriptEventReaderSelfTest() -> Never {
+    if Thread.isMainThread {
+        DispatchQueue.global(qos: .utility).async {
+            runTranscriptEventReaderSelfTest()
+        }
+        dispatchMain()
+    }
+    TranscriptIOThreadAudit.reset()
     do {
         try runJSONLFramerContractSelfTest()
         try runTranscriptReaderContractSelfTest()
         try runTranscriptIndexContractSelfTest()
         try runTranscriptRestartEquivalenceSelfTest()
         try runSameSizeAtomicReplaceIdentitySelfTest()
+        guard TranscriptIOThreadAudit.violationCount() == 0 else {
+            throw TranscriptEventSelfTestError.failed(
+                "main-thread transcript/index I/O violation"
+            )
+        }
     } catch {
         fputs("transcript-events-self-test: \(error)\n", stderr)
         exit(1)
@@ -22,8 +34,10 @@ func runTranscriptEventReaderSelfTest() -> Never {
     print(
         "transcript-events-self-test: providers=5 transcript=4 hook-only=1"
             + " index=metadata-only restart=index-hit+cold-scan+incremental-tail"
+            + " stable-order=byte-offset"
             + " samesize-replace=identityChanged"
             + " budgets=8MiB/64MiB/4MiB memory=32/64KiB"
+            + " main-thread-io=0"
     )
     exit(0)
 }
@@ -34,6 +48,12 @@ private struct TranscriptEventSelfTestError: Error, CustomStringConvertible {
     static func failed(_ message: String) -> TranscriptEventSelfTestError {
         TranscriptEventSelfTestError(message: message)
     }
+}
+
+private final class StepTranscriptMonotonicClock: TranscriptMonotonicClock {
+    private var storage: UInt64 = 1_000_000_000_000
+    func advanceBeyondSoftSlice() { storage += 100_000_000 }
+    func nowNanoseconds() -> UInt64 { storage }
 }
 
 /// 只展示记录前 64 UTF-8 标量的文本，避免把 5 MiB 记录体灌进错误字符串。
@@ -250,6 +270,36 @@ private func runTranscriptReaderContractSelfTest() throws {
         )
     }
 
+    // 2a) provider 可把本次剩余 refresh 预算传入 forward reader；reader
+    // 不得因为自身 8 MiB 上限更大而越过调用方给出的余额。
+    let boundedURL = temp.appendingPathComponent("bounded-forward.jsonl")
+    try Data("one\ntwo\n".utf8).write(to: boundedURL)
+    guard let boundedReader = TranscriptEventReader.make(at: boundedURL) else {
+        throw TranscriptEventSelfTestError.failed("bounded reader make failed")
+    }
+    let boundedFirst = try XCTUnwrapResult(
+        boundedReader.readForwardPass(maximumBytes: 4)
+    )
+    guard boundedFirst.map(\.data) == [Data("one\n".utf8)],
+          boundedReader.scanHead == 4,
+          boundedReader.diagnostics.bytesRead == 4
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "forward remaining-budget limit was not respected"
+        )
+    }
+    let boundedSecond = try XCTUnwrapResult(
+        boundedReader.readForwardPass(maximumBytes: 4)
+    )
+    guard boundedSecond.map(\.data) == [Data("two\n".utf8)],
+          boundedReader.scanHead == 8,
+          boundedReader.diagnostics.bytesRead == 8
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "forward remaining-budget continuation failed"
+        )
+    }
+
     // 3) identity 改变：不同 identity 的 reader 在同一文件上应 identity 失败。
     let otherIdentity = TranscriptSourceIdentity(
         device: 3,
@@ -260,6 +310,70 @@ private func runTranscriptReaderContractSelfTest() throws {
     let mismatched = TranscriptEventReader(url: smallURL, identity: otherIdentity)
     if case .success = mismatched.readForwardPass() {
         throw TranscriptEventSelfTestError.failed("reader identity mismatch accepted")
+    }
+
+    // 3a) index-hit byte-range 回读也必须重新验证 source identity 与完整长度。
+    // sidecar 建立后即使路径被同大小原子替换，也不能从新 inode 的相同
+    // byte range 读取出“看似有效”的另一条记录（AC-08 / TOCTOU）。
+    let rangeURL = temp.appendingPathComponent("range.jsonl")
+    let oldRangeLine = "old-record\n"
+    let newRangeLine = "new-record\n"
+    try Data(oldRangeLine.utf8).write(to: rangeURL)
+    guard let rangeReader = TranscriptEventReader.make(at: rangeURL) else {
+        throw TranscriptEventSelfTestError.failed("reader range make failed")
+    }
+    let rangeDescriptor = TranscriptRecordLocation(
+        startOffset: 0,
+        byteCount: UInt32(oldRangeLine.utf8.count),
+        sourceOrder: 1,
+        eventClass: .publicMessage,
+        occurredAt: nil
+    )
+    guard rangeReader.readRange(
+        rangeDescriptor,
+        maximumBytes: oldRangeLine.utf8.count - 1
+    ) == nil,
+    rangeReader.diagnostics.bytesRead == 0
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader range exceeded caller remaining budget"
+        )
+    }
+    guard rangeReader.readRange(rangeDescriptor) == Data(oldRangeLine.utf8)
+    else {
+        throw TranscriptEventSelfTestError.failed("reader stable range read failed")
+    }
+    let rangeReplacement = temp.appendingPathComponent("range-replacement.jsonl")
+    try Data(newRangeLine.utf8).write(to: rangeReplacement)
+    try manager.replaceItemAt(
+        rangeURL,
+        withItemAt: rangeReplacement,
+        backupItemName: nil,
+        options: []
+    )
+    guard rangeReader.readRange(rangeDescriptor) == nil else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader range accepted same-size replaced identity"
+        )
+    }
+
+    let shortRangeURL = temp.appendingPathComponent("short-range.jsonl")
+    try Data("short\n".utf8).write(to: shortRangeURL)
+    guard let shortRangeReader = TranscriptEventReader.make(at: shortRangeURL)
+    else {
+        throw TranscriptEventSelfTestError.failed("reader short range make failed")
+    }
+    let pastEOFDescriptor = TranscriptRecordLocation(
+        startOffset: 0,
+        byteCount: 100,
+        sourceOrder: 1,
+        eventClass: .publicMessage,
+        occurredAt: nil
+    )
+    guard shortRangeReader.readRange(pastEOFDescriptor) == nil else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader range accepted short read past EOF"
+        )
     }
     // 缺失文件 → ioFailed。
     let missingURL = temp.appendingPathComponent("missing.jsonl")
@@ -303,7 +417,37 @@ private func runTranscriptReaderContractSelfTest() throws {
             "reader huge scanHead not at EOF"
         )
     }
-    // 5) 读取中 truncate 到 readStart+consumed 与 committedOffset 之间：
+    // 5) forward pass cancellation：取消只在 chunk 边界检查，延迟不超过一个 chunk。
+    let forwardCancelURL = temp.appendingPathComponent("forward-cancel.jsonl")
+    let forwardCancelLine = String(repeating: "f", count: 1_000) + "\n"
+    try Data(Array(repeating: forwardCancelLine, count: 6).joined().utf8)
+        .write(to: forwardCancelURL)
+    let cancelBudget = TranscriptReadBudget(
+        chunkBytes: 1_024,
+        maximumBytesPerPass: 4_096,
+        maximumAutomaticBackscanBytes: 4_096,
+        maximumRecordBytes: 4 * 1_048_576,
+        softWallTime: 0.05
+    )
+    guard let forwardCancelReader = TranscriptEventReader.make(
+        at: forwardCancelURL,
+        budget: cancelBudget
+    ) else {
+        throw TranscriptEventSelfTestError.failed("reader forward cancel make failed")
+    }
+    var forwardCancel = false
+    forwardCancelReader.postChunkReadHook = { forwardCancel = true }
+    _ = try XCTUnwrapResult(forwardCancelReader.readForwardPass(
+        isCancelled: { forwardCancel }
+    ))
+    guard forwardCancelReader.diagnostics.rawChunksRead == 1,
+          forwardCancelReader.diagnostics.bytesRead <= cancelBudget.chunkBytes
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader forward cancellation exceeded one chunk"
+        )
+    }
+    // 6) 读取中 truncate 到 readStart+consumed 与 committedOffset 之间：
     //    partial/discard 时 committedOffset 落后于本轮已读终点，旧校验
     //    (fileSize >= committedOffset) 会放行 stale bytes 并让 scanHead
     //    越过新 EOF。用 postReadHook 在读完 chunk、校验前截断。
@@ -445,6 +589,63 @@ private func runTranscriptReaderContractSelfTest() throws {
             "backward pass3 continuation: got \(cont3 ?? 0) expected nil"
         )
     }
+
+    // 7) backward pass 必须按 chunk 边界响应 soft wall time。
+    let softURL = temp.appendingPathComponent("soft.jsonl")
+    let softLine = String(repeating: "a", count: 1_000) + "\n"
+    try Data(Array(repeating: softLine, count: 6).joined().utf8).write(to: softURL)
+    let softClock = StepTranscriptMonotonicClock()
+    let softBudget = TranscriptReadBudget(
+        chunkBytes: 1_024,
+        maximumBytesPerPass: 4_096,
+        maximumAutomaticBackscanBytes: 4_096,
+        maximumRecordBytes: 4 * 1_048_576,
+        softWallTime: 0.05
+    )
+    guard let softReader = TranscriptEventReader.make(
+        at: softURL,
+        budget: softBudget,
+        clock: softClock
+    ) else {
+        throw TranscriptEventSelfTestError.failed("reader soft make failed")
+    }
+    softReader.postChunkReadHook = { softClock.advanceBeyondSoftSlice() }
+    let softSize = (try manager.attributesOfItem(
+        atPath: softURL.path
+    )[.size] as? NSNumber)?.uint64Value ?? 0
+    let softResult = try XCTUnwrapResult(softReader.readBackwardPass(
+        fromEnd: softSize,
+        maximumBytes: 4_096
+    ))
+    guard softReader.diagnostics.rawChunksRead == 1,
+          softResult.continuation != nil
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader soft slice did not stop after first chunk"
+        )
+    }
+
+    // 8) cancellation 同样只在 chunk 边界生效，延迟不超过一个 chunk。
+    guard let cancelReader = TranscriptEventReader.make(
+        at: softURL,
+        budget: softBudget
+    ) else {
+        throw TranscriptEventSelfTestError.failed("reader cancel make failed")
+    }
+    var cancel = false
+    cancelReader.postChunkReadHook = { cancel = true }
+    _ = try XCTUnwrapResult(cancelReader.readBackwardPass(
+        fromEnd: softSize,
+        maximumBytes: 4_096,
+        isCancelled: { cancel }
+    ))
+    guard cancelReader.diagnostics.rawChunksRead == 1,
+          cancelReader.diagnostics.bytesRead <= softBudget.chunkBytes
+    else {
+        throw TranscriptEventSelfTestError.failed(
+            "reader cancellation exceeded one chunk"
+        )
+    }
 }
 
 private func XCTUnwrapResult<T>(
@@ -459,12 +660,16 @@ private func XCTUnwrapResult<T>(
 }
 private func runTranscriptIndexContractSelfTest() throws {
     let manager = FileManager.default
-    let temp = manager.temporaryDirectory.appendingPathComponent(
+    let tempBase = manager.temporaryDirectory.appendingPathComponent(
         "threadhelm-transcript-index-\(UUID().uuidString)",
         isDirectory: true
     )
-    defer { try? manager.removeItem(at: temp) }
-    try manager.createDirectory(at: temp, withIntermediateDirectories: true)
+    let indexParent = tempBase.appendingPathComponent(
+        "Transcript Index", isDirectory: true
+    )
+    let temp = indexParent.appendingPathComponent("v1", isDirectory: true)
+    defer { try? manager.removeItem(at: tempBase) }
+    try manager.createDirectory(at: tempBase, withIntermediateDirectories: true)
 
     let store = TranscriptIndexStore(rootDirectory: temp, fileManager: manager)
     let identity = TranscriptSourceIdentity(
@@ -499,8 +704,12 @@ private func runTranscriptIndexContractSelfTest() throws {
     guard let loaded = store.load(agentID: .omp, sessionKey: "session-key"),
           loaded.committedOffset == 900,
           loaded.publicMessageDescriptors.count == 1,
+          loaded.publicMessageDescriptors[0].sourceOrder
+            == loaded.publicMessageDescriptors[0].startOffset,
           loaded.sourceIdentity == identity,
-          loaded.oversizedRecords == 0
+          loaded.oversizedRecords == 0,
+          loaded.sessionKeyDigest != "session-key",
+          loaded.sessionKeyDigest != "digest"
     else {
         throw TranscriptEventSelfTestError.failed("index save/load round-trip")
     }
@@ -520,6 +729,64 @@ private func runTranscriptIndexContractSelfTest() throws {
     guard rawData.count <= TranscriptIndexStore.maximumFileBytes else {
         throw TranscriptEventSelfTestError.failed("index exceeds 512 KiB")
     }
+
+    let rootValues = try temp.resourceValues(forKeys: [.isExcludedFromBackupKey])
+    guard rootValues.isExcludedFromBackup == true else {
+        throw TranscriptEventSelfTestError.failed("index root backup exclusion missing")
+    }
+    guard modeBits(indexParent) == 0o700,
+          modeBits(temp) == 0o700,
+          modeBits(temp.appendingPathComponent(AgentID.omp.rawValue, isDirectory: true))
+              == 0o700,
+          modeBits(url) == 0o600
+    else {
+        throw TranscriptEventSelfTestError.failed("index permissions are not 0700/0600")
+    }
+
+    checkpoint.committedOffset = 901
+    try store.save(checkpoint, agentID: .omp, sessionKey: "session-key")
+    guard store.load(agentID: .omp, sessionKey: "session-key")?.committedOffset == 900
+    else {
+        throw TranscriptEventSelfTestError.failed("index coalesced save did not defer")
+    }
+    try store.flush(checkpoint, agentID: .omp, sessionKey: "session-key")
+    guard store.load(agentID: .omp, sessionKey: "session-key")?.committedOffset == 901
+    else {
+        throw TranscriptEventSelfTestError.failed("index forced flush failed")
+    }
+
+    _ = chmod(url.path, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+    guard store.load(agentID: .omp, sessionKey: "session-key") == nil,
+          !manager.fileExists(atPath: url.path)
+    else {
+        throw TranscriptEventSelfTestError.failed("index bad file permission accepted")
+    }
+
+    try store.flush(checkpoint, agentID: .omp, sessionKey: "session-key")
+    var orphan = checkpoint
+    orphan.committedOffset = 777
+    try store.flush(orphan, agentID: .omp, sessionKey: "orphan-key")
+    let orphanURL = store.indexFileURL(agentID: .omp, sessionKey: "orphan-key")
+    try manager.setAttributes(
+        [.modificationDate: Date(timeIntervalSinceNow: -8 * 24 * 60 * 60)],
+        ofItemAtPath: orphanURL.path
+    )
+    store.purgeOrphans(
+        agentID: .omp,
+        referencedSessionKeys: ["session-key"],
+        now: Date()
+    )
+    guard manager.fileExists(atPath: url.path),
+          !manager.fileExists(atPath: orphanURL.path)
+    else {
+        throw TranscriptEventSelfTestError.failed("index orphan purge failed")
+    }
+}
+
+private func modeBits(_ url: URL) -> mode_t {
+    var statBuffer = stat()
+    guard lstat(url.path, &statBuffer) == 0 else { return 0 }
+    return statBuffer.st_mode & mode_t(0o777)
 }
 
 // MARK: Index-hit / cold-scan / incremental-tail 等价回归
@@ -587,6 +854,11 @@ private func runTranscriptRestartEquivalenceSelfTest() throws {
             "restart cold-scan: hasTail=\(coldHasTail) hasHead=\(coldHasHead)"
         )
     }
+    guard coldRecords.allSatisfy({ $0.sourceOrder == $0.startOffset }) else {
+        throw TranscriptEventSelfTestError.failed(
+            "restart cold-scan sourceOrder is not an absolute byte offset"
+        )
+    }
 
     let descriptors = coldRecords.compactMap { record -> TranscriptRecordLocation? in
         guard let text = String(data: record.data, encoding: .utf8),
@@ -622,7 +894,10 @@ private func runTranscriptRestartEquivalenceSelfTest() throws {
     // 3) Index-hit：加载 checkpoint，从 descriptor 回读
     let loaded = store.load(agentID: .codex, sessionKey: "test-restart")
     guard let loaded = loaded,
-          loaded.sourceIdentity == coldReader.identity
+          loaded.sourceIdentity == coldReader.identity,
+          loaded.publicMessageDescriptors.allSatisfy({
+              $0.sourceOrder == $0.startOffset
+          })
     else {
         throw TranscriptEventSelfTestError.failed("restart: checkpoint load/identity failed")
     }
@@ -660,7 +935,10 @@ private func runTranscriptRestartEquivalenceSelfTest() throws {
     }
     // 增量 pass 只恢复新追加的消息
     guard forwardTexts.count == 1,
-          forwardTexts.first?.contains("增量追加的新消息") == true
+          forwardTexts.first?.contains("增量追加的新消息") == true,
+          forwardResult[0].sourceOrder == forwardResult[0].startOffset,
+          forwardResult[0].sourceOrder
+            > (loaded.publicMessageDescriptors.map(\.sourceOrder).max() ?? 0)
     else {
         throw TranscriptEventSelfTestError.failed(
             "restart incremental-tail: count=\(forwardTexts.count)"

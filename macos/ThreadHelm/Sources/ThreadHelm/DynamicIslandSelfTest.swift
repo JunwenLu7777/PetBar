@@ -748,21 +748,44 @@ private func assertDynamicIslandTaskWorkspace() {
         repeating: "完整活动内容必须保留并通过滚动查看。",
         count: 180
     )
-    func event(_ index: Int) -> TaskActivityEvent {
-        TaskActivityEvent(
-            kind: .commentary,
+    let budgetedActivityText = safeUTF8Truncated(
+        fullActivityText,
+        to: AgentActivityBudget.maximumPublicMessageBytes
+    )
+    func publicMessage(
+        _ index: Int,
+        source: AgentID = .codex,
+        sessionKey: String = "dynamic-island-self-test"
+    ) -> AgentActivityEntry {
+        AgentActivityEntry(
+            id: AgentActivityEventID(
+                source: source,
+                sessionKey: sessionKey,
+                stableSourceKey: "message-\(index)"
+            ),
             occurredAt: now.addingTimeInterval(TimeInterval(index)),
+            sourceOrder: UInt64(index),
             text: index == 5 ? fullActivityText : "safe event \(index)"
         )
     }
-    let sameTimeFirst = TaskActivityEvent(
-        kind: .commentary,
+    let sameTimeFirst = AgentActivityEntry(
+        id: AgentActivityEventID(
+            source: .codex,
+            sessionKey: "dynamic-island-self-test",
+            stableSourceKey: "same-time-first"
+        ),
         occurredAt: now.addingTimeInterval(3),
+        sourceOrder: 3,
         text: "same-time first"
     )
-    let sameTimeSecond = TaskActivityEvent(
-        kind: .commentary,
+    let sameTimeSecond = AgentActivityEntry(
+        id: AgentActivityEventID(
+            source: .codex,
+            sessionKey: "dynamic-island-self-test",
+            stableSourceKey: "same-time-second"
+        ),
         occurredAt: now.addingTimeInterval(3),
+        sourceOrder: 4,
         text: "same-time second"
     )
     let codexRunning = TaskProgressItem(
@@ -774,14 +797,14 @@ private func assertDynamicIslandTaskWorkspace() {
         activityText: fullActivityText,
         threadID: "thread-abc1234",
         workingDirectory: "/tmp/threadhelm/../threadhelm",
-        events: [
-            event(2),
+        projection: AgentActivityProjection(publicMessages: [
+            publicMessage(2),
             sameTimeFirst,
-            event(5),
-            event(1),
+            publicMessage(5),
+            publicMessage(1),
             sameTimeSecond,
-            event(4),
-        ]
+            publicMessage(4),
+        ])
     )
     let claudeWaiting = TaskProgressItem(
         title: "Claude waiting",
@@ -793,7 +816,13 @@ private func assertDynamicIslandTaskWorkspace() {
         workingDirectory: "/tmp/claude",
         processID: 42,
         processStartIdentity: "start-42",
-        events: [event(8)]
+        projection: AgentActivityProjection(publicMessages: [
+            publicMessage(
+                8,
+                source: .claudeCode,
+                sessionKey: "87654321-4321-4321-4321-cba987654321"
+            ),
+        ])
     )
     let codexCompleted = TaskProgressItem(
         title: "Codex completed",
@@ -892,16 +921,16 @@ private func assertDynamicIslandTaskWorkspace() {
           !controller.accessibilitySnapshotForSelfTest().contains("当前活动"),
           controller.accessibilitySnapshotForSelfTest().contains("开始 "),
           controller.accessibilitySnapshotForSelfTest().contains("持续 01:30"),
-          controller.detailEventTextsForSelfTest()
+              controller.detailEventTextsForSelfTest()
               == [
-                  fullActivityText,
+                  budgetedActivityText,
                   "safe event 4",
-                  "same-time first",
                   "same-time second",
+                  "same-time first",
                   "safe event 2",
                   "safe event 1",
               ],
-          controller.highlightedEventTextsForSelfTest() == [fullActivityText],
+          controller.highlightedEventTextsForSelfTest() == [budgetedActivityText],
           controller.eventsScrollerIsEnabledForSelfTest(),
           controller.visibleProviderIconsAreConcreteForSelfTest(),
           controller.visibleTaskGroupSummariesForSelfTest() == [
@@ -1094,7 +1123,7 @@ private func assertDynamicIslandTaskWorkspace() {
     let selectedBeforeHover = controller.selectedTaskKeyForSelfTest()
     controller.showHoverForSelfTest(item: codexRunning)
     guard controller.hoverEventTextsForSelfTest()
-        == ["safe event 1", "same-time second", "safe event 4"],
+        == [budgetedActivityText, "safe event 4", "same-time second"],
           controller.selectedTaskKeyForSelfTest() == selectedBeforeHover
     else {
         fputs("dynamic island task hover self-test failed\n", stderr)

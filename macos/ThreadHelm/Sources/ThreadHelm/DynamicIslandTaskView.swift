@@ -1,6 +1,13 @@
 import AppKit
 import Foundation
 
+private struct DynamicIslandDisplayedActivityEvent: Equatable {
+    let kind: TaskActivityEventKind
+    let occurredAt: Date
+    let sourceOrder: UInt64
+    let text: String
+}
+
 func resolvedSelectedTaskKey(
     previousKey: String?,
     preferredKey: String?,
@@ -275,7 +282,7 @@ final class DynamicIslandTaskViewController:
     private var visibleItems: [TaskProgressItem] = []
     private var selectedTaskKey: String?
     private var selectedItem: TaskProgressItem?
-    private var displayedEvents: [TaskActivityEvent] = []
+    private var displayedEvents: [DynamicIslandDisplayedActivityEvent] = []
     private var trackingArea: NSTrackingArea?
     private var copyFeedbackWorkItem: DispatchWorkItem?
     private var openFeedbackWorkItem: DispatchWorkItem?
@@ -770,7 +777,7 @@ final class DynamicIslandTaskViewController:
             copyButton.isEnabled = false
             copyButton.setDisplayTitle("复制路径")
             copyButton.setAccessibilityLabel("复制工作目录")
-            renderEvents([])
+            renderEvents([AgentActivityEntry]())
             updateDetailAccessibility()
             view.needsLayout = true
             return
@@ -798,9 +805,7 @@ final class DynamicIslandTaskViewController:
         copyButton.isEnabled = copyPathForSelfTest() != nil
         copyButton.setDisplayTitle("复制路径")
         copyButton.setAccessibilityLabel("复制工作目录")
-        renderEvents(item.projection.publicMessages.map {
-            TaskActivityEvent(kind: .commentary, occurredAt: $0.occurredAt, text: $0.text)
-        })
+        renderEvents(item.projection.publicMessages)
         updateDetailAccessibility()
         view.needsLayout = true
     }
@@ -828,7 +833,7 @@ final class DynamicIslandTaskViewController:
         copyButton.setDisplayTitle("复制路径")
         copyButton.setAccessibilityLabel("复制工作目录")
         deferButton.isHidden = false
-        renderEvents([])
+        renderEvents([AgentActivityEntry]())
         updateDetailAccessibility()
         view.needsLayout = true
     }
@@ -1045,13 +1050,20 @@ final class DynamicIslandTaskViewController:
         }
     }
 
-    private func renderEvents(_ events: [TaskActivityEvent]) {
-        displayedEvents = events.enumerated().sorted { lhs, rhs in
-            if lhs.element.occurredAt != rhs.element.occurredAt {
-                return lhs.element.occurredAt > rhs.element.occurredAt
+    private func renderEvents(_ events: [AgentActivityEntry]) {
+        displayedEvents = events.sorted {
+            if $0.occurredAt != $1.occurredAt {
+                return $0.occurredAt > $1.occurredAt
             }
-            return lhs.offset < rhs.offset
-        }.map(\.element)
+            return $0.sourceOrder > $1.sourceOrder
+        }.map {
+            DynamicIslandDisplayedActivityEvent(
+                kind: .commentary,
+                occurredAt: $0.occurredAt,
+                sourceOrder: $0.sourceOrder,
+                text: $0.text
+            )
+        }
         eventsTableView.reloadData()
         layoutEventsTable()
         showEventsScroller()

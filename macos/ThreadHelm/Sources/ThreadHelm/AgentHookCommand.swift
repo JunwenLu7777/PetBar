@@ -195,6 +195,9 @@ func agentHookEnvelope(
             keys: ["session_id", "sessionId", "conversation_id", "conversationId"],
             maximumLength: 192
         )
+        let actionability = agentID == .omp && sessionID == nil
+            ? Actionability.viewOnly
+            : mapping.actionability
         let eventID = agentHookFirstToken(
             in: object,
             keys: ["event_id", "eventId", "hook_event_id", "hookEventId"],
@@ -215,7 +218,7 @@ func agentHookEnvelope(
             redactedPayload: [
                 "state": mapping.state.rawValue,
                 "attentionReason": mapping.reason.rawValue,
-                "actionability": mapping.actionability.rawValue,
+                "actionability": actionability.rawValue,
                 "evidenceQuality": mapping.evidence.rawValue,
                 "freshness": mapping.freshness,
             ]
@@ -257,7 +260,7 @@ private func agentHookStateMapping(
     let normalized = eventType.lowercased()
     let taskFailed = agentHookTerminalFailureIsExplicit(object)
     let nativeAction: Actionability = agentID == .omp
-        ? .viewOnly
+        ? .openExactNativeSession
         : .openNativeApp
 
     if agentID == .cursor {
@@ -294,16 +297,16 @@ private func agentHookStateMapping(
 
     switch normalized {
     case "session_start":
-        return (.idle, .none, .viewOnly, .officialHook, "fresh")
+        return (.idle, .none, nativeAction, .officialHook, "fresh")
     case "agent_start", "tool_call", "tool_result", "session_compact":
-        return (.running, .none, .viewOnly, .officialHook, "fresh")
+        return (.running, .none, nativeAction, .officialHook, "fresh")
     case "agent_end":
         if agentHookContinuationIsExplicit(object) {
-            return (.running, .none, .viewOnly, .officialHook, "fresh")
+            return (.running, .none, nativeAction, .officialHook, "fresh")
         }
         return taskFailed
-            ? (.failed, .taskFailure, .viewOnly, .officialHook, "fresh")
-            : (.completed, .reviewReady, .viewOnly, .officialHook, "fresh")
+            ? (.failed, .taskFailure, nativeAction, .officialHook, "fresh")
+            : (.completed, .reviewReady, nativeAction, .officialHook, "fresh")
     case "session_shutdown":
         return (.offline, .none, .viewOnly, .officialHook, "stale")
     default:

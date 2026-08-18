@@ -38,6 +38,8 @@ Redaction happens before a fixture is written. A later log scrubber is not an ac
 
 The same rule applies to future hook transport and diagnostics: only allowlisted fields may leave the hook/extension process, and diagnostics must never record titles, request text, commands, output, or raw project paths.
 
+OMP hook transport remains classification-only. The local GUI may separately use the shared bounded raw-byte JSONL reader and metadata-only checkpoint to read the transcript selected by a validated session ID, but its visible projection is limited to a normalized working directory and redacted public assistant `text`. One refresh may read at most 8 MiB; cold backscan stops after 64 MiB in one app lifecycle and preserves its continuation for the next lifecycle. Hidden thinking, tool arguments, tool results, raw JSON payloads, and detected credentials must be excluded.
+
 ## State and attention rules
 
 - Execution state and attention reason are independent. `idle` never means “needs input.”
@@ -45,6 +47,7 @@ The same rule applies to future hook transport and diagnostics: only allowlisted
 - Completion is `reviewReady` and non-interrupting by default.
 - A terminal failure is `taskFailure` and interrupting.
 - A stale or inferred snapshot must say so; it cannot silently override fresher official/native evidence.
+- Version compatibility limits capability claims and automatic interaction; it must not rewrite an observed `waitingForInput` state as `running` or disable an otherwise available native navigation target.
 - For OMP, `agent_end.willContinue=true` remains running. A terminal `agent_end` becomes task failure only when the final assistant message has `stopReason=error`; other terminal outcomes become review-ready. Shutdown or documented expiry cleans up non-terminal snapshots.
 - For ZCode, the lack of SessionEnd requires Stop/process/expiry reconciliation; no synthetic SessionEnd may be invented.
 - A missing native identity changes actionability and return quality, not necessarily the observed task state.
@@ -78,9 +81,9 @@ Aggregate five-agent numbers are supplementary and cannot hide a weak adapter.
 
 Actionability is one of in-app action, exact native return, native app focus, project-location fallback, or view-only. The future UI must announce which class is available. If a stronger path fails, the returned result changes to the actual fallback class; it must not preserve an earlier success label.
 
-Only Claude Code has a verified in-app permission/question/plan response path in this baseline. Codex opens its native thread for input. Cursor and ZCode remain native-surface-only in the first adapter. OMP is strictly state-only and cannot call approval, message injection, cancellation, navigation, or session-mutation APIs.
+Only Claude Code has a verified in-app permission/question/plan response path in this baseline. Codex opens its native thread for input. Cursor and ZCode remain native-surface-only in the first adapter. OMP can dispatch its native resume target in a terminal, but cannot call approval, message injection, cancellation, or other session-control APIs.
 
-For return classification in this baseline, Codex deep-link dispatch and Claude `--resume` dispatch both remain `unknown`; neither is exact success without a separate destination identity check. Claude may return `exactSession` only after a matching live process plus process-start identity is located at the exact terminal tab. Cursor and ZCode never return exact in this baseline. OMP's exact-return capability is `unsupported`, and every OMP open result is `unavailable`.
+For return classification in this baseline, Codex deep-link dispatch, Claude `--resume`, and OMP `--resume` dispatch remain `unknown`; none is exact success without a separate destination identity check. Claude may return `exactSession` only after a matching live process plus process-start identity is located at the exact terminal tab. Cursor and ZCode never return exact in this baseline. OMP resume is navigation-capable but does not claim exact success.
 
 ## Version and configuration boundary
 

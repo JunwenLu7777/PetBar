@@ -70,6 +70,8 @@ case \"\${1:-}\" in
   --self-test-claude-hook) echo 'claude-hook-self-test: pass' ;;
   --self-test-client-contract) echo 'client-contract-self-test: pass' ;;
   --self-test-threadhelm-edition) echo 'threadhelm-edition-self-test: pass' ;;
+  --self-test-transcript-events) echo 'transcript-events-self-test: pass' ;;
+  --self-test-large-window-regression) echo 'large-window-regression: pass' ;;
   --self-test-dynamic-island) echo 'dynamic-island: pass' ;;
   --self-test-agent-integration-manager) echo 'agent-integration-manager-self-test: pass' ;;
   *) exit 64 ;;
@@ -267,7 +269,7 @@ expect_fail "packaged binary failing five-agent truth replay"
 write_truth_replay_binary \
   "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm" \
   "packaged binary failing App self-test" \
-  "--self-test-dynamic-island"
+  "--self-test-large-window-regression"
 make_stage
 make_dist_from_stage
 git -C "$FIXTURE" add dist

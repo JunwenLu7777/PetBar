@@ -201,13 +201,19 @@ func agentDashboardProjection(
     agentCompatibilities: [AgentID: AgentCompatibility],
     registry: AgentRegistry = .builtIn,
     cursorWorkingDirectory: (String) -> String? = {
-        CursorLocalWorkspace.workingDirectory(sessionID: $0)
+        Thread.isMainThread
+            ? CursorLocalWorkspace.cachedWorkingDirectory(sessionID: $0)
+            : CursorLocalWorkspace.workingDirectory(sessionID: $0)
     },
     cursorSessionContent: (String) -> CursorLocalSessionContent? = {
-        CursorLocalWorkspace.sessionContent(sessionID: $0)
+        Thread.isMainThread
+            ? CursorLocalWorkspace.cachedSessionContent(sessionID: $0)
+            : CursorLocalWorkspace.sessionContent(sessionID: $0)
     },
     ompSessionContent: (String) -> OMPLocalSessionContent? = {
-        OMPLocalSession.content(sessionID: $0)
+        Thread.isMainThread
+            ? OMPLocalSession.cachedContent(sessionID: $0)
+            : OMPLocalSession.content(sessionID: $0)
     }
 ) -> AgentDashboardProjection {
     let polledCollection = collection
@@ -350,7 +356,7 @@ private func validationBoundedTaskProgressItem(
             workingDirectory: item.workingDirectory,
             processID: item.processID,
             processStartIdentity: item.processStartIdentity,
-            events: item.events,
+            projection: item.projection,
             allowsAgentOpen: item.canOpen
         )
     }
@@ -407,13 +413,19 @@ func taskProgressItem(
     from snapshot: AgentSessionSnapshot,
     events: [AgentEvent] = [],
     cursorWorkingDirectory: (String) -> String? = {
-        CursorLocalWorkspace.workingDirectory(sessionID: $0)
+        Thread.isMainThread
+            ? CursorLocalWorkspace.cachedWorkingDirectory(sessionID: $0)
+            : CursorLocalWorkspace.workingDirectory(sessionID: $0)
     },
     cursorSessionContent: (String) -> CursorLocalSessionContent? = {
-        CursorLocalWorkspace.sessionContent(sessionID: $0)
+        Thread.isMainThread
+            ? CursorLocalWorkspace.cachedSessionContent(sessionID: $0)
+            : CursorLocalWorkspace.sessionContent(sessionID: $0)
     },
     ompSessionContent: (String) -> OMPLocalSessionContent? = {
-        OMPLocalSession.content(sessionID: $0)
+        Thread.isMainThread
+            ? OMPLocalSession.cachedContent(sessionID: $0)
+            : OMPLocalSession.content(sessionID: $0)
     }
 ) -> TaskProgressItem {
     let kind: TaskProgressKind
@@ -458,44 +470,25 @@ func taskProgressItem(
         ? ompSessionContent(snapshot.identity.nativeID)
         : nil
     let hookEvents = CursorLocalWorkspace.activityEvents(from: sessionEvents)
-    var activityEvents: [TaskActivityEvent]
-    if let localContent, !localContent.fragments.isEmpty {
-        activityEvents = CursorLocalWorkspace.datedEvents(
-            from: localContent.fragments,
-            startedAt: startedAt,
-            updatedAt: snapshot.updatedAt
-        )
-        if kind.isActive {
-            // §4.5：有正文时保留 local commentary，同时用最新 Hook 工具
-            // 状态覆盖 currentToolStatus（tool-only 更新不得清空正文）。
-            let latestHookTool = hookEvents.last(where: { $0.kind == .tool })
-            if let latestHookTool {
-                activityEvents.append(latestHookTool)
-            }
-        } else {
-            let terminal = hookEvents.filter { $0.kind == .lifecycle }
-            activityEvents.append(contentsOf: terminal)
-        }
+    let hookProjection = liveHookProjection(
+        from: sessionEvents,
+        source: snapshot.identity.agentID,
+        sessionKey: snapshot.identity.nativeID,
+        kind: kind
+    )
+    let localProjection: AgentActivityProjection?
+    if snapshot.identity.agentID == .cursor, localContent != nil {
+        localProjection = localContent?.projection
+    } else if snapshot.identity.agentID == .omp, localOMPContent != nil {
+        localProjection = localOMPContent?.projection
     } else {
-        activityEvents = hookEvents
+        localProjection = nil
     }
-    if let localOMPContent, !localOMPContent.events.isEmpty {
-        activityEvents = localOMPContent.events
-        if kind.isActive {
-            // §4.5：有正文时保留 local commentary，同时用最新 Hook 工具
-            // 状态覆盖 currentToolStatus（tool-only 更新不得清空正文）。
-            let latestHookTool = hookEvents.last(where: { $0.kind == .tool })
-            if let latestHookTool {
-                activityEvents.append(latestHookTool)
-            }
-        } else {
-            let terminal = hookEvents.filter { $0.kind == .lifecycle }
-            activityEvents.append(contentsOf: terminal)
-        }
-        activityEvents = Array(
-            activityEvents.suffix(OMPLocalSession.maximumVisibleEvents)
-        )
-    }
+    let projection = mergeAgentActivityProjection(
+        local: localProjection,
+        hook: hookProjection,
+        kind: kind
+    ).budgeted()
     let resolvedDirectory: String?
     if let existing = snapshot.workingDirectory {
         resolvedDirectory = existing
@@ -527,7 +520,7 @@ func taskProgressItem(
             kind: kind,
             agentID: snapshot.identity.agentID,
             hookEvents: hookEvents,
-            activityEvents: activityEvents,
+            projection: projection,
             snapshotSummary: snapshot.activitySummary
         ),
         statusOverride: status,
@@ -535,7 +528,7 @@ func taskProgressItem(
         workingDirectory: resolvedDirectory,
         processID: snapshot.identity.processID,
         processStartIdentity: snapshot.identity.processStartIdentity,
-        events: activityEvents,
+        projection: projection,
         allowsAgentOpen: snapshot.actionability != .viewOnly
     )
 }
@@ -544,7 +537,7 @@ private func liveCardActivityText(
     kind: TaskProgressKind,
     agentID: AgentID,
     hookEvents: [TaskActivityEvent],
-    activityEvents: [TaskActivityEvent],
+    projection: AgentActivityProjection,
     snapshotSummary: String?
 ) -> String? {
     if agentID == .cursor {
@@ -560,28 +553,131 @@ private func liveCardActivityText(
         case .idle:
             return "等待任务"
         case .running:
-            let latestStatusEvent = hookEvents.last ?? activityEvents.last
-            guard let latestStatusEvent else {
-                return snapshotSummary ?? "正在执行"
-            }
-            switch latestStatusEvent.kind {
-            case .tool:
-                return latestStatusEvent.text
-            case .commentary:
-                return "正在思考"
-            case .lifecycle:
-                switch latestStatusEvent.text {
-                case "会话开始": return "等待任务"
-                case "启动子任务": return "正在处理子任务"
-                case "子任务结束": return "正在整理结果"
-                default: return snapshotSummary ?? "正在执行"
+            if let latestStatusEvent = hookEvents.last {
+                switch latestStatusEvent.kind {
+                case .tool:
+                    return latestStatusEvent.text
+                case .commentary:
+                    return "正在思考"
+                case .lifecycle:
+                    switch latestStatusEvent.text {
+                    case "会话开始": return "等待任务"
+                    case "启动子任务": return "正在处理子任务"
+                    case "子任务结束": return "正在整理结果"
+                    default: return snapshotSummary ?? "正在执行"
+                    }
                 }
             }
+            return projection.currentToolStatus?.text
+                ?? projection.publicMessages.first?.text
+                ?? snapshotSummary
+                ?? "正在执行"
         }
     }
     return kind.isActive
-        ? (activityEvents.last?.text ?? snapshotSummary)
+        ? (projection.currentToolStatus?.text
+            ?? projection.publicMessages.first?.text
+            ?? snapshotSummary)
         : nil
+}
+
+private func liveHookProjection(
+    from events: [AgentEvent],
+    source: AgentID,
+    sessionKey: String,
+    kind: TaskProgressKind
+) -> AgentActivityProjection {
+    var publicMessages: [AgentActivityEntry] = []
+    var currentToolStatus: AgentActivityEntry?
+    var terminalEvent: AgentActivityEntry?
+    let hasTerminalKind = kind == .completed || kind == .failed
+    for event in events.sorted(by: agentEventIsOrderedBefore) {
+        guard let activity = CursorLocalWorkspace.activityEvent(from: event)
+        else { continue }
+        let sourceOrder = UInt64(event.sequence ?? 0)
+        let entry = AgentActivityEntry(
+            id: AgentActivityEventID(
+                source: source,
+                sessionKey: sessionKey,
+                stableSourceKey: liveHookStableSourceKey(event)
+            ),
+            occurredAt: event.observedAt,
+            sourceOrder: sourceOrder,
+            text: activity.text
+        )
+        switch activity.kind {
+        case .commentary:
+            publicMessages.append(entry)
+        case .tool:
+            currentToolStatus = entry
+        case .lifecycle:
+            if hasTerminalKind {
+                terminalEvent = entry
+                currentToolStatus = nil
+            }
+        }
+    }
+    return AgentActivityProjection(
+        publicMessages: publicMessages,
+        currentToolStatus: currentToolStatus,
+        terminalEvent: terminalEvent
+    )
+}
+
+private func mergeAgentActivityProjection(
+    local: AgentActivityProjection?,
+    hook: AgentActivityProjection,
+    kind: TaskProgressKind
+) -> AgentActivityProjection {
+    var projection = local ?? AgentActivityProjection(
+        publicMessages: hook.publicMessages,
+        currentToolStatus: nil,
+        terminalEvent: nil
+    )
+    if projection.publicMessages.isEmpty {
+        projection.publicMessages = hook.publicMessages
+    }
+    if kind.isActive {
+        if let hookTool = hook.currentToolStatus {
+            projection.currentToolStatus = hookTool
+        } else if projection.currentToolStatus == nil {
+            projection.currentToolStatus = local?.currentToolStatus
+        }
+        projection.terminalEvent = nil
+    } else {
+        projection.terminalEvent = hook.terminalEvent ?? local?.terminalEvent
+        projection.currentToolStatus = nil
+    }
+    return projection
+}
+
+private func agentEventIsOrderedBefore(
+    _ lhs: AgentEvent,
+    _ rhs: AgentEvent
+) -> Bool {
+    if let lhsSequence = lhs.sequence,
+       let rhsSequence = rhs.sequence,
+       lhsSequence != rhsSequence
+    {
+        return lhsSequence < rhsSequence
+    }
+    if let lhsMonotonic = lhs.monotonicNanoseconds,
+       let rhsMonotonic = rhs.monotonicNanoseconds,
+       lhsMonotonic != rhsMonotonic
+    {
+        return lhsMonotonic < rhsMonotonic
+    }
+    if lhs.observedAt != rhs.observedAt {
+        return lhs.observedAt < rhs.observedAt
+    }
+    return lhs.eventID < rhs.eventID
+}
+
+private func liveHookStableSourceKey(_ event: AgentEvent) -> String {
+    if let sequence = event.sequence {
+        return "hook:\(event.eventID):sequence:\(sequence)"
+    }
+    return "hook:\(event.eventID)"
 }
 
 final class AgentLiveEventStore {

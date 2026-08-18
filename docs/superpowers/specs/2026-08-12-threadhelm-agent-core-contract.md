@@ -14,8 +14,8 @@ Only Codex and Claude Code are quota providers.
 Adapters expose discovery/version, managed-integration lifecycle, observation,
 capabilities, freshness, opening, and privacy-safe diagnostics. Unsupported and
 unknown are different states. In particular, Cursor and ZCode exact return
-remain unknown; OMP exact return, navigation, and all OMP mutation/action
-capabilities are unsupported.
+remain unknown; OMP resume navigation is supported while exact landing remains
+unknown, and all OMP approval/input/cancellation capabilities are unsupported.
 
 The reducer keys a session by agent plus native identity, scopes event IDs to a
 session, removes duplicates, and chooses sequence, same-host monotonic time, or
@@ -51,6 +51,17 @@ An eventual asynchronous queue may contain normalized envelopes only. It is
 bounded to 256 events and 1 MiB per adapter, coalesces non-attention churn, and
 drops the oldest non-attention entry first. This queue is not permission to
 retain rejected raw input.
+
+OMP keeps this hook transport classification-only. Separately, the GUI process
+may perform a bounded, read-only lookup of the matching local OMP transcript by
+validated session ID. That projection may expose only a normalized absolute
+working directory and redacted public assistant `text`; hidden thinking, tool
+arguments, tool results, raw JSON payloads, and detected credentials are
+excluded. OMP uses the same raw-byte JSONL reader and metadata-only checkpoint
+contract as Codex, Claude, and Cursor: one refresh reads at most 8 MiB, cold
+backscan is continued across refreshes and stops after 64 MiB in one app
+lifecycle while preserving its continuation for the next lifecycle, and the
+visible public projection retains at most 32 messages.
 
 ## Local endpoint
 

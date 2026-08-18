@@ -66,9 +66,9 @@ func runAgentHookCommandSelfTest() {
         monotonicNanoseconds: 44
     ), omp.redactedPayload["state"] == "failed",
        omp.redactedPayload["attentionReason"] == "taskFailure",
-       omp.redactedPayload["actionability"] == "viewOnly"
+       omp.redactedPayload["actionability"] == "openExactNativeSession"
     else {
-        failAgentHookCommandSelfTest("OMP state-only mapping")
+        failAgentHookCommandSelfTest("OMP resume navigation mapping")
     }
 
     var continuing = raw

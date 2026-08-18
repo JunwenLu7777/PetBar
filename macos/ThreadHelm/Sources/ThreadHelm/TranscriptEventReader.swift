@@ -98,6 +98,34 @@ struct TranscriptReadDiagnostics: Equatable {
     var wallTimeMs = 0.0
 }
 
+/// Test-visible audit for the shared transcript/index I/O boundary. Production
+/// readers are reached from the utility refresh queue; UI code must use the
+/// in-memory provider caches instead of entering this layer on the main thread.
+enum TranscriptIOThreadAudit {
+    private static let lock = NSLock()
+    private static var mainThreadViolations = 0
+
+    static func recordIO() {
+        guard Thread.isMainThread else { return }
+        lock.lock()
+        mainThreadViolations += 1
+        lock.unlock()
+    }
+
+    static func reset() {
+        lock.lock()
+        mainThreadViolations = 0
+        lock.unlock()
+    }
+
+    static func violationCount() -> Int {
+        lock.lock()
+        let count = mainThreadViolations
+        lock.unlock()
+        return count
+    }
+}
+
 enum TranscriptReadError: Error {
     case identityChanged
     case truncation
@@ -131,6 +159,9 @@ final class TranscriptEventReader {
     /// 测试注入：在读完 chunk 循环后、读后身份校验前调用。用于构造
     /// 读取中 truncate/replace 的确定性回归。
     var postReadHook: (() -> Void)?
+    /// 测试注入：每读完一个 chunk 后调用。用于验证 soft wall time 和取消
+    /// 都只在 chunk 边界生效。
+    var postChunkReadHook: (() -> Void)?
     init(
         url: URL,
         identity: TranscriptSourceIdentity,
@@ -160,6 +191,7 @@ final class TranscriptEventReader {
         fileManager: FileManager = .default,
         clock: TranscriptMonotonicClock = SystemTranscriptMonotonicClock()
     ) -> TranscriptEventReader? {
+        TranscriptIOThreadAudit.recordIO()
         var statBuffer = stat()
         guard lstat(url.path, &statBuffer) == 0 else { return nil }
         #if os(macOS)
@@ -191,6 +223,7 @@ final class TranscriptEventReader {
     }
 
     private func fileAttributes() throws -> FileAttributes {
+        TranscriptIOThreadAudit.recordIO()
         var statBuffer = stat()
         guard lstat(url.path, &statBuffer) == 0 else {
             throw TranscriptReadError.ioFailed
@@ -215,7 +248,12 @@ final class TranscriptEventReader {
     // MARK: - forward incremental
 
     /// 从 framer 的 committedOffset 起读一个 budget 有界 pass。
-    func readForwardPass() -> Result<[TranscriptRecordRange], TranscriptReadError> {
+    /// `maximumBytes` 允许 provider 把 index range restore、forward 与
+    /// backward 纳入同一次 refresh 的共享 8 MiB 总预算。
+    func readForwardPass(
+        maximumBytes: Int? = nil,
+        isCancelled: () -> Bool = { false }
+    ) -> Result<[TranscriptRecordRange], TranscriptReadError> {
         let attrs: FileAttributes
         do {
             attrs = try fileAttributes()
@@ -231,7 +269,13 @@ final class TranscriptEventReader {
             snapshotEOF = attrs.fileSize
             return .success([])
         }
-        let budgetLimit = UInt64(budget.maximumBytesPerPass)
+        let requestedLimit = maximumBytes ?? budget.maximumBytesPerPass
+        let boundedLimit = min(
+            max(0, requestedLimit),
+            budget.maximumBytesPerPass
+        )
+        guard boundedLimit > 0 else { return .success([]) }
+        let budgetLimit = UInt64(boundedLimit)
         let passLimit = min(remaining, budgetLimit)
 
         guard let handle = try? FileHandle(forReadingFrom: url) else {
@@ -249,6 +293,7 @@ final class TranscriptEventReader {
         do {
             try handle.seek(toOffset: readStart)
             while consumed < passLimit && !wallExceeded {
+                if isCancelled() { break }
                 let chunkLimit = min(
                     Int(passLimit - UInt64(consumed)),
                     budget.chunkBytes
@@ -261,6 +306,7 @@ final class TranscriptEventReader {
                 diagnostics.bytesRead += chunk.count
                 diagnostics.rawChunksRead += 1
                 workingFramer.feed(chunk, chunkStart: chunkStart)
+                postChunkReadHook?()
                 wallExceeded = clock.nowNanoseconds() - passStart > wallClockNs
                 if wallExceeded {
                     diagnostics.wallTimeMs += budget.softWallTime * 1_000
@@ -290,7 +336,11 @@ final class TranscriptEventReader {
             TranscriptRecordRange(
                 startOffset: $0.startOffset,
                 byteCount: $0.byteCount,
-                sourceOrder: $0.sourceOrder,
+                // Transcript ordering must survive backward continuation,
+                // process restart, and sidecar restore.  The framer's local
+                // sequence is useful for its own streaming contract, but an
+                // absolute byte offset is the stable sequence for a file.
+                sourceOrder: $0.startOffset,
                 data: $0.data
             )
         }
@@ -312,7 +362,8 @@ final class TranscriptEventReader {
     /// continuation 起点。
     func readBackwardPass(
         fromEnd endOffset: UInt64,
-        maximumBytes: Int
+        maximumBytes: Int,
+        isCancelled: () -> Bool = { false }
     ) -> Result<
         (
             records: [TranscriptRecordRange],
@@ -328,10 +379,13 @@ final class TranscriptEventReader {
             return .failure(.ioFailed)
         }
         guard attrs.identity == identity else { return .failure(.identityChanged) }
-        let lowerBound = endOffset > UInt64(maximumBytes)
-            ? endOffset - UInt64(maximumBytes)
+        guard attrs.fileSize >= endOffset else { return .failure(.truncation) }
+        let passLimit = min(maximumBytes, budget.maximumBytesPerPass)
+        guard passLimit > 0 else { return .success(([], nil, nil)) }
+        let plannedLowerBound = endOffset > UInt64(passLimit)
+            ? endOffset - UInt64(passLimit)
             : 0
-        guard endOffset > lowerBound else { return .success(([], nil, nil)) }
+        guard endOffset > plannedLowerBound else { return .success(([], nil, nil)) }
 
 
         guard let handle = try? FileHandle(forReadingFrom: url) else {
@@ -339,12 +393,46 @@ final class TranscriptEventReader {
         }
         defer { try? handle.close() }
         do {
-            try handle.seek(toOffset: lowerBound)
-            let data = try handle.read(
-                upToCount: Int(endOffset - lowerBound)
-            ) ?? Data()
-            diagnostics.bytesRead += data.count
-            diagnostics.rawChunksRead += 1
+            let passStart = clock.nowNanoseconds()
+            var cursor = endOffset
+            var data = Data()
+            while cursor > plannedLowerBound {
+                if isCancelled() { break }
+                let chunkStart: UInt64
+                if cursor - plannedLowerBound > UInt64(budget.chunkBytes) {
+                    chunkStart = cursor - UInt64(budget.chunkBytes)
+                } else {
+                    chunkStart = plannedLowerBound
+                }
+                let chunkSize = Int(cursor - chunkStart)
+                try handle.seek(toOffset: chunkStart)
+                let chunk = try handle.read(upToCount: chunkSize) ?? Data()
+                guard !chunk.isEmpty else { break }
+                var combined = Data(capacity: chunk.count + data.count)
+                combined.append(chunk)
+                combined.append(data)
+                data = combined
+                diagnostics.bytesRead += chunk.count
+                diagnostics.rawChunksRead += 1
+                cursor = chunkStart
+                postChunkReadHook?()
+                if clock.nowNanoseconds() - passStart > wallClockNs {
+                    diagnostics.wallTimeMs += budget.softWallTime * 1_000
+                    break
+                }
+            }
+            let lowerBound = cursor
+            guard !data.isEmpty else {
+                let continuation: UInt64? = lowerBound > 0 ? lowerBound : nil
+                return .success(([], continuation, nil))
+            }
+            postReadHook?()
+            guard let after = try? fileAttributes(),
+                  after.identity == identity,
+                  after.fileSize >= endOffset
+            else {
+                return .failure(.truncation)
+            }
 
             // 当 lowerBound > 0 时，数据头部是被前一轮截断的半行 JSONL
             // 片段。丢弃第一个 LF 之前的所有字节（AC-07：跨边界记录不得损坏），
@@ -377,13 +465,21 @@ final class TranscriptEventReader {
                 TranscriptRecordRange(
                     startOffset: $0.startOffset,
                     byteCount: $0.byteCount,
-                    sourceOrder: $0.sourceOrder,
+                    sourceOrder: $0.startOffset,
                     data: $0.data
                 )
             }
 
             diagnostics.recordsDecoded += records.count
-            let continuation: UInt64? = lowerBound > 0 ? feedStart : nil
+            // continuation 必须严格 < endOffset：窗口内首个 LF 恰为数据末
+            // 字节（例如单条超长记录的唯一 LF 在窗口末端）时 feedStart ==
+            // endOffset，作为 continuation 会让调用方反复读同一窗口直到
+            // 预算耗尽，永远到不了更旧记录。退到 lowerBound 保证严格递减
+            // （下一 pass 从本窗口起点继续，能越过无完整记录的字节）。
+            let continuation: UInt64? = {
+                guard lowerBound > 0 else { return nil }
+                return feedStart < endOffset ? feedStart : lowerBound
+            }()
             // 当本 pass 触及文件尾（endOffset == attrs.fileSize）且末尾
             // 是未完成行时，返回该行的起始偏移（最后一条完整记录之后），
             // 供调用方把持久 committedOffset 停在"最后完整记录后"，避免把
@@ -421,14 +517,50 @@ final class TranscriptEventReader {
 
     /// 从指定 byte range 读回一条完整 record 的 raw data。
     /// 用于 index-hit 路径：按 sidecar 中的 descriptor 回读原文件 record。
-    func readRange(_ location: TranscriptRecordLocation) -> Data? {
+    func readRange(
+        _ location: TranscriptRecordLocation,
+        maximumBytes: Int? = nil
+    ) -> Data? {
+        TranscriptIOThreadAudit.recordIO()
+        let byteCount = Int(location.byteCount)
+        let requestedLimit = min(
+            max(0, maximumBytes ?? budget.maximumBytesPerPass),
+            budget.maximumBytesPerPass
+        )
+        let (rangeEnd, overflow) = location.startOffset.addingReportingOverflow(
+            UInt64(location.byteCount)
+        )
+        guard !overflow,
+              byteCount > 0,
+              byteCount <= requestedLimit,
+              byteCount <= budget.maximumRecordBytes,
+              let before = try? fileAttributes(),
+              before.identity == identity,
+              before.fileSize >= rangeEnd
+        else {
+            return nil
+        }
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             return nil
         }
         defer { try? handle.close() }
         do {
             try handle.seek(toOffset: location.startOffset)
-            return try handle.read(upToCount: Int(location.byteCount))
+            guard let data = try handle.read(upToCount: byteCount) else {
+                return nil
+            }
+            diagnostics.bytesRead += data.count
+            diagnostics.rawChunksRead += data.isEmpty ? 0 : 1
+            guard
+                  data.count == byteCount,
+                  data.last == 0x0A,
+                  let after = try? fileAttributes(),
+                  after.identity == identity,
+                  after.fileSize >= rangeEnd
+            else {
+                return nil
+            }
+            return data
         } catch {
             return nil
         }
@@ -499,18 +631,67 @@ struct TranscriptIndexStore {
     }
 
     func ensureRootExists() throws {
+        TranscriptIOThreadAudit.recordIO()
+        // `createDirectory(...withIntermediateDirectories:)` applies the
+        // requested mode only to the leaf.  Protect the named index parent as
+        // well so the default `Transcript Index/v1` hierarchy is 0700 at both
+        // metadata-bearing directory levels.  Custom test/injected roots do
+        // not chmod an unrelated parent directory.
+        let parent = rootDirectory.deletingLastPathComponent()
+        if rootDirectory.lastPathComponent == "v1",
+           parent.lastPathComponent == "Transcript Index"
+        {
+            try fileManager.createDirectory(
+                at: parent,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            _ = chmod(parent.path, S_IRWXU)
+            var protectedParent = parent
+            var parentValues = URLResourceValues()
+            parentValues.isExcludedFromBackup = true
+            try protectedParent.setResourceValues(parentValues)
+        }
         try fileManager.createDirectory(
             at: rootDirectory,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+        _ = chmod(rootDirectory.path, S_IRWXU)
+        var root = rootDirectory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try root.setResourceValues(values)
     }
 
-    func save(_ checkpoint: Checkpoint, agentID: AgentID, sessionKey: String) throws {
+    func save(
+        _ checkpoint: Checkpoint,
+        agentID: AgentID,
+        sessionKey: String,
+        force: Bool = false
+    ) throws {
+        TranscriptIOThreadAudit.recordIO()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         var encoded = checkpoint
         encoded.schemaVersion = Self.schemaVersion
+        encoded.agentID = agentID
+        encoded.sessionKeyDigest = digest(agentID.rawValue + "\u{0}" + sessionKey)
+        encoded = normalizedStableOrdering(encoded)
+        encoded.publicMessageDescriptors = Array(
+            encoded.publicMessageDescriptors
+                .filter { $0.eventClass == .publicMessage }
+                .suffix(Self.maximumPublicMessages)
+        )
+        var descriptorCount = encoded.publicMessageDescriptors.count
+        descriptorCount += encoded.currentToolDescriptor == nil ? 0 : 1
+        descriptorCount += encoded.terminalDescriptor == nil ? 0 : 1
+        descriptorCount += encoded.metadataDescriptor == nil ? 0 : 1
+        if descriptorCount > Self.maximumDescriptors {
+            encoded.currentToolDescriptor = nil
+            encoded.terminalDescriptor = nil
+            encoded.metadataDescriptor = nil
+        }
         let data = try encoder.encode(encoded)
         guard data.count <= Self.maximumFileBytes else {
             throw TranscriptIndexError.fileTooBig
@@ -524,6 +705,15 @@ struct TranscriptIndexStore {
         )
         _ = chmod(agentDir.path, S_IRWXU)
         let url = indexFileURL(agentID: agentID, sessionKey: sessionKey)
+        if !force,
+           fileManager.fileExists(atPath: url.path),
+           let modified = try? url.resourceValues(
+               forKeys: [.contentModificationDateKey]
+           ).contentModificationDate,
+           Date().timeIntervalSince(modified) < Self.maximumWriteInterval
+        {
+            return
+        }
         let tempURL = url.appendingPathExtension("tmp-\(UUID().uuidString)")
         try data.write(to: tempURL, options: .atomic)
         try fileManager.setAttributes(
@@ -531,27 +721,86 @@ struct TranscriptIndexStore {
             ofItemAtPath: tempURL.path
         )
         _ = chmod(tempURL.path, S_IRUSR | S_IWUSR)
-        _ = rename(tempURL.path, url.path)
+        guard rename(tempURL.path, url.path) == 0 else {
+            let errnoValue = errno
+            try? fileManager.removeItem(at: tempURL)
+            throw POSIXError(POSIXErrorCode(rawValue: errnoValue) ?? .EIO)
+        }
         _ = chmod(url.path, S_IRUSR | S_IWUSR)
+        guard permissionsMatch(path: url.path, expected: S_IRUSR | S_IWUSR)
+        else {
+            throw POSIXError(.EACCES)
+        }
+    }
+
+    func saveCoalesced(
+        _ checkpoint: Checkpoint,
+        agentID: AgentID,
+        sessionKey: String
+    ) throws {
+        try save(checkpoint, agentID: agentID, sessionKey: sessionKey)
+    }
+
+    func flush(
+        _ checkpoint: Checkpoint,
+        agentID: AgentID,
+        sessionKey: String
+    ) throws {
+        try save(checkpoint, agentID: agentID, sessionKey: sessionKey, force: true)
     }
 
     func load(agentID: AgentID, sessionKey: String) -> Checkpoint? {
+        TranscriptIOThreadAudit.recordIO()
         let url = indexFileURL(agentID: agentID, sessionKey: sessionKey)
+        guard permissionsAreStrictForLoad(url: url, agentID: agentID) else {
+            try? fileManager.removeItem(at: url)
+            return nil
+        }
         guard let data = try? Data(contentsOf: url) else { return nil }
         guard data.count <= Self.maximumFileBytes else {
             try? fileManager.removeItem(at: url)
             return nil
         }
         guard let checkpoint = try? JSONDecoder().decode(Checkpoint.self, from: data),
-              checkpoint.schemaVersion == Self.schemaVersion
+              checkpoint.schemaVersion == Self.schemaVersion,
+              checkpoint.agentID == agentID,
+              checkpoint.sessionKeyDigest == digest(agentID.rawValue + "\u{0}" + sessionKey)
         else {
             try? fileManager.removeItem(at: url)
             return nil
         }
-        return checkpoint
+        // Development builds before the absolute-offset ordering contract may
+        // have persisted a pass-local sourceOrder.  Normalize on load instead
+        // of trusting it, so an existing metadata-only sidecar cannot revive
+        // unstable same-timestamp ordering.
+        return normalizedStableOrdering(checkpoint)
+    }
+
+    private func normalizedStableOrdering(_ checkpoint: Checkpoint) -> Checkpoint {
+        func normalized(_ location: TranscriptRecordLocation?)
+            -> TranscriptRecordLocation?
+        {
+            guard let location else { return nil }
+            return TranscriptRecordLocation(
+                startOffset: location.startOffset,
+                byteCount: location.byteCount,
+                sourceOrder: location.startOffset,
+                eventClass: location.eventClass,
+                occurredAt: location.occurredAt
+            )
+        }
+
+        var result = checkpoint
+        result.publicMessageDescriptors = checkpoint.publicMessageDescriptors
+            .compactMap { normalized($0) }
+        result.currentToolDescriptor = normalized(checkpoint.currentToolDescriptor)
+        result.terminalDescriptor = normalized(checkpoint.terminalDescriptor)
+        result.metadataDescriptor = normalized(checkpoint.metadataDescriptor)
+        return result
     }
 
     func delete(agentID: AgentID, sessionKey: String) {
+        TranscriptIOThreadAudit.recordIO()
         let url = indexFileURL(agentID: agentID, sessionKey: sessionKey)
         if fileManager.fileExists(atPath: url.path) {
             try? fileManager.removeItem(at: url)
@@ -563,7 +812,11 @@ struct TranscriptIndexStore {
         referencedSessionKeys: Set<String>,
         now: Date = Date()
     ) {
+        TranscriptIOThreadAudit.recordIO()
         let dir = agentDirectory(agentID: agentID)
+        let referencedDigests = Set(referencedSessionKeys.map {
+            digest(agentID.rawValue + "\u{0}" + $0)
+        })
         guard let entries = try? fileManager.contentsOfDirectory(
             at: dir,
             includingPropertiesForKeys: [.contentModificationDateKey]
@@ -571,7 +824,7 @@ struct TranscriptIndexStore {
         let staleThreshold = now.addingTimeInterval(-Self.orphanRetentionPeriod)
         for entry in entries where entry.pathExtension == "json" {
             let name = entry.deletingPathExtension().lastPathComponent
-            guard !referencedSessionKeys.contains(name) else { continue }
+            guard !referencedDigests.contains(name) else { continue }
             let modified = (try? entry.resourceValues(
                 forKeys: [.contentModificationDateKey]
             ).contentModificationDate) ?? .distantPast
@@ -584,6 +837,21 @@ struct TranscriptIndexStore {
     private func digest(_ value: String) -> String {
         let hash = SHA256.hash(data: Data(value.utf8))
         return hash.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func permissionsAreStrictForLoad(url: URL, agentID: AgentID) -> Bool {
+        let agentDir = agentDirectory(agentID: agentID)
+        guard permissionsMatch(path: rootDirectory.path, expected: S_IRWXU),
+              permissionsMatch(path: agentDir.path, expected: S_IRWXU)
+        else { return false }
+        guard fileManager.fileExists(atPath: url.path) else { return true }
+        return permissionsMatch(path: url.path, expected: S_IRUSR | S_IWUSR)
+    }
+
+    private func permissionsMatch(path: String, expected: mode_t) -> Bool {
+        var statBuffer = stat()
+        guard lstat(path, &statBuffer) == 0 else { return false }
+        return (statBuffer.st_mode & mode_t(0o777)) == expected
     }
 }
 

@@ -124,8 +124,8 @@ struct AgentActivityProjection: Equatable {
 
     static let empty = AgentActivityProjection()
 
-    /// 迁移期兼容桥：由公共投影唯一派生的旧 `events` 数组（正文已按时间/顺序
-    /// 倒序；工具与终态各自独立通道附后）。provider 不得再直接写混合数组。
+    /// 只读兼容视图：由公共投影唯一派生 `events` 数组（正文已按时间/顺序
+    /// 倒序；工具与终态各自独立通道附后）。provider 不得直接写混合数组。
     var displayEvents: [TaskActivityEvent] {
         var rows: [(order: UInt64, occurredAt: Date, kind: TaskActivityEventKind, text: String)] = []
         for entry in publicMessages {
@@ -160,8 +160,8 @@ struct AgentActivityProjection: Equatable {
 
 extension AgentActivityProjection {
     /// 集中应用计划 §4.3 的内存预算与脱敏后截断：正文最多 32 条、单条
-    /// 4 KiB、合计 64 KiB；工具状态 512 B；终态 256 B。legacy 与显式
-    /// projection 两条路径都必须经此收敛。
+    /// 4 KiB、合计 64 KiB；工具状态 512 B；终态 256 B。所有 provider
+    /// projection 都必须经此收敛。
     func budgeted() -> AgentActivityProjection {
         // 0) 先按 occurredAt/sourceOrder DESC 排序，保证 prefix 保留最新；
         //    再对正文脱敏（compactMap 丢弃脱敏失败项），最后才截断。
@@ -242,75 +242,6 @@ extension AgentActivityProjection {
             publicMessages: messages,
             currentToolStatus: toolStatus,
             terminalEvent: terminal
-        )
-    }
-}
-extension AgentActivityProjection {
-    /// 迁移期 bridge：把旧 provider 的混合 `events` 按 kind 路由到三通道，
-    /// 用 provider+session+insertion index 生成仅进程内有效的 legacy ID，
-    /// 并把 index 写入 sourceOrder。不能落 sidecar，不能用于跨刷新去重；
-    /// provider 迁移后必须删除。
-    ///
-    /// `.lifecycle` 在 Codex/Claude 里表示“任务开始/等待输入”，不只完成/
-    /// 失败；只有 `kind` 为 `.completed`/`.failed` 时才把最新 lifecycle
-    /// 提为 `terminalEvent`（并清空 `currentToolStatus`），否则只当普通
-    /// 公开消息。publicMessages 规范化为 occurredAt DESC、sourceOrder DESC。
-    static func legacy(
-        bridging events: [TaskActivityEvent],
-        source: AgentID,
-        sessionKey: String?,
-        kind: TaskProgressKind
-    ) -> AgentActivityProjection {
-        var publicMessages: [AgentActivityEntry] = []
-        var currentToolStatus: AgentActivityEntry?
-        var terminalEvent: AgentActivityEntry?
-        let session = sessionKey ?? ""
-        let hasTerminalKind = kind == .completed || kind == .failed
-        for (index, event) in events.enumerated() {
-            let stableSourceKey: String
-            switch event.kind {
-            case .tool:
-                stableSourceKey = "tool-\(index)"
-            case .lifecycle:
-                stableSourceKey = "lifecycle-\(index)"
-            case .commentary:
-                stableSourceKey = "commentary-\(index)"
-            }
-            let id = AgentActivityEventID(
-                source: source,
-                sessionKey: session,
-                stableSourceKey: stableSourceKey
-            )
-            let entry = AgentActivityEntry(
-                id: id,
-                occurredAt: event.occurredAt,
-                sourceOrder: UInt64(index),
-                text: event.text
-            )
-            switch event.kind {
-            case .commentary:
-                publicMessages.append(entry)
-            case .tool:
-                currentToolStatus = entry
-            case .lifecycle:
-                if hasTerminalKind {
-                    terminalEvent = entry
-                    currentToolStatus = nil
-                }
-                // 非终态 lifecycle（会话开始/任务开始/等待输入）是状态/
-                // metadata，不是 transcript 正文：忽略，不进入 publicMessages。
-            }
-        }
-        publicMessages.sort {
-            if $0.occurredAt != $1.occurredAt {
-                return $0.occurredAt > $1.occurredAt
-            }
-            return $0.sourceOrder > $1.sourceOrder
-        }
-        return AgentActivityProjection(
-            publicMessages: publicMessages,
-            currentToolStatus: currentToolStatus,
-            terminalEvent: terminalEvent
         )
     }
 }

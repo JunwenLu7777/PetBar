@@ -10,9 +10,32 @@ ThreadHelm 只供这台 Mac 的当前用户使用。集成管理没有云端、�
 | Claude Code | 只管理自己拥有的 `PermissionRequest` HTTP Hook；其他 Hook、环境变量和设置保留。 | `~/.claude/settings.json` |
 | Cursor | 只管理带 `threadhelmOwner` / `threadhelmAgent` 标记的生命周期 Hook；其他 Hook 和禁用选择保留。 | `~/.cursor/hooks.json` |
 | ZCode | 只管理状态观察事件中的 ThreadHelm process Hook；不注册 `PermissionRequest`，并保留已有配置的其他键、事件顺序和 `hooks.enabled`。配置文件原本不存在时会新建并启用 Hook，同时写入独立所有权标记，卸载时据此恢复到“文件不存在”；旧版 ThreadHelm 单独创建且尚未启用的纯受管配置会安全迁移。变更只对新启动的 ZCode 会话生效。 | `~/.zcode/cli/config.json`、`~/.zcode/cli/.threadhelm-config-owner` |
-| OMP | 只管理一个带所有权文件的 state-only 扩展；不做审批、发消息、取消、导航或会话修改。 | `~/.omp/agent/extensions/threadhelm-state-observer/` |
+| OMP | 只管理一个带所有权文件的状态观察扩展；任务按钮可在终端发起 `--resume` 跳转，但不做审批、发消息、取消或其他会话控制。 | `~/.omp/agent/extensions/threadhelm-state-observer/`；只读会话源为 `~/.omp/agent/sessions/` |
 
 App 本身安装到 `~/Applications/ThreadHelm.app`，登录启动项是 `~/Library/LaunchAgents/dev.threadhelm.app.plist`。运行日志在 `~/Library/Logs/ThreadHelm.log`，健康文件在 `~/Library/Caches/dev.threadhelm.app/`。
+
+## 最近消息与 Transcript Index
+
+Codex、Claude Code/Desktop、Cursor 和 OMP 的“最近消息”会有界、只读地扫描各厂商原生 JSONL transcript；ZCode 仍是 Hook-only 来源，不使用文件 offset。读取层只把完整 JSONL record 交给对应 Agent 解码器，只提取经过脱敏的公开 assistant 文本。thinking、tool input、tool result 和原始 Hook payload 不进入最近消息。工具状态和任务终态使用独立通道，不会挤掉已恢复的公开消息。
+
+每次刷新以 1 MiB 分块、合计最多读取 8 MiB；冷启动通过后续刷新 continuation 逐步回扫，但同一 App 生命周期最多累计 64 MiB。达到上限后会保留 continuation，下一次 App 生命周期可继续，而不是在当前进程中无界扫描。超过 4 MiB 的单条记录会被跳过并计数。厂商 transcript 始终以只读方式打开，ThreadHelm 不修改其内容、权限、位置或生命周期。
+
+为避免每次重扫大文件，ThreadHelm 会写入仅含 byte range、文件身份、offset 和计数的本机索引：
+
+```text
+~/Library/Application Support/ThreadHelm/Transcript Index/v1/<agentID>/<session-key-digest>.json
+```
+
+索引目录权限为 `0700`，文件权限为 `0600`，根目录排除系统备份，单个索引最大 512 KiB。索引不保存正文、标题、cwd、工具名、工具参数/结果、thinking、partial bytes、原始 session ID 或 Hook payload；文件名和索引内 session key 都使用摘要。源文件被确认删除时会删除对应索引，未再被发现且超过 7 天的孤儿索引会被清理。索引损坏、权限过宽、版本不支持或文件身份变化时会被丢弃并从原 transcript 有界重建。
+
+索引只是可重建缓存。排查恢复问题时可以先完全退出 ThreadHelm，再删除 `Transcript Index/v1`；下次启动会重新创建，不会影响厂商 transcript。源码构建可用以下本机专用命令核对四种真实 transcript 在读取前后的 size、mtime 和 SHA-256 均未变化；它只输出聚合计数，不输出路径、正文或 digest：
+
+```bash
+BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
+"$BIN" --self-test-real-transcript-readonly
+```
+
+OMP 扩展传给 ThreadHelm 的仍然只有 classification-only 生命周期状态，不传正文、路径、thinking、工具参数或工具输出；公开进度仅由 GUI 进程通过上述只读 transcript 管线恢复。
 
 ## 低噪声提醒和本地评价
 
@@ -46,7 +69,7 @@ Agents 页面里的 `validated` 不是“看起来能用”，而是本机发现
 - ZCode `3.7.6` 和 build `3.7.6.4691`
 - OMP `17.3.2`
 
-只要版本没读到、少一个分量或有任意漂移，就显示 `unvalidated`，并隐藏只在固定版本上验证过的能力文案。例如本机 Cursor Desktop 即使再升到 `3.16.0`，也不能沿用 `3.15.19` 的验证结论。发现过程只读；`unvalidated` Agent 的安装和修复会跳过，不会改厂商配置，卸载仍可只移除已确认属于 ThreadHelm 的条目。
+只要版本没读到、少一个分量或有任意漂移，就显示 `unvalidated`，并隐藏只在固定版本上验证过的能力文案。例如本机 Cursor Desktop 即使再升到 `3.16.0`，也不能沿用 `3.15.19` 的验证结论。版本漂移只限制能力声明、自动交互和打断提醒，不会把已经观测到的 `waitingForInput` 改写成 `running`，也不会禁用已有的原生跳转。发现过程只读；`unvalidated` Agent 的安装和修复会跳过，不会改厂商配置，卸载仍可只移除已确认属于 ThreadHelm 的条目。
 
 在源码目录构建后，可以运行生产回放器：
 
@@ -58,7 +81,7 @@ BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 
 这会读取 81 条脱敏场景，经生产 Swift 归一化和真实 `AgentEventReducer` 比较 7 个 expected 字段。duplicate 和 out-of-order 场景也走真实 reducer。输出的 miss、false alert、duplicate、exact return 分子分母只说明这 81 条固定夹具，没有测量实际使用、延迟或主观体验；回放过程不写持久化用户状态。
 
-该基线里 Codex 精确返回仍是 `unknown`；Claude Code 只有同时匹配会话、活进程和 process-start identity 才可能是 exact，否则降为 `unknown`；Cursor 与 ZCode 不宣称 exact；OMP 的精确返回能力是 `unsupported`，打开结果只能是 `unavailable`。发布脚本会执行同一回放，并把真值夹具纳入 release 输入时间；夹具更新后旧 ZIP 会被判为 stale。
+该基线里 Codex 精确返回仍是 `unknown`；Claude Code 只有同时匹配会话、活进程和 process-start identity 才可能是 exact，否则降为 `unknown`；Cursor 与 ZCode 不宣称 exact；OMP 可发起 `--resume`，但未独立确认落点，因此打开结果仍是 `unknown`，不能宣称 exact。发布脚本会执行同一回放，并把真值夹具纳入 release 输入时间；夹具更新后旧 ZIP 会被判为 stale。
 
 受管集成的逻辑契约可以单独验证，不受其他适配器自测影响：
 

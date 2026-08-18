@@ -419,12 +419,12 @@ extension AgentAdapter {
     }
 
     func open(session: AgentSessionSnapshot) -> AgentOpenReport {
-        openSessionForValidatedVersion(session: session) {
+        openSessionIfInstalled(session: session) {
             openValidated(session: session)
         }
     }
 
-    func openSessionForValidatedVersion(
+    func openSessionIfInstalled(
         session: AgentSessionSnapshot,
         perform: () -> AgentOpenReport
     ) -> AgentOpenReport {
@@ -438,15 +438,9 @@ extension AgentAdapter {
                 independentlyConfirmedIdentity: false
             )
         }
-        guard discovery.compatibility == .validated else {
-            return AgentOpenReport(
-                agentID: metadata.id,
-                advertisedActionability: session.actionability,
-                result: .notAttempted,
-                invokedExactTarget: false,
-                independentlyConfirmedIdentity: false
-            )
-        }
+        // 用户主动触发的本地导航与自动集成分开授权。版本漂移仍会
+        // 降级能力声明、提醒和配置写入，但不能让已有的原生应用、
+        // 会话 ID 或工作目录跳转整体失效。
         return perform()
     }
 
@@ -849,7 +843,7 @@ private func normalizedActionability(
         return item.canOpen ? .openNativeApp : .viewOnly
     }
     if agentID == .omp {
-        return .viewOnly
+        return item.canOpen ? .openExactNativeSession : .viewOnly
     }
     if item.canOpen { return .openExactNativeSession }
     if item.workingDirectory != nil { return .openWorkingDirectory }
@@ -1182,10 +1176,14 @@ func builtInAgentMetadata() -> [AgentMetadata] {
             fallbackSymbolName: "waveform.path.ecg",
             brandColor: AgentColorComponents(red: 0.96, green: 0.67, blue: 0.22),
             versionSource: "omp --version",
-            identityPolicy: "state-only; native session return unverified",
+            identityPolicy: "native session ID; resume dispatch unverified",
             capabilities: AgentCapabilitySet(
-                supported: [.lifecycleObservation, .managedIntegration],
-                unknown: [.stableIdentity]
+                supported: [
+                    .lifecycleObservation,
+                    .nativeNavigation,
+                    .managedIntegration,
+                ],
+                unknown: [.stableIdentity, .exactReturn]
             )
         ),
     ]

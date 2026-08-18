@@ -112,6 +112,28 @@ func claudeResumeCommand(
         + " --resume \(shellSingleQuoted(sessionID.lowercased()))"
 }
 
+func ompResumeCommand(
+    sessionID: String,
+    executablePath: String
+) -> String? {
+    guard executablePath.hasPrefix("/"),
+          let normalizedSessionID = normalizedOMPSessionID(sessionID)
+    else { return nil }
+    return "exec \(shellSingleQuoted(executablePath))"
+        + " --resume \(shellSingleQuoted(normalizedSessionID))"
+}
+
+func normalizedOMPSessionID(_ sessionID: String) -> String? {
+    let normalized = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard normalized != "omp-session-unknown",
+          normalized.range(
+              of: #"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"#,
+              options: .regularExpression
+          ) != nil
+    else { return nil }
+    return normalized
+}
+
 func normalizedTerminalTTY(_ value: String) -> String? {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, trimmed != "??" else { return nil }
@@ -676,21 +698,9 @@ func focusExistingClaudeTerminal(workingDirectory: String) -> Bool {
     return executeAppleScriptReturningBoolean(source)
 }
 
-func openClaudeSession(
-    sessionID: String,
-    workingDirectory: String
-) -> Bool {
-    var isDirectory: ObjCBool = false
-    guard FileManager.default.fileExists(
-        atPath: workingDirectory,
-        isDirectory: &isDirectory
-    ), isDirectory.boolValue else { return false }
-    guard let executablePath = locateClaudeExecutable()?.path,
-          let command = claudeResumeCommand(
-        sessionID: sessionID,
-        workingDirectory: workingDirectory,
-        executablePath: executablePath
-    ) else { return false }
+func openCommandInPreferredTerminal(_ command: String) -> Bool {
+    guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else { return false }
 
     let supportedBundleIdentifiers = [
         "io.appmakes.otty",
@@ -749,4 +759,32 @@ func openClaudeSession(
         }
     }
     return false
+}
+
+func openOMPSession(sessionID: String) -> Bool {
+    guard let executablePath = locateOMPExecutable()?.path,
+          let command = ompResumeCommand(
+              sessionID: sessionID,
+              executablePath: executablePath
+          )
+    else { return false }
+    return openCommandInPreferredTerminal(command)
+}
+
+func openClaudeSession(
+    sessionID: String,
+    workingDirectory: String
+) -> Bool {
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(
+        atPath: workingDirectory,
+        isDirectory: &isDirectory
+    ), isDirectory.boolValue else { return false }
+    guard let executablePath = locateClaudeExecutable()?.path,
+          let command = claudeResumeCommand(
+        sessionID: sessionID,
+        workingDirectory: workingDirectory,
+        executablePath: executablePath
+    ) else { return false }
+    return openCommandInPreferredTerminal(command)
 }

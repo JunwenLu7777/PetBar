@@ -22,7 +22,7 @@ func runOMPAgentAdapterSelfTest() {
                 + "navigation=resume-dispatch+no-control-fields+"
                 + "installed-jiti-load=\(extensionLoad.rawValue) "
                 + "events=offline+slow+malformed+duplicate+out-of-order+shutdown-stale "
-                + "public-output=text-only+cwd+bounded-local-read"
+                + "public-output=text-only+cwd+bounded-local-read+atomic-replace"
         )
     } catch {
         fputs("omp-agent-adapter-self-test failed: \(error)\n", stderr)
@@ -692,8 +692,8 @@ private func runOMPLocalSessionContentSelfTest() throws {
     let parsed = OMPLocalSession.content(fromJSONL: transcript)
     guard parsed.workingDirectory == "/private/tmp/omp-public-project",
           parsed.events.map(\.text) == [
-              "正在整理 OMP 的公开结果",
               "access_token=[已隐藏]",
+              "正在整理 OMP 的公开结果",
           ],
           !parsed.events.contains(where: {
               $0.text.contains("隐藏推理")
@@ -713,6 +713,10 @@ private func runOMPLocalSessionContentSelfTest() throws {
         isDirectory: true
     )
     defer { try? manager.removeItem(at: root) }
+    let indexRoot = root.appendingPathComponent(
+        "Transcript Index",
+        isDirectory: true
+    )
     let project = root.appendingPathComponent("project", isDirectory: true)
     try manager.createDirectory(at: project, withIntermediateDirectories: true)
     let transcriptURL = project.appendingPathComponent(
@@ -722,17 +726,87 @@ private func runOMPLocalSessionContentSelfTest() throws {
     let located = OMPLocalSession.content(
         sessionID: sessionID,
         sessionsRoot: root,
-        fileManager: manager
+        fileManager: manager,
+        indexRootDirectory: indexRoot
     )
-    guard located == parsed,
+    guard located?.workingDirectory == parsed.workingDirectory,
+          located?.events.map(\.text) == parsed.events.map(\.text),
+          located?.events.contains(where: {
+              $0.text.contains("隐藏推理")
+                  || $0.text.contains("工具输出")
+                  || $0.text.contains("echo secret")
+                  || $0.text.contains("raw-json-secret")
+          }) == false,
           OMPLocalSession.content(
               sessionID: "bad session; unsafe",
               sessionsRoot: root,
-              fileManager: manager
+              fileManager: manager,
+              indexRootDirectory: indexRoot
           ) == nil
     else {
         throw OMPAgentAdapterSelfTestError.failed(
             "OMP bounded local transcript lookup"
+        )
+    }
+
+    // Cache validation is identity-based, not just mtime/size based.  Replace
+    // the transcript atomically with equal-length content and preserve mtime;
+    // the second production read must project only the replacement inode.
+    let replaceSessionID = "01a00dcf-f7ab-7000-9273-9c7707ab6200"
+    let replaceURL = project.appendingPathComponent(
+        "2026-08-17T03-42-08-299Z_\(replaceSessionID).jsonl"
+    )
+    func replaceTranscript(_ text: String) -> Data {
+        Data(
+            ("""
+            {"type":"session","timestamp":"2026-08-17T03:42:08.299Z","cwd":"/private/tmp/omp-replace-project"}
+            {"type":"message","timestamp":"2026-08-17T03:45:24.944Z","message":{"role":"assistant","content":[{"type":"text","text":"\(text)"}]}}
+            """ + "\n").utf8
+        )
+    }
+    let replaceFirstData = replaceTranscript("AAAA")
+    let replaceSecondData = replaceTranscript("BBBB")
+    guard replaceFirstData.count == replaceSecondData.count else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "OMP atomic replace fixtures differ in size"
+        )
+    }
+    let replaceDate = Date(timeIntervalSince1970: 1_786_600_000)
+    OMPLocalSession.resetInMemoryStateForTesting()
+    try replaceFirstData.write(to: replaceURL)
+    try manager.setAttributes(
+        [.modificationDate: replaceDate],
+        ofItemAtPath: replaceURL.path
+    )
+    guard let firstIdentity = TranscriptEventReader.make(at: replaceURL)?.identity,
+          OMPLocalSession.content(
+              sessionID: replaceSessionID,
+              sessionsRoot: root,
+              fileManager: manager,
+              indexRootDirectory: indexRoot
+          )?.events.contains(where: { $0.text.contains("AAAA") }) == true
+    else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "OMP atomic replace initial projection"
+        )
+    }
+    try replaceSecondData.write(to: replaceURL, options: .atomic)
+    try manager.setAttributes(
+        [.modificationDate: replaceDate],
+        ofItemAtPath: replaceURL.path
+    )
+    let replaced = OMPLocalSession.content(
+        sessionID: replaceSessionID,
+        sessionsRoot: root,
+        fileManager: manager,
+        indexRootDirectory: indexRoot
+    )
+    guard TranscriptEventReader.make(at: replaceURL)?.identity != firstIdentity,
+          replaced?.events.contains(where: { $0.text.contains("BBBB") }) == true,
+          replaced?.events.contains(where: { $0.text.contains("AAAA") }) != true
+    else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "OMP same-size atomic replace reused stale cache"
         )
     }
 
@@ -753,7 +827,8 @@ private func runOMPLocalSessionContentSelfTest() throws {
         let largeLocated = OMPLocalSession.content(
             sessionID: largeSessionID,
             sessionsRoot: root,
-            fileManager: manager
+            fileManager: manager,
+            indexRootDirectory: indexRoot
         )
         if largeLocated?.workingDirectory == "/private/tmp/omp-large-project",
            largeLocated?.events.map(\.text) == ["尾部公开结果仍可读取"],

@@ -69,9 +69,8 @@ struct TaskProgressItem: Equatable {
     let workingDirectory: String?
     let processID: Int32?
     let processStartIdentity: String?
-    /// 公共活动投影（Phase 1 bridge）：唯一的事件语义源。legacy provider
-    /// 传 `events:` 时在 init 内按 kind 桥接为临时三通道投影；视图只读
-    /// `events`（= projection.displayEvents），不再直接写混合数组。
+    /// 公共活动投影：唯一的事件语义源。视图只读 `events`
+    ///（= projection.displayEvents），provider 不再直接写混合数组。
     let projection: AgentActivityProjection
     let allowsAgentOpen: Bool
     init(
@@ -87,8 +86,7 @@ struct TaskProgressItem: Equatable {
         workingDirectory: String? = nil,
         processID: Int32? = nil,
         processStartIdentity: String? = nil,
-        events: [TaskActivityEvent] = [],
-        projection: AgentActivityProjection? = nil,
+        projection: AgentActivityProjection = .empty,
         allowsAgentOpen: Bool = true
     ) {
         self.title = title
@@ -103,15 +101,7 @@ struct TaskProgressItem: Equatable {
         self.workingDirectory = workingDirectory.flatMap(normalizedAbsolutePath)
         self.processID = processID
         self.processStartIdentity = processStartIdentity
-        var resolved = (
-            projection
-            ?? .legacy(
-                bridging: events,
-                source: source,
-                sessionKey: sessionID ?? threadID,
-                kind: kind
-            )
-        ).budgeted()
+        var resolved = projection.budgeted()
         // AC-16：终态卡片无条件清除陈旧工具状态（显式 projection 或只有
         // tool、没有 lifecycle record 时也必须生效）。
         if kind == .completed || kind == .failed {

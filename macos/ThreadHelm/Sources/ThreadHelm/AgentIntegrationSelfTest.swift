@@ -161,13 +161,13 @@ func runAgentIntegrationSelfTest() {
     ) == .supported,
           registry.metadata(for: .omp)?.capabilities.status(
               for: .nativeNavigation
-          ) == .unsupported,
+          ) == .supported,
           registry.metadata(for: .omp)?.capabilities.status(
               for: .inAppPermission
           ) == .unsupported,
           registry.metadata(for: .omp)?.capabilities.status(
               for: .exactReturn
-          ) == .unsupported,
+          ) == .unknown,
           registry.metadata(for: .cursor)?.capabilities.status(
               for: .exactReturn
           ) == .unknown,
@@ -183,7 +183,7 @@ func runAgentIntegrationSelfTest() {
               ) == .supported
           })
     else {
-        failAgentIntegrationSelfTest("state-only/unknown capability boundary")
+        failAgentIntegrationSelfTest("navigation/control capability boundary")
     }
 
     guard QuotaProvider.allCases.map(\.rawValue) == ["codex", "claudeCode"]
@@ -331,7 +331,7 @@ private func runAgentVersionTruthSelfTest() {
               for: .managedIntegration
           ) == .unsupported,
           codexMetadata?.capabilities.status(for: .exactReturn) == .unknown,
-          ompMetadata?.capabilities.status(for: .exactReturn) == .unsupported,
+          ompMetadata?.capabilities.status(for: .exactReturn) == .unknown,
           normalizedAgentVersion(from: "codex-cli 0.145.0") == "0.145.0",
           normalizedAgentVersion(from: "2.1.226 (Claude Code)") == "2.1.226",
           normalizedAgentVersion(from: "2026.04.14-ee4b43a")
@@ -411,10 +411,10 @@ private func runCodexClaudeAdapterSelfTest() {
           codexReport.result == .unknown,
           codexReport.exactAttempted,
           !codexReport.independentlyConfirmedIdentity,
-          driftedCodexReport.result == .notAttempted,
-          !driftedCodexReport.exactAttempted,
+          driftedCodexReport.result == .unknown,
+          driftedCodexReport.exactAttempted,
           !driftedCodexReport.independentlyConfirmedIdentity,
-          driftedCodexOpenCallCount == 0,
+          driftedCodexOpenCallCount == 1,
           failedCodexReport.result == .failed,
           failedCodexReport.exactAttempted,
           !failedCodexReport.independentlyConfirmedIdentity,
@@ -485,7 +485,7 @@ private func runCodexClaudeAdapterSelfTest() {
             return .unknown
         }
     )
-    let driftedClaudeReport = driftedClaude.openSessionForValidatedVersion(
+    let driftedClaudeReport = driftedClaude.openSessionIfInstalled(
         session: claudeSnapshot
     ) {
         driftedClaudeGateBodyCallCount += 1
@@ -504,11 +504,11 @@ private func runCodexClaudeAdapterSelfTest() {
           claudeReport.advertisedActionability == .inApp,
           !claudeReport.exactAttempted,
           !claudeReport.independentlyConfirmedIdentity,
-          driftedClaudeReport.result == .notAttempted,
+          driftedClaudeReport.result == .unknown,
           !driftedClaudeReport.exactAttempted,
           !driftedClaudeReport.independentlyConfirmedIdentity,
-          driftedClaudeGateBodyCallCount == 0,
-          driftedClaudeTerminalOpenCallCount == 0,
+          driftedClaudeGateBodyCallCount == 1,
+          driftedClaudeTerminalOpenCallCount == 1,
           nativeOnlyClaudeSnapshot?.attentionReason == .question,
           nativeOnlyClaudeSnapshot?.actionability
             == .openExactNativeSession,
@@ -932,6 +932,62 @@ private func runAgentTaskProgressRegistrySelfTest(mockAgentID: AgentID) {
           second.items.contains(where: { $0.title == "Sixth source" })
     else {
         failAgentIntegrationSelfTest("task registry extension/fail-open")
+    }
+
+    let navigableItems = [
+        TaskProgressItem(
+            title: "Codex navigation",
+            kind: .running,
+            startedAt: now,
+            source: .codex,
+            threadID: "11111111-1111-4111-8111-111111111111"
+        ),
+        TaskProgressItem(
+            title: "Claude navigation",
+            kind: .running,
+            startedAt: now,
+            source: .claudeCode,
+            sessionID: "22222222-2222-4222-8222-222222222222",
+            workingDirectory: "/tmp/threadhelm-claude"
+        ),
+        TaskProgressItem(
+            title: "Cursor navigation",
+            kind: .running,
+            startedAt: now,
+            source: .cursor,
+            sessionID: "cursor-navigation"
+        ),
+        TaskProgressItem(
+            title: "ZCode navigation",
+            kind: .running,
+            startedAt: now,
+            source: .zcode,
+            sessionID: "zcode-navigation"
+        ),
+        TaskProgressItem(
+            title: "OMP navigation",
+            kind: .running,
+            startedAt: now,
+            source: .omp,
+            sessionID: "omp-navigation"
+        ),
+    ]
+    guard navigableItems.allSatisfy(\.canOpen),
+          navigableItems.map(\.openButtonTitle) == [
+              "打开 Codex",
+              "回到终端",
+              "打开 Cursor",
+              "打开 ZCode",
+              "打开 OMP",
+          ],
+          AgentRegistry.builtIn.metadata(for: .omp).flatMap({ metadata in
+              agentSessionSnapshot(
+                  from: navigableItems[4],
+                  metadata: metadata
+              )
+          })?.actionability == .openExactNativeSession
+    else {
+        failAgentIntegrationSelfTest("all built-in tasks expose navigation")
     }
 
     let duplicateRunning = TaskProgressItem(

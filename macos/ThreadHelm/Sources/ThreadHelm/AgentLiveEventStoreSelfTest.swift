@@ -408,18 +408,14 @@ func runAgentLiveEventStoreSelfTest() {
         guard sessionID == "omp-one" else { return nil }
         return OMPLocalSessionContent(
             workingDirectory: "/private/tmp/omp-project",
-            events: [
-                TaskActivityEvent(
-                    kind: .commentary,
-                    occurredAt: ompFirstOutputAt,
-                    text: "OMP 已完成第一轮检查"
-                ),
-                TaskActivityEvent(
-                    kind: .commentary,
-                    occurredAt: ompSecondOutputAt,
-                    text: "OMP 正在整理最终结果"
-                ),
-            ]
+            projection: makeLocalProjection(
+                agentID: .omp,
+                sessionKey: sessionID,
+                messages: [
+                    (ompFirstOutputAt, "OMP 已完成第一轮检查"),
+                    (ompSecondOutputAt, "OMP 正在整理最终结果"),
+                ]
+            )
         )
     })
     guard ompProjection.kind == .running,
@@ -431,6 +427,8 @@ func runAgentLiveEventStoreSelfTest() {
               "OMP 已完成第一轮检查",
           ],
           ompProjection.projection.currentToolStatus?.text == "工具调用完成",
+          ompProjection.projection.currentToolStatus?.id.stableSourceKey
+            == "hook:omp-tool-result-two",
           ompProjection.projection.terminalEvent == nil,
           ompProjection.events.map(\.text) == [
               "工具调用完成",
@@ -478,13 +476,13 @@ func runAgentLiveEventStoreSelfTest() {
         guard sessionID == "omp-done" else { return nil }
         return OMPLocalSessionContent(
             workingDirectory: "/private/tmp/omp-project",
-            events: [
-                TaskActivityEvent(
-                    kind: .commentary,
-                    occurredAt: base.addingTimeInterval(-1),
-                    text: "OMP 已完成全部工作"
-                ),
-            ]
+            projection: makeLocalProjection(
+                agentID: .omp,
+                sessionKey: sessionID,
+                messages: [
+                    (base.addingTimeInterval(-1), "OMP 已完成全部工作"),
+                ]
+            )
         )
     })
     guard completedOMPProjection.events.map(\.text) == [
@@ -497,6 +495,23 @@ func runAgentLiveEventStoreSelfTest() {
     else {
         failAgentLiveEventStoreSelfTest(
             "OMP local output keeps only the latest terminal hook event"
+        )
+    }
+
+    let repeatedOMPContent = OMPLocalSession.content(fromJSONL: """
+    {"type":"message","timestamp":"2026-08-17T03:45:24.944Z","message":{"role":"assistant","content":[{"type":"text","text":"重复输出"}]}}
+    {"type":"message","timestamp":"2026-08-17T03:45:25.944Z","message":{"role":"assistant","content":[{"type":"text","text":"重复输出"}]}}
+    """)
+    guard repeatedOMPContent.projection.publicMessages.map(\.text) == [
+              "重复输出",
+              "重复输出",
+          ],
+          Set(repeatedOMPContent.projection.publicMessages.map {
+              $0.id.stableSourceKey
+          }).count == 2
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "OMP projection must retain legitimate repeated public messages"
         )
     }
 
@@ -581,6 +596,25 @@ func runAgentLiveEventStoreSelfTest() {
     else {
         failAgentLiveEventStoreSelfTest(
             "Cursor transcript must expose public assistant output without tool paths"
+        )
+    }
+
+    let repeatedCursorContent = CursorLocalWorkspace.sessionContent(
+        fromJSONL: """
+        {"role":"assistant","message":{"content":[{"type":"text","text":"重复 Cursor 输出"}]}}
+        {"role":"assistant","message":{"content":[{"type":"text","text":"重复 Cursor 输出"}]}}
+        """
+    )
+    guard repeatedCursorContent.projection.publicMessages.map(\.text) == [
+              "重复 Cursor 输出",
+              "重复 Cursor 输出",
+          ],
+          Set(repeatedCursorContent.projection.publicMessages.map {
+              $0.id.stableSourceKey
+          }).count == 2
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "Cursor projection must retain legitimate repeated public messages"
         )
     }
 
@@ -902,7 +936,8 @@ func runAgentLiveEventStoreSelfTest() {
                 title: "不应读取的本地标题",
                 activityText: "不应读取的本地正文",
                 completedActivityText: "不应读取的本地正文",
-                fragments: []
+                fragments: [],
+                projection: .empty
             )
         }
     )
@@ -917,6 +952,83 @@ func runAgentLiveEventStoreSelfTest() {
     else {
         failAgentLiveEventStoreSelfTest(
             "unvalidated Cursor navigation must not read local private content"
+        )
+    }
+
+    let mainThreadProjection = agentDashboardProjection(
+        collection: .displaying([]),
+        permissionQueue: .empty,
+        liveReduction: AgentReductionResult(
+            snapshots: [
+                AgentSessionSnapshot(
+                    identity: AgentSessionIdentity(
+                        agentID: .cursor,
+                        nativeID: "cursor-main-cache-only"
+                    ),
+                    adapterVersion: "self-test",
+                    executionState: .running,
+                    attentionReason: .none,
+                    actionability: .openNativeApp,
+                    evidenceQuality: .officialHook,
+                    freshness: Freshness(observedAt: base, expiresAt: nil),
+                    title: "Cursor 会话",
+                    activitySummary: "正在执行",
+                    workingDirectory: nil,
+                    latestEventID: "cursor-main-hook",
+                    updatedAt: base
+                ),
+                AgentSessionSnapshot(
+                    identity: AgentSessionIdentity(
+                        agentID: .omp,
+                        nativeID: "01a00f00-f7ab-7000-9273-9c7707ab6193"
+                    ),
+                    adapterVersion: "self-test",
+                    executionState: .running,
+                    attentionReason: .none,
+                    actionability: .openExactNativeSession,
+                    evidenceQuality: .officialHook,
+                    freshness: Freshness(observedAt: base, expiresAt: nil),
+                    title: "OMP 会话",
+                    activitySummary: "正在执行",
+                    workingDirectory: nil,
+                    latestEventID: "omp-main-hook",
+                    updatedAt: base
+                ),
+            ],
+            attentionItems: [],
+            processedEventCount: 2,
+            events: [
+                makeLiveStoreAgentEvent(
+                    agentID: .cursor,
+                    nativeID: "cursor-main-cache-only",
+                    eventID: "cursor-main-hook",
+                    eventType: "postToolUse",
+                    observedAt: base,
+                    state: .running
+                ),
+                makeLiveStoreAgentEvent(
+                    agentID: .omp,
+                    nativeID: "01a00f00-f7ab-7000-9273-9c7707ab6193",
+                    eventID: "omp-main-hook",
+                    eventType: "tool_result",
+                    observedAt: base,
+                    state: .running
+                ),
+            ]
+        ),
+        agentCompatibilities: [
+            .cursor: .validated,
+            .omp: .validated,
+        ]
+    )
+    guard mainThreadProjection.taskCollection.items.count == 2,
+          mainThreadProjection.taskCollection.items.allSatisfy({
+              $0.projection.currentToolStatus?.text == "工具调用完成"
+                  && $0.projection.publicMessages.isEmpty
+          })
+    else {
+        failAgentLiveEventStoreSelfTest(
+            "main-thread dashboard projection must be hook/cache-only"
         )
     }
 }
@@ -945,6 +1057,27 @@ private func makeLiveStoreAgentEvent(
         title: "会话",
         activitySummary: "正在执行",
         workingDirectory: nil
+    )
+}
+
+private func makeLocalProjection(
+    agentID: AgentID,
+    sessionKey: String,
+    messages: [(Date, String)]
+) -> AgentActivityProjection {
+    AgentActivityProjection(
+        publicMessages: messages.enumerated().map { index, message in
+            AgentActivityEntry(
+                id: AgentActivityEventID(
+                    source: agentID,
+                    sessionKey: sessionKey,
+                    stableSourceKey: "self-test-local:\(index)"
+                ),
+                occurredAt: message.0,
+                sourceOrder: UInt64(index),
+                text: message.1
+            )
+        }
     )
 }
 

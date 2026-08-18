@@ -35,6 +35,21 @@ struct CursorLocalSessionContent: Equatable {
     let activityText: String?
     let completedActivityText: String?
     let fragments: [CursorLocalActivityFragment]
+    let projection: AgentActivityProjection
+
+    init(
+        title: String?,
+        activityText: String?,
+        completedActivityText: String?,
+        fragments: [CursorLocalActivityFragment],
+        projection: AgentActivityProjection
+    ) {
+        self.title = title
+        self.activityText = activityText
+        self.completedActivityText = completedActivityText
+        self.fragments = fragments
+        self.projection = projection.budgeted()
+    }
 }
 
 enum CursorLocalWorkspace {
@@ -42,21 +57,43 @@ enum CursorLocalWorkspace {
 
     private static let cacheLock = NSLock()
     private static var contentCache: [String: CachedTranscript] = [:]
+    private static var sessionContentCache: [String: CursorLocalSessionContent] = [:]
+    private static var sessionWorkingDirectoryCache: [String: String] = [:]
+    private static var lifecycleBackscanBytes: [String: Int] = [:]
     static var mockIndexRootDirectory: URL?
     /// 测试钩子：模拟进程重启，清空内存缓存（sidecar 保留）。
     static func resetInMemoryStateForTesting() {
         cacheLock.lock()
         contentCache.removeAll()
+        sessionContentCache.removeAll()
+        sessionWorkingDirectoryCache.removeAll()
+        lifecycleBackscanBytes.removeAll()
         cacheLock.unlock()
     }
 
+    static func lifecycleBackscanBytesForTesting(at url: URL) -> Int {
+        let cacheKey = transcriptCacheKey(for: url)
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return lifecycleBackscanBytes[cacheKey] ?? 0
+    }
+
+    private static func transcriptCacheKey(for url: URL) -> String {
+        url.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
     private struct CachedTranscript {
+        let sourceIdentity: TranscriptSourceIdentity
         let modificationDate: Date
+        let fileSize: UInt64
         let content: CursorLocalSessionContent
     }
 
     static func workingDirectory(sessionID: String) -> String? {
-        workingDirectory(
+        if Thread.isMainThread {
+            return cachedWorkingDirectory(sessionID: sessionID)
+        }
+        return workingDirectory(
             sessionID: sessionID,
             projectsRoot: FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".cursor/projects", isDirectory: true)
@@ -81,7 +118,10 @@ enum CursorLocalWorkspace {
     }
 
     static func sessionContent(sessionID: String) -> CursorLocalSessionContent? {
-        sessionContent(
+        if Thread.isMainThread {
+            return cachedSessionContent(sessionID: sessionID)
+        }
+        return sessionContent(
             sessionID: sessionID,
             projectsRoot: FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".cursor/projects", isDirectory: true),
@@ -95,12 +135,30 @@ enum CursorLocalWorkspace {
         fileManager: FileManager = .default,
         conversationMetadata: ((String) -> CursorConversationMetadata?)? = nil
     ) -> CursorLocalSessionContent? {
+        let nativeID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let match = locateSession(
             sessionID: sessionID,
             projectsRoot: projectsRoot,
             fileManager: fileManager
-        ) else { return nil }
-        let nativeID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        ) else {
+            deleteCursorSidecar(
+                sessionKey: nativeID,
+                fileManager: fileManager,
+                indexRootDirectory: CursorLocalWorkspace.mockIndexRootDirectory
+            )
+            cacheLock.lock()
+            sessionContentCache.removeValue(forKey: nativeID)
+            sessionWorkingDirectoryCache.removeValue(forKey: nativeID)
+            cacheLock.unlock()
+            return nil
+        }
+        if match.transcriptURL == nil {
+            deleteCursorSidecar(
+                sessionKey: nativeID,
+                fileManager: fileManager,
+                indexRootDirectory: CursorLocalWorkspace.mockIndexRootDirectory
+            )
+        }
         let metadata = conversationMetadata?(nativeID)
         let parsed = match.transcriptURL.flatMap {
             cachedContent(
@@ -112,14 +170,52 @@ enum CursorLocalWorkspace {
             title: nil,
             activityText: nil,
             completedActivityText: nil,
-            fragments: []
+            fragments: [],
+            projection: .empty
         )
         let content = overlaying(parsed, with: metadata)
         guard content.title != nil
                 || content.activityText != nil
                 || !content.fragments.isEmpty
         else { return nil }
+        cacheLock.lock()
+        sessionContentCache[nativeID] = content
+        if let directory = workingDirectory(
+            sessionID: sessionID,
+            projectsRoot: projectsRoot,
+            fileManager: fileManager
+        ) {
+            sessionWorkingDirectoryCache[nativeID] = directory
+        }
+        cacheLock.unlock()
         return content
+    }
+
+    private static func deleteCursorSidecar(
+        sessionKey: String,
+        fileManager: FileManager,
+        indexRootDirectory: URL? = nil
+    ) {
+        let indexRoot = indexRootDirectory
+            ?? TranscriptIndexStore.defaultRootDirectory
+        TranscriptIndexStore(
+            rootDirectory: indexRoot,
+            fileManager: fileManager
+        ).delete(agentID: .cursor, sessionKey: sessionKey)
+    }
+
+    static func cachedSessionContent(sessionID: String) -> CursorLocalSessionContent? {
+        let nativeID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return sessionContentCache[nativeID]
+    }
+
+    static func cachedWorkingDirectory(sessionID: String) -> String? {
+        let nativeID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return sessionWorkingDirectoryCache[nativeID]
     }
 
     static func sessionContent(fromJSONL text: String) -> CursorLocalSessionContent {
@@ -137,16 +233,26 @@ enum CursorLocalWorkspace {
         let fragments = metadata?.fragments.isEmpty == false
             ? metadata!.fragments
             : content.fragments
+        let projection = metadata?.fragments.isEmpty == false
+            ? cursorProjection(
+                from: metadata!.fragments,
+                source: .cursor,
+                sessionKey: "",
+                stablePrefix: "cursor-composer"
+            )
+            : content.projection
         guard title != content.title
                 || activityText != content.activityText
                 || completedActivityText != content.completedActivityText
                 || fragments != content.fragments
+                || projection != content.projection
         else { return content }
         return CursorLocalSessionContent(
             title: title,
             activityText: activityText,
             completedActivityText: completedActivityText,
-            fragments: fragments
+            fragments: fragments,
+            projection: projection
         )
     }
 
@@ -447,22 +553,34 @@ enum CursorLocalWorkspace {
         let attributes = try? fileManager.attributesOfItem(atPath: url.path)
         let modificationDate = attributes?[.modificationDate] as? Date
             ?? Date.distantPast
-        let cacheKey = url.path
-        cacheLock.lock()
-        if let cached = contentCache[cacheKey],
-           cached.modificationDate == modificationDate
-        {
-            cacheLock.unlock()
-            return cached.content
-        }
-        cacheLock.unlock()
-
+        let fileSize = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+        let cacheKey = transcriptCacheKey(for: url)
+        // Resolve the file identity before the mtime/size cache fast path.
+        // APFS atomic replacement can preserve both values while changing the
+        // inode, in which case returning the old projection would be stale.
         guard let reader = TranscriptEventReader.make(
             at: url,
             fileManager: fileManager
         ) else { return nil }
-
-        let fileSize = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+        cacheLock.lock()
+        if let cached = contentCache[cacheKey],
+           cached.sourceIdentity == reader.identity,
+           cached.modificationDate == modificationDate,
+           cached.fileSize == fileSize
+        {
+            cacheLock.unlock()
+            return cached.content
+        }
+        if let cached = contentCache[cacheKey],
+           cached.sourceIdentity != reader.identity
+        {
+            contentCache.removeValue(forKey: cacheKey)
+            lifecycleBackscanBytes.removeValue(forKey: cacheKey)
+        }
+        cacheLock.unlock()
+        let refreshByteLimit = TranscriptReadBudget.transcriptEvents
+            .maximumBytesPerPass
+        var refreshBytesRemaining = refreshByteLimit
 
         // §4.2: 先查 sidecar index。identity 匹配时从 descriptor 回读
         // record data（index-hit），跳过回扫。
@@ -474,10 +592,18 @@ enum CursorLocalWorkspace {
         let checkpoint = indexStore.load(
             agentID: .cursor, sessionKey: sessionKey
         )
+        let validCheckpoint: TranscriptIndexStore.Checkpoint?
         if let checkpoint = checkpoint,
            checkpoint.sourceIdentity == reader.identity,
-           checkpoint.committedOffset <= fileSize
-        {
+           checkpoint.committedOffset <= fileSize {
+            validCheckpoint = checkpoint
+        } else {
+            validCheckpoint = nil
+        }
+        if let checkpoint = validCheckpoint {
+            let shouldContinueColdBackscan =
+                checkpoint.backscanContinuationOffset != nil
+                && checkpoint.publicMessageDescriptors.isEmpty
             // current-tool + public descriptors 统一按 startOffset 排序
             // 去重回读，保证 chronological：current-tool 可能是较旧的
             // mixed tool（已在 public 窗口）或较新的 pure tool（只在
@@ -487,62 +613,113 @@ enum CursorLocalWorkspace {
             if let toolDescriptor = checkpoint.currentToolDescriptor {
                 unifiedDescriptors.append(toolDescriptor)
             }
-            unifiedDescriptors.sort {
+            var seenDescriptorRanges = Set<String>()
+            let newestUniqueDescriptors = unifiedDescriptors.sorted {
                 if $0.startOffset == $1.startOffset {
-                    return $0.byteCount < $1.byteCount
+                    return $0.byteCount > $1.byteCount
                 }
-                return $0.startOffset < $1.startOffset
+                return $0.startOffset > $1.startOffset
+            }.filter { descriptor in
+                let key = "\(descriptor.startOffset):\(descriptor.byteCount)"
+                if seenDescriptorRanges.contains(key) {
+                    return false
+                }
+                seenDescriptorRanges.insert(key)
+                return true
             }
-            var restoredData = Data()
-            var lastReadStart = UInt64.max
-            for descriptor in unifiedDescriptors {
-                // 按 startOffset 去重：同一 range（mixed record 同时持久化为
-                // public + currentTool）只回读一次。
-                if descriptor.startOffset == lastReadStart {
-                    continue
-                }
-                lastReadStart = descriptor.startOffset
-                if let data = reader.readRange(descriptor) {
-                    restoredData.append(data)
+            var restoredPairs:
+                [(descriptor: TranscriptRecordLocation, input: CursorTranscriptRecordInput)] = []
+            for descriptor in newestUniqueDescriptors {
+                guard refreshBytesRemaining > 0 else { break }
+                if let data = reader.readRange(
+                    descriptor,
+                    maximumBytes: refreshBytesRemaining
+                ) {
+                    restoredPairs.append((
+                        descriptor,
+                        cursorRecordInput(
+                            data: data,
+                            sourceIdentity: reader.identity,
+                            startOffset: descriptor.startOffset,
+                            byteCount: Int(descriptor.byteCount),
+                            sourceOrder: descriptor.sourceOrder,
+                            sessionKey: sessionKey
+                        )
+                    ))
+                    refreshBytesRemaining = max(
+                        0,
+                        refreshByteLimit - reader.diagnostics.bytesRead
+                    )
                 }
             }
+            restoredPairs.sort {
+                if $0.descriptor.startOffset == $1.descriptor.startOffset {
+                    return $0.descriptor.byteCount < $1.descriptor.byteCount
+                }
+                return $0.descriptor.startOffset < $1.descriptor.startOffset
+            }
+            let restoredInputs = restoredPairs.map(\.input)
             // Index-hit 后从旧 committedOffset 做 forward-tail，读取
             // checkpoint 到当前 EOF 之间的追加字节（§4.2）。
-            reader.setCommittedOffset(checkpoint.committedOffset)
-            let forwardResult = reader.readForwardPass()
-            var appendedData = Data()
+            var appendedInputs: [CursorTranscriptRecordInput] = []
             var appendedDescriptors: [TranscriptRecordLocation] = []
             var appendedCurrentToolDescriptor: TranscriptRecordLocation?
-            if case .success(let forwardRecords) = forwardResult {
-                for record in forwardRecords {
-                    let cls = classifyCursorRecord(record.data)
-                    // 分类非互斥：mixed record（text + tool_use）必须同时
-                    // 更新 public 与 current-tool 通道（raw data 只拼一次）。
-                    if cls.isPublic {
-                        appendedData.append(record.data)
-                        appendedDescriptors.append(
-                            TranscriptRecordLocation(
-                                startOffset: record.startOffset,
-                                byteCount: UInt32(record.byteCount),
-                                sourceOrder: record.sourceOrder,
-                                eventClass: .publicMessage,
-                                occurredAt: nil
+            var forwardCommittedOffset = checkpoint.committedOffset
+            var forwardReachedEOF = false
+            if refreshBytesRemaining > 0 {
+                reader.setCommittedOffset(checkpoint.committedOffset)
+                let forwardResult = reader.readForwardPass(
+                    maximumBytes: refreshBytesRemaining
+                )
+                refreshBytesRemaining = max(
+                    0,
+                    refreshByteLimit - reader.diagnostics.bytesRead
+                )
+                forwardCommittedOffset = reader.committedOffset
+                forwardReachedEOF = reader.scanHeadReachedEOF
+                if case .success(let forwardRecords) = forwardResult {
+                    for record in forwardRecords {
+                        let cls = classifyCursorRecord(record.data)
+                        // 分类非互斥：mixed record（text + tool_use）必须同时
+                        // 更新 public 与 current-tool 通道（raw data 只拼一次）。
+                        if cls.isPublic {
+                            appendedInputs.append(
+                                cursorRecordInput(
+                                    record,
+                                    sourceIdentity: reader.identity,
+                                    sessionKey: sessionKey
+                                )
                             )
-                        )
-                    }
-                    if cls.isCurrentTool {
-                        appendedCurrentToolDescriptor =
-                            TranscriptRecordLocation(
-                                startOffset: record.startOffset,
-                                byteCount: UInt32(record.byteCount),
-                                sourceOrder: record.sourceOrder,
-                                eventClass: .currentTool,
-                                occurredAt: nil
+                            appendedDescriptors.append(
+                                TranscriptRecordLocation(
+                                    startOffset: record.startOffset,
+                                    byteCount: UInt32(record.byteCount),
+                                    sourceOrder: record.sourceOrder,
+                                    eventClass: .publicMessage,
+                                    occurredAt: nil
+                                )
                             )
-                        if !cls.isPublic {
-                            // 纯 tool record 才把 data 拼入文本流；
-                            // mixed record 的 data 已由 public 分支拼入。
-                            appendedData.append(record.data)
+                        }
+                        if cls.isCurrentTool {
+                            appendedCurrentToolDescriptor =
+                                TranscriptRecordLocation(
+                                    startOffset: record.startOffset,
+                                    byteCount: UInt32(record.byteCount),
+                                    sourceOrder: record.sourceOrder,
+                                    eventClass: .currentTool,
+                                    occurredAt: nil
+                                )
+                            if !cls.isPublic {
+                                // 纯 tool record 才把 data 拼入文本流；
+                                // mixed record 的 data 已由 public 分支拼入。
+                                appendedInputs.append(
+                                    cursorRecordInput(
+                                        record,
+                                        sourceIdentity: reader.identity,
+                                        sessionKey: sessionKey
+                                    )
+                                )
+                            }
                         }
                     }
                 }
@@ -560,21 +737,23 @@ enum CursorLocalWorkspace {
             // 最新 current-tool descriptor：追加的优先，否则取恢复的旧值。
             let currentToolDescriptor = appendedCurrentToolDescriptor
                 ?? checkpoint.currentToolDescriptor
-            if !restoredData.isEmpty || !appendedData.isEmpty {
+            let inputs = restoredInputs + appendedInputs
+            let shouldContinueBackscanAfterTail =
+                shouldContinueColdBackscan && allDescriptors.isEmpty
+            if !inputs.isEmpty, !shouldContinueBackscanAfterTail {
                 // 顺序已由统一 descriptor 回读保证 chronological
                 // （current-tool + public 按 startOffset 排序），
                 // forward tail 顺序追加在末。latestTool 取文本中
                 // 最后 tool，即最近发生的工具活动。
-                let allData = restoredData + appendedData
-                let text = String(data: allData, encoding: .utf8)
-                    ?? String(decoding: allData, as: UTF8.self)
-                let content = parseTranscript(text)
+                let content = parseTranscript(records: inputs)
                 // 仅当前向已追平（scanHead 到 EOF）才缓存；否则 mtime
                 // 命中会返回部分内容。未追平时下次调用经 index-hit 继续。
-                if reader.scanHeadReachedEOF {
+                if forwardReachedEOF {
                     cacheLock.lock()
                     contentCache[cacheKey] = CachedTranscript(
+                        sourceIdentity: reader.identity,
                         modificationDate: modificationDate,
+                        fileSize: fileSize,
                         content: content
                     )
                     cacheLock.unlock()
@@ -590,7 +769,7 @@ enum CursorLocalWorkspace {
                     sourceIdentity: reader.identity,
                     observedSize: fileSize,
                     observedMTime: UInt64(mtime),
-                    committedOffset: reader.committedOffset,
+                    committedOffset: forwardCommittedOffset,
                     backscanContinuationOffset: nil,
                     publicMessageDescriptors: allDescriptors,
                     currentToolDescriptor: currentToolDescriptor,
@@ -598,94 +777,154 @@ enum CursorLocalWorkspace {
                     metadataDescriptor: nil,
                     oversizedRecords: 0
                 )
-                try? indexStore.save(
-                    cp, agentID: .cursor, sessionKey: sessionKey
-                )
+                if appendedDescriptors.isEmpty
+                    && appendedCurrentToolDescriptor == nil
+                {
+                    try? indexStore.saveCoalesced(
+                        cp, agentID: .cursor, sessionKey: sessionKey
+                    )
+                } else {
+                    try? indexStore.flush(
+                        cp, agentID: .cursor, sessionKey: sessionKey
+                    )
+                }
                 return content
+            }
+            if refreshBytesRemaining <= 0, !inputs.isEmpty {
+                return parseTranscript(records: inputs)
             }
         }
 
-        // 有界回扫：从 EOF 向前读 8 MiB/pass，最多 64 MiB。
+        // 有界回扫：每次调用最多从 EOF/continuation 向前读 8 MiB。
+        // 同一 app lifecycle 对同一 transcript 最多自动推进 64 MiB；
+        // 若尾部全是 tool-only 且尚未找到最近 public window，持久化
+        // continuation，后续显式读取调用继续推进。
         // 只收集完整 LF 记录（片段由 reader 丢弃），拼成文本交给
         // 现有 parseTranscript——替代旧的 1 MiB 固定尾读。
-        var backscanBudget = TranscriptReadBudget.transcriptEvents
+        let maximumLifecycleBackscan = TranscriptReadBudget.transcriptEvents
             .maximumAutomaticBackscanBytes
-        var enoughContent = false
-        var committedAfterScan = fileSize
-        var currentToolDescriptor: TranscriptRecordLocation?
-        var currentToolData = Data()
-        var endOffset = fileSize
-        var recoveredData = Data()
-        var descriptors: [TranscriptRecordLocation] = []
-        while backscanBudget > 0, endOffset > 0 {
-            let passBytes = min(backscanBudget, 8 * 1_048_576)
+        cacheLock.lock()
+        let alreadyBackscanned = lifecycleBackscanBytes[cacheKey] ?? 0
+        cacheLock.unlock()
+        let continuingCheckpoint = validCheckpoint
+        var committedAfterScan = continuingCheckpoint?.committedOffset
+            ?? fileSize
+        var currentToolDescriptor = continuingCheckpoint?.currentToolDescriptor
+        var currentToolInput: CursorTranscriptRecordInput?
+        if let descriptor = currentToolDescriptor,
+           let data = reader.readRange(
+                descriptor,
+                maximumBytes: refreshBytesRemaining
+           )
+        {
+            refreshBytesRemaining = max(
+                0,
+                refreshByteLimit - reader.diagnostics.bytesRead
+            )
+            currentToolInput = cursorRecordInput(
+                data: data,
+                sourceIdentity: reader.identity,
+                startOffset: descriptor.startOffset,
+                byteCount: Int(descriptor.byteCount),
+                sourceOrder: descriptor.sourceOrder,
+                sessionKey: sessionKey
+            )
+        }
+        let remainingLifecycleBackscan = min(
+            refreshBytesRemaining,
+            max(
+                0,
+                maximumLifecycleBackscan - alreadyBackscanned
+            )
+        )
+        let endOffset = continuingCheckpoint?.backscanContinuationOffset
+            ?? fileSize
+        var recoveredInputs: [CursorTranscriptRecordInput] = []
+        var descriptors = continuingCheckpoint?.publicMessageDescriptors ?? []
+        var nextBackscanContinuation = continuingCheckpoint?
+            .backscanContinuationOffset
+        if remainingLifecycleBackscan > 0, endOffset > 0 {
+            let passBytes = min(
+                remainingLifecycleBackscan,
+                TranscriptReadBudget.transcriptEvents.maximumBytesPerPass
+            )
+            let bytesBeforeBackscan = reader.diagnostics.bytesRead
             let result = reader.readBackwardPass(
                 fromEnd: endOffset,
                 maximumBytes: passBytes
             )
-            guard case .success(let (records, cont, trailingPartial)) = result
-            else { break }
-            if let trailingPartial, trailingPartial < committedAfterScan {
-                committedAfterScan = trailingPartial
+            let actualBackscanBytes = max(
+                0,
+                reader.diagnostics.bytesRead - bytesBeforeBackscan
+            )
+            if actualBackscanBytes > 0 {
+                cacheLock.lock()
+                lifecycleBackscanBytes[cacheKey] = alreadyBackscanned
+                    + actualBackscanBytes
+                cacheLock.unlock()
             }
-            var passData = Data()
-            var passDescriptors: [TranscriptRecordLocation] = []
-            for record in records {
-                let cls = classifyCursorRecord(record.data)
-                // 分类非互斥：mixed record（text + tool_use）必须同时
-                // 更新 public 与 current-tool 通道（raw data 只拼一次）。
-                if cls.isPublic {
-                    passData.append(record.data)
-                    passDescriptors.append(
-                        TranscriptRecordLocation(
+            if case .success(let (records, cont, trailingPartial)) = result {
+                if let trailingPartial, trailingPartial < committedAfterScan {
+                    committedAfterScan = trailingPartial
+                }
+                var passInputs: [CursorTranscriptRecordInput] = []
+                var passDescriptors: [TranscriptRecordLocation] = []
+                for record in records {
+                    let cls = classifyCursorRecord(record.data)
+                    // 分类非互斥：mixed record（text + tool_use）必须同时
+                    // 更新 public 与 current-tool 通道（raw data 只拼一次）。
+                    if cls.isPublic {
+                        passInputs.append(
+                            cursorRecordInput(
+                                record,
+                                sourceIdentity: reader.identity,
+                                sessionKey: sessionKey
+                            )
+                        )
+                        passDescriptors.append(
+                            TranscriptRecordLocation(
+                                startOffset: record.startOffset,
+                                byteCount: UInt32(record.byteCount),
+                                sourceOrder: record.sourceOrder,
+                                eventClass: .publicMessage,
+                                occurredAt: nil
+                            )
+                        )
+                    }
+                    if cls.isCurrentTool {
+                        // 跨 pass 回扫从 EOF 向旧数据推进：更旧的 pass 后处理，
+                        // 无条件覆盖会让旧 tool 顶替新的。按最大 startOffset
+                        // 原子更新 descriptor+data（同一文件内 startOffset 唯一，
+                        // 相等即同一条）。
+                        if let existing = currentToolDescriptor,
+                           record.startOffset <= existing.startOffset
+                        {
+                            continue
+                        }
+                        currentToolDescriptor = TranscriptRecordLocation(
                             startOffset: record.startOffset,
                             byteCount: UInt32(record.byteCount),
                             sourceOrder: record.sourceOrder,
-                            eventClass: .publicMessage,
+                            eventClass: .currentTool,
                             occurredAt: nil
                         )
-                    )
-                }
-                if cls.isCurrentTool {
-                    // 跨 pass 回扫从 EOF 向旧数据推进：更旧的 pass 后处理，
-                    // 无条件覆盖会让旧 tool 顶替新的。按最大 startOffset
-                    // 原子更新 descriptor+data（同一文件内 startOffset 唯一，
-                    // 相等即同一条）。
-                    if let existing = currentToolDescriptor,
-                       record.startOffset <= existing.startOffset
-                    {
-                        continue
-                    }
-                    currentToolDescriptor = TranscriptRecordLocation(
-                        startOffset: record.startOffset,
-                        byteCount: UInt32(record.byteCount),
-                        sourceOrder: record.sourceOrder,
-                        eventClass: .currentTool,
-                        occurredAt: nil
-                    )
-                    if cls.isPublic {
-                        // mixed：data 已在 public 通道。清空 currentToolData
-                        // 避免旧 pure tool 的 data 残留末尾，latestTool 倒退。
-                        currentToolData = Data()
-                    } else {
-                        currentToolData = record.data
+                        if cls.isPublic {
+                            // mixed：data 已在 public 通道。清空 currentToolInput
+                            // 避免旧 pure tool 的 data 残留末尾，latestTool 倒退。
+                            currentToolInput = nil
+                        } else {
+                            currentToolInput = cursorRecordInput(
+                                record,
+                                sourceIdentity: reader.identity,
+                                sessionKey: sessionKey
+                            )
+                        }
                     }
                 }
-            }
-            // 更早的窗口 prepend。
-            recoveredData = passData + recoveredData
-            descriptors = passDescriptors + descriptors
-            backscanBudget -= passBytes
-            if let cont = cont {
-                endOffset = cont
-            } else {
-                break
-            }
-            if recoveredData.count
-                >= Int(TranscriptReadBudget.transcriptEvents.maximumBytesPerPass)
-            {
-                enoughContent = true
-                break
+                // 更早的窗口 prepend。
+                recoveredInputs = passInputs + recoveredInputs
+                descriptors = passDescriptors + descriptors
+                nextBackscanContinuation = passDescriptors.isEmpty ? cont : nil
             }
         }
         // 冷扫描完成：提交点推进到回扫覆盖的末尾。无 trailing partial
@@ -695,14 +934,16 @@ enum CursorLocalWorkspace {
         reader.setCommittedOffset(committedAfterScan)
         // 持久 checkpoint 停在最后完整 LF 后（末尾未完成行不计入）。
         // tool 记录放最后：parseTranscript 的 latestTool 取末尾 tool。
-        let allData = recoveredData + currentToolData
-        let text = String(data: allData, encoding: .utf8)
-            ?? String(decoding: allData, as: UTF8.self)
-        let content = parseTranscript(text)
-        if reader.scanHeadReachedEOF || committedAfterScan >= fileSize {
+        let inputs = recoveredInputs + (currentToolInput.map { [$0] } ?? [])
+        let content = parseTranscript(records: inputs)
+        if nextBackscanContinuation == nil,
+           (reader.scanHeadReachedEOF || committedAfterScan >= fileSize)
+        {
             cacheLock.lock()
             contentCache[cacheKey] = CachedTranscript(
+                sourceIdentity: reader.identity,
                 modificationDate: modificationDate,
+                fileSize: fileSize,
                 content: content
             )
             cacheLock.unlock()
@@ -721,29 +962,47 @@ enum CursorLocalWorkspace {
             observedSize: fileSize,
             observedMTime: UInt64(mtime),
             committedOffset: reader.committedOffset,
-            backscanContinuationOffset: nil,
+            backscanContinuationOffset: nextBackscanContinuation,
             publicMessageDescriptors: cpDescriptors,
             currentToolDescriptor: currentToolDescriptor,
             terminalDescriptor: nil,
             metadataDescriptor: nil,
             oversizedRecords: 0
         )
-        try? indexStore.save(
-            cp, agentID: .cursor, sessionKey: sessionKey
-        )
+        if nextBackscanContinuation
+            != continuingCheckpoint?.backscanContinuationOffset
+        {
+            try? indexStore.flush(
+                cp, agentID: .cursor, sessionKey: sessionKey
+            )
+        } else {
+            try? indexStore.saveCoalesced(
+                cp, agentID: .cursor, sessionKey: sessionKey
+            )
+        }
         return content
     }
 
     private static func parseTranscript(_ text: String) -> CursorLocalSessionContent {
+        parseTranscript(records: cursorRecordInputs(
+            text: text,
+            source: .cursor,
+            sessionKey: ""
+        ))
+    }
+
+    private static func parseTranscript(
+        records: [CursorTranscriptRecordInput]
+    ) -> CursorLocalSessionContent {
         var title: String?
         var fragments: [CursorLocalActivityFragment] = []
         var latestPublicText: String?
         var latestTool: String?
+        var publicMessages: [AgentActivityEntry] = []
+        var currentToolStatus: AgentActivityEntry?
 
-        for rawLine in text.split(whereSeparator: \.isNewline) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let data = line.data(using: .utf8),
-                  let record = try? JSONSerialization.jsonObject(with: data)
+        for input in records {
+            guard let record = try? JSONSerialization.jsonObject(with: input.data)
                     as? [String: Any]
             else { continue }
             let role = ((record["role"] as? String) ?? (record["type"] as? String))?
@@ -770,6 +1029,18 @@ enum CursorLocalWorkspace {
                    let paragraph = safePublicActivityParagraph(from: text)
                 {
                     latestPublicText = paragraph
+                    publicMessages.append(
+                        AgentActivityEntry(
+                            id: AgentActivityEventID(
+                                source: input.source,
+                                sessionKey: input.sessionKey,
+                                stableSourceKey: "\(input.stableSourceKey):public"
+                            ),
+                            occurredAt: input.occurredAt,
+                            sourceOrder: input.sourceOrder,
+                            text: paragraph
+                        )
+                    )
                     fragments = appendingCursorFragment(
                         CursorLocalActivityFragment(
                             kind: .commentary,
@@ -784,6 +1055,16 @@ enum CursorLocalWorkspace {
                 else { continue }
                 let toolActivity = cursorSafeToolActivity(name: name)
                 latestTool = toolActivity
+                currentToolStatus = AgentActivityEntry(
+                    id: AgentActivityEventID(
+                        source: input.source,
+                        sessionKey: input.sessionKey,
+                        stableSourceKey: "\(input.stableSourceKey):tool"
+                    ),
+                    occurredAt: input.occurredAt,
+                    sourceOrder: input.sourceOrder,
+                    text: toolActivity
+                )
                 fragments = appendingCursorFragment(
                     CursorLocalActivityFragment(
                         kind: .tool,
@@ -801,9 +1082,124 @@ enum CursorLocalWorkspace {
             title: title,
             activityText: latestPublicText ?? latestTool,
             completedActivityText: completedActivityText,
-            fragments: fragments
+            fragments: fragments,
+            projection: AgentActivityProjection(
+                publicMessages: publicMessages,
+                currentToolStatus: currentToolStatus,
+                terminalEvent: nil
+            )
         )
     }
+}
+
+private struct CursorTranscriptRecordInput {
+    let data: Data
+    let source: AgentID
+    let sessionKey: String
+    let stableSourceKey: String
+    let sourceOrder: UInt64
+    let occurredAt: Date
+}
+
+private func cursorRecordInput(
+    _ record: TranscriptRecordRange,
+    sourceIdentity: TranscriptSourceIdentity,
+    sessionKey: String
+) -> CursorTranscriptRecordInput {
+    cursorRecordInput(
+        data: record.data,
+        sourceIdentity: sourceIdentity,
+        startOffset: record.startOffset,
+        byteCount: record.byteCount,
+        sourceOrder: record.sourceOrder,
+        sessionKey: sessionKey
+    )
+}
+
+private func cursorRecordInput(
+    data: Data,
+    sourceIdentity: TranscriptSourceIdentity,
+    startOffset: UInt64,
+    byteCount: Int,
+    sourceOrder: UInt64,
+    sessionKey: String
+) -> CursorTranscriptRecordInput {
+    CursorTranscriptRecordInput(
+        data: data,
+        source: .cursor,
+        sessionKey: sessionKey,
+        stableSourceKey: transcriptStableSourceKey(
+            sourceIdentity: sourceIdentity,
+            startOffset: startOffset,
+            byteCount: byteCount
+        ),
+        sourceOrder: sourceOrder,
+        occurredAt: .distantPast
+    )
+}
+
+private func cursorRecordInputs(
+    text: String,
+    source: AgentID,
+    sessionKey: String
+) -> [CursorTranscriptRecordInput] {
+    text.split(whereSeparator: \.isNewline).enumerated().compactMap { index, rawLine in
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = line.data(using: .utf8), !data.isEmpty else {
+            return nil
+        }
+        return CursorTranscriptRecordInput(
+            data: data,
+            source: source,
+            sessionKey: sessionKey,
+            stableSourceKey: "line:\(index)",
+            sourceOrder: UInt64(index),
+            occurredAt: .distantPast
+        )
+    }
+}
+
+private func cursorProjection(
+    from fragments: [CursorLocalActivityFragment],
+    source: AgentID,
+    sessionKey: String,
+    stablePrefix: String
+) -> AgentActivityProjection {
+    var publicMessages: [AgentActivityEntry] = []
+    var currentToolStatus: AgentActivityEntry?
+    for (index, fragment) in fragments.enumerated() {
+        let entry = AgentActivityEntry(
+            id: AgentActivityEventID(
+                source: source,
+                sessionKey: sessionKey,
+                stableSourceKey: "\(stablePrefix):\(index)"
+            ),
+            occurredAt: .distantPast,
+            sourceOrder: UInt64(index),
+            text: fragment.text
+        )
+        switch fragment.kind {
+        case .commentary:
+            publicMessages.append(entry)
+        case .tool:
+            currentToolStatus = entry
+        case .lifecycle:
+            break
+        }
+    }
+    return AgentActivityProjection(
+        publicMessages: publicMessages,
+        currentToolStatus: currentToolStatus,
+        terminalEvent: nil
+    )
+}
+
+private func transcriptStableSourceKey(
+    sourceIdentity: TranscriptSourceIdentity,
+    startOffset: UInt64,
+    byteCount: Int
+) -> String {
+    "dev:\(sourceIdentity.device):ino:\(sourceIdentity.inode):birth:\(sourceIdentity.birthSeconds).\(sourceIdentity.birthNanoseconds):range:\(startOffset)+\(byteCount)"
 }
 
 /// 分类一条 Cursor JSONL record：

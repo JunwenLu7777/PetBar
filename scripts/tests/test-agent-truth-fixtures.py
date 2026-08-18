@@ -200,12 +200,11 @@ for agent_id in AGENTS:
             }, f"{scenario['id']} overstates synthetic evidence quality"
         if agent_id == "omp":
             assert scenario["expected"]["actionability"] not in {
-                "inApp", "openExactNativeSession", "openNativeApp",
-                "openWorkingDirectory",
-            }, f"{scenario['id']} violates the OMP state-only boundary"
+                "inApp", "openNativeApp", "openWorkingDirectory",
+            }, f"{scenario['id']} violates the OMP resume-only boundary"
             assert scenario["expected"]["openResult"] not in {
                 "exactSession", "appFocused", "workingDirectoryFallback",
-            }, f"{scenario['id']} violates the OMP no-navigation boundary"
+            }, f"{scenario['id']} overstates OMP resume navigation"
         if agent_id in {"codex", "cursor", "zcode", "omp"}:
             assert scenario["expected"]["openResult"] != "exactSession", (
                 f"{scenario['id']} lacks independent exact-return confirmation"
