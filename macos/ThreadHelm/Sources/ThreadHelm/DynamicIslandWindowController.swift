@@ -36,6 +36,7 @@ final class DynamicIslandWindowController {
     private var suppressSelectedTaskAcknowledgement = false
     private var rememberedExpandedSize: NSSize?
     private var resizeObserver: NSObjectProtocol?
+    private var pendingConfirmationFocus = false
 
     init(store: ActivityDashboardStore? = nil) {
         self.store = store
@@ -170,9 +171,9 @@ final class DynamicIslandWindowController {
         panel.allowsKeyWindow = true
         installInteractionMonitors()
         rootController.setSelectedTaskKey(selectedTaskKey)
-        applySnapshotToRoot()
         acknowledgeTaskDetailIfNeeded(tab: tab, selectedTaskKey: selectedTaskKey)
         transition(to: .expanded(tab), duration: 0.22)
+        applySnapshotToRoot()
         panel.orderFrontRegardless()
     }
 
@@ -189,6 +190,7 @@ final class DynamicIslandWindowController {
 
     func hide() {
         state = .hidden
+        pendingConfirmationFocus = false
         releaseKeyFocus()
         panel.allowsKeyWindow = false
         panel.level = panelDefaultWindowLevel
@@ -225,10 +227,16 @@ final class DynamicIslandWindowController {
             panel.allowsKeyWindow = true
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKey()
+            if rootController.isShowingCapsuleForSelfTest() {
+                pendingConfirmationFocus = true
+                return
+            }
+            pendingConfirmationFocus = false
             if let initialResponder {
                 _ = panel.makeFirstResponder(initialResponder)
             }
         } else {
+            pendingConfirmationFocus = false
             releaseKeyFocus()
             panel.allowsKeyWindow = {
                 if case .expanded = state { return true }
@@ -315,6 +323,7 @@ final class DynamicIslandWindowController {
         applyFrame(for: state == .hidden ? .capsule : state)
         isAnimating = false
         panel.alphaValue = 1
+        applySnapshotToRoot()
         if case .expanded = state {
             rememberedExpandedSize = panel.frame.size
         }
@@ -397,7 +406,7 @@ final class DynamicIslandWindowController {
         switch targetState {
         case .expanded:
             panel.styleMask.insert(.resizable)
-            panel.minSize = dynamicIslandExpandedMinSize
+            panel.minSize = dynamicIslandCapsuleSize
             panel.maxSize = dynamicIslandExpandedMaxSize
         case .hidden, .capsule:
             panel.styleMask.remove(.resizable)
@@ -414,14 +423,19 @@ final class DynamicIslandWindowController {
             panel.minSize = dynamicIslandCapsuleSize
             panel.maxSize = dynamicIslandCapsuleSize
         case .expanded:
-            break
+            panel.minSize = dynamicIslandExpandedMinSize
+            panel.maxSize = dynamicIslandExpandedMaxSize
         }
     }
 
     private func expandedWindowDidResize() {
-        guard !isAnimating, case .expanded = state else { return }
-        rememberedExpandedSize = panel.frame.size
-        panel.invalidateShadow()
+        guard case .expanded = state else { return }
+        if isAnimating {
+            applySnapshotToRoot()
+        } else {
+            rememberedExpandedSize = panel.frame.size
+            panel.invalidateShadow()
+        }
     }
 
     private func capsuleDragEnded(at globalPoint: NSPoint) {
@@ -492,6 +506,7 @@ final class DynamicIslandWindowController {
         guard generation == animationGeneration else { return }
         isAnimating = false
         panel.alphaValue = 1
+        applySnapshotToRoot()
         if case .expanded = state {
             rememberedExpandedSize = panel.frame.size
         }
@@ -556,6 +571,18 @@ final class DynamicIslandWindowController {
             state: targetState ?? state
         )
         suppressSelectedTaskAcknowledgement = false
+        restoreConfirmationFocusIfNeeded()
+    }
+
+    private func restoreConfirmationFocusIfNeeded() {
+        guard pendingConfirmationFocus,
+              !rootController.isShowingCapsuleForSelfTest()
+        else { return }
+        pendingConfirmationFocus = false
+        setConfirmationInputActive(
+            true,
+            initialResponder: rootController.confirmationInitialInputResponder()
+        )
     }
 
     private func selectedTaskKeyDidChange(_ key: String?) {

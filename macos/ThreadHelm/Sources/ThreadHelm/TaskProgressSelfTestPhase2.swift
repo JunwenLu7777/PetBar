@@ -747,4 +747,27 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
         fputs("Claude task compatibility failed\n", stderr)
         exit(1)
     }
+
+    let appleScriptTrueStarted = Date()
+    let appleScriptTrue = executeAppleScriptReturningBoolean("return true")
+    let appleScriptDelayStarted = Date()
+    let appleScriptDelayTimedOut = executeAppleScriptReturningBoolean(
+        "delay 30\nreturn true",
+        timeout: 0.2
+    )
+    let appleScriptDelayElapsed = Date().timeIntervalSince(appleScriptDelayStarted)
+    guard appleScriptTrue,
+          Date().timeIntervalSince(appleScriptTrueStarted) < 2,
+          appleScriptDelayTimedOut == false,
+          appleScriptDelayElapsed < 1.5
+    else {
+        fputs(
+            "Claude AppleScript timeout self-test failed "
+                + "true=\(appleScriptTrue) "
+                + "delayTimedOut=\(appleScriptDelayTimedOut) "
+                + "delayElapsed=\(appleScriptDelayElapsed)\n",
+            stderr
+        )
+        exit(1)
+    }
 }

@@ -13,6 +13,30 @@ let dynamicIslandTaskSize = NSSize(width: 820, height: 560)
 let dynamicIslandConfirmationSize = NSSize(width: 820, height: 600)
 let dynamicIslandQuotaSize = NSSize(width: 820, height: 470)
 let dynamicIslandExpandedMinSize = NSSize(width: 820, height: 560)
+
+enum DynamicIslandWorkspaceHeaderMetrics {
+    static let tabsMinX: CGFloat = 150
+    static let tabsWidth: CGFloat = 248
+    static let sourceFilterMinX: CGFloat = 410
+    static let sourceFilterMinWidth: CGFloat = 96
+    static let trailingButtonsWidth: CGFloat = 134
+    static let headerControlGap: CGFloat = 8
+    static let minimumHeightForBody: CGFloat = 160
+
+    static func trailingControlsFit(inWidth width: CGFloat) -> Bool {
+        tabsMinX + tabsWidth + headerControlGap + trailingButtonsWidth <= width
+    }
+
+    static func sourceFilterFits(inWidth width: CGFloat) -> Bool {
+        sourceFilterMinX + sourceFilterMinWidth + headerControlGap
+            + trailingButtonsWidth <= width
+    }
+}
+
+func dynamicIslandExpandedChromeFits(_ size: NSSize) -> Bool {
+    DynamicIslandWorkspaceHeaderMetrics.trailingControlsFit(inWidth: size.width)
+        && size.height >= DynamicIslandWorkspaceHeaderMetrics.minimumHeightForBody
+}
 let dynamicIslandExpandedComfortMaxSize = NSSize(width: 1_440, height: 960)
 let dynamicIslandExpandedMaxSize = NSSize(width: 2_400, height: 1_600)
 let dynamicIslandTopGap: CGFloat = 6

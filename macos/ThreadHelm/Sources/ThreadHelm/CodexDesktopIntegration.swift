@@ -625,6 +625,58 @@ enum ClaudeTerminalFocusStrategy: Equatable {
     case activateHostApplication
 }
 
+let appleScriptExecutionTimeout: TimeInterval = 2
+
+func executeAppleScript(
+    _ source: String,
+    timeout: TimeInterval = appleScriptExecutionTimeout
+) -> String? {
+    let process = Process()
+    let stdin = Pipe()
+    let stdout = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    process.standardInput = stdin
+    process.standardOutput = stdout
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+    let timeoutSeconds = max(1, Int(timeout.rounded(.up)))
+    let wrapped = """
+    with timeout of \(timeoutSeconds) seconds
+    \(source)
+    end timeout
+    """
+    stdin.fileHandleForWriting.write(Data(wrapped.utf8))
+    try? stdin.fileHandleForWriting.close()
+    let capture = captureProcessOutput(
+        process: process,
+        output: stdout.fileHandleForReading,
+        timeout: timeout,
+        maximumOutputBytes: 4_096
+    )
+    guard capture.termination == .exited,
+          process.terminationStatus == 0
+    else {
+        return nil
+    }
+    return String(data: capture.data, encoding: .utf8)
+}
+
+func executeAppleScriptReturningBoolean(
+    _ source: String,
+    timeout: TimeInterval = appleScriptExecutionTimeout
+) -> Bool {
+    guard let output = executeAppleScript(source, timeout: timeout) else {
+        return false
+    }
+    let normalized = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    return normalized == "true" || normalized == "yes"
+}
+
 func claudeTerminalFocusStrategy(
     bundleIdentifier: String?
 ) -> ClaudeTerminalFocusStrategy {
@@ -638,13 +690,6 @@ func claudeTerminalFocusStrategy(
     default:
         return .activateHostApplication
     }
-}
-
-func executeAppleScriptReturningBoolean(_ source: String) -> Bool {
-    guard let script = NSAppleScript(source: source) else { return false }
-    var error: NSDictionary?
-    let result = script.executeAndReturnError(&error)
-    return error == nil && result.booleanValue
 }
 
 func focusExistingClaudeTerminal(
@@ -748,10 +793,7 @@ func openCommandInPreferredTerminal(_ command: String) -> Bool {
                 do script "\(escapedCommand)"
             end tell
             """
-            var error: NSDictionary?
-            guard let script = NSAppleScript(source: source) else { continue }
-            _ = script.executeAndReturnError(&error)
-            if error == nil {
+            if executeAppleScript(source) != nil {
                 return true
             }
         default:

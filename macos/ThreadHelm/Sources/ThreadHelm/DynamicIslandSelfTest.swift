@@ -509,6 +509,8 @@ private func assertDynamicIslandChromeAccessibility() {
         capsuleLayout.chevronFrame,
     ]
     guard dynamicIslandCapsuleSize == NSSize(width: 404, height: 58),
+          !dynamicIslandExpandedChromeFits(dynamicIslandCapsuleSize),
+          dynamicIslandExpandedChromeFits(dynamicIslandTaskSize),
           root.view.frame.size == dynamicIslandCapsuleSize,
           capsuleLayout.bounds == NSRect(
               origin: .zero,
@@ -698,8 +700,18 @@ private func assertDynamicIslandChromeAccessibility() {
     let controller = DynamicIslandWindowController(store: expansionStore)
     controller.showCapsule()
     controller.rootControllerForSelfTest().expandCapsuleForSelfTest()
+    let chromeFitsBeforeAnimation = dynamicIslandExpandedChromeFits(
+        controller.panel.frame.size
+    )
+    guard controller.rootControllerForSelfTest().isShowingCapsuleForSelfTest()
+            == !chromeFitsBeforeAnimation
+    else {
+        fputs("dynamic island expand must not show squeezed workspace chrome\n", stderr)
+        exit(1)
+    }
     controller.completeAnimationForSelfTest()
     guard controller.state == .expanded(.tasks),
+          !controller.rootControllerForSelfTest().isShowingCapsuleForSelfTest(),
           controller.selectedTaskKeyForSelfTest() == runningTask.identityKey,
           controller.rootControllerForSelfTest().selectedTaskKeyForSelfTest()
               == runningTask.identityKey,
@@ -1141,6 +1153,27 @@ private func assertDynamicIslandTaskWorkspace() {
         exit(1)
     }
 
+    let compactWorkspace = DynamicIslandWorkspaceViewController()
+    compactWorkspace.view.frame = NSRect(origin: .zero, size: dynamicIslandCapsuleSize)
+    compactWorkspace.apply(
+        snapshot: ActivityDashboardSnapshot(taskCollection: collection),
+        state: .expanded(.tasks)
+    )
+    let compactHeader = compactWorkspace.headerLayoutSnapshotForSelfTest()
+    guard compactHeader.trailingButtonsAreHidden,
+          compactHeader.sourceFilterIsHidden,
+          compactHeader.bodyIsHidden,
+          !compactHeader.tabsIsHidden,
+          compactHeader.visibleFrames.isNonOverlappingHorizontally
+    else {
+        fputs(
+            "dynamic island compact header overlap self-test failed "
+                + "\(compactHeader)\n",
+            stderr
+        )
+        exit(1)
+    }
+
     let workspace = DynamicIslandWorkspaceViewController()
     workspace.view.frame = NSRect(origin: .zero, size: dynamicIslandTaskSize)
     workspace.view.layoutSubtreeIfNeeded()
@@ -1150,10 +1183,14 @@ private func assertDynamicIslandTaskWorkspace() {
         snapshot: ActivityDashboardSnapshot(taskCollection: collection),
         state: .expanded(.tasks)
     )
+    let expandedHeader = workspace.headerLayoutSnapshotForSelfTest()
     let topLevelTabLabels = workspace.topLevelTabLabelsForSelfTest().map {
         $0.trimmingCharacters(in: .whitespaces)
     }
     guard !workspace.sourceFilterIsHiddenForSelfTest(),
+          !expandedHeader.trailingButtonsAreHidden,
+          !expandedHeader.bodyIsHidden,
+          expandedHeader.visibleFrames.isNonOverlappingHorizontally,
           topLevelTabLabels == [
               "任务 \(collection.items.count)",
               "Agents 5",

@@ -59,6 +59,21 @@ struct DynamicIslandCapsuleLayoutSnapshot: Equatable {
     let quotaSummaryIsHidden: Bool
 }
 
+struct DynamicIslandWorkspaceHeaderLayoutSnapshot: Equatable {
+    let bounds: NSRect
+    let titleFrame: NSRect
+    let tabsFrame: NSRect
+    let sourceFilterFrame: NSRect
+    let refreshButtonFrame: NSRect
+    let collapseButtonFrame: NSRect
+    let hideButtonFrame: NSRect
+    let tabsIsHidden: Bool
+    let sourceFilterIsHidden: Bool
+    let trailingButtonsAreHidden: Bool
+    let bodyIsHidden: Bool
+    let visibleFrames: [NSRect]
+}
+
 struct DynamicIslandCapsuleQuotaSummaryLayoutSnapshot: Equatable {
     let frame: NSRect
     let iconFrames: [NSRect]
@@ -879,6 +894,7 @@ final class DynamicIslandRootViewController: NSViewController {
     override func loadView() {
         view = NSView(frame: NSRect(origin: .zero, size: dynamicIslandCapsuleSize))
         view.wantsLayer = true
+        view.layer?.masksToBounds = true
         addChild(capsuleController)
         addChild(workspaceController)
         capsuleController.view.frame = view.bounds
@@ -943,13 +959,15 @@ final class DynamicIslandRootViewController: NSViewController {
         state: DynamicIslandPresentationState
     ) {
         _ = view
+        let windowSize = view.window?.frame.size
+        let shownState = visibleState(for: state, windowSize: windowSize)
         let targetSize: NSSize
-        switch state {
+        switch shownState {
         case .hidden, .capsule:
-            targetSize = dynamicIslandCapsuleSize
+            targetSize = windowSize ?? dynamicIslandCapsuleSize
         case .expanded:
-            if let window = view.window {
-                targetSize = window.frame.size
+            if let windowSize {
+                targetSize = windowSize
             } else if view.bounds.width >= dynamicIslandExpandedMinSize.width {
                 targetSize = view.bounds.size
             } else {
@@ -958,6 +976,7 @@ final class DynamicIslandRootViewController: NSViewController {
         }
         view.frame = NSRect(origin: .zero, size: targetSize)
         view.autoresizingMask = [.width, .height]
+        view.layer?.masksToBounds = true
 
         let model = dynamicIslandCapsulePresentation(
             snapshot: snapshot,
@@ -967,7 +986,7 @@ final class DynamicIslandRootViewController: NSViewController {
         workspaceController.selectedTaskKey = selectedTaskKey
         workspaceController.apply(snapshot: snapshot, state: state)
 
-        switch state {
+        switch shownState {
         case .hidden, .capsule:
             hideTaskHover()
             show(capsuleController)
@@ -976,6 +995,17 @@ final class DynamicIslandRootViewController: NSViewController {
         }
         view.needsLayout = true
         view.layoutSubtreeIfNeeded()
+    }
+
+    func confirmationInitialInputResponder() -> NSResponder? {
+        _ = view
+        return workspaceController.confirmationInitialInputResponder()
+    }
+
+    func isShowingCapsuleForSelfTest() -> Bool {
+        _ = view
+        return capsuleController.view.superview === view
+            && workspaceController.view.superview !== view
     }
 
     func accessibilitySnapshotForSelfTest() -> String {
@@ -1074,6 +1104,22 @@ final class DynamicIslandRootViewController: NSViewController {
 
     func performQuotaProviderButtonClickForSelfTest(_ provider: QuotaProvider) {
         workspaceController.performQuotaProviderButtonClickForSelfTest(provider)
+    }
+
+    private func visibleState(
+        for state: DynamicIslandPresentationState,
+        windowSize: NSSize?
+    ) -> DynamicIslandPresentationState {
+        switch state {
+        case .hidden, .capsule:
+            return state
+        case .expanded:
+            guard let windowSize else { return state }
+            if dynamicIslandExpandedChromeFits(windowSize) {
+                return state
+            }
+            return .capsule
+        }
     }
 
     private func show(_ controller: NSViewController) {
@@ -1535,6 +1581,8 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
 
     override func loadView() {
         view = NSView(frame: NSRect(origin: .zero, size: dynamicIslandTaskSize))
+        view.wantsLayer = true
+        view.layer?.masksToBounds = true
         view.addSubview(backgroundView)
         for subview in [
             titleStatusDot,
@@ -1711,6 +1759,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         taskController.view.frame = childContainer.bounds
         agentHealthController.view.frame = childContainer.bounds
         quotaController.view.frame = childContainer.bounds
+        updateHeaderChromeVisibility()
     }
 
     func apply(
@@ -1722,13 +1771,6 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         latestState = state
         let taskCount = snapshot.taskCollection.items.count
         let confirmationCount = snapshot.permissionQueue.count
-        let activeTab: DynamicIslandTab
-        if case .expanded(let tab) = state {
-            activeTab = tab
-        } else {
-            activeTab = .tasks
-        }
-        sourceFilter.isHidden = activeTab != .tasks
         var seenAgentIDs = Set<AgentID>()
         let availableAgentIDs = snapshot.availableAgentIDs
             .filter { seenAgentIDs.insert($0).inserted }
@@ -1823,6 +1865,42 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
                 placeholderField.stringValue = "任务 \(taskCount) 项"
             }
         }
+        updateHeaderChromeVisibility()
+    }
+
+    private func updateHeaderChromeVisibility() {
+        let size = view.bounds.size
+        let activeTab: DynamicIslandTab
+        switch latestState {
+        case .expanded(let tab):
+            activeTab = tab
+        case .hidden, .capsule:
+            tabs.isHidden = false
+            refreshButton.isHidden = false
+            collapseButton.isHidden = false
+            hideButton.isHidden = false
+            sourceFilter.isHidden = false
+            headerDivider.isHidden = false
+            childContainer.isHidden = false
+            return
+        }
+        let tabsFit = size.width
+            >= DynamicIslandWorkspaceHeaderMetrics.tabsMinX + 64
+        let trailingFits = DynamicIslandWorkspaceHeaderMetrics.trailingControlsFit(
+            inWidth: size.width
+        )
+        let filterFits = DynamicIslandWorkspaceHeaderMetrics.sourceFilterFits(
+            inWidth: size.width
+        )
+        let bodyFits = size.height
+            >= DynamicIslandWorkspaceHeaderMetrics.minimumHeightForBody
+        tabs.isHidden = !tabsFit
+        refreshButton.isHidden = !trailingFits
+        collapseButton.isHidden = !trailingFits
+        hideButton.isHidden = !trailingFits
+        sourceFilter.isHidden = activeTab != .tasks || !filterFits
+        headerDivider.isHidden = !bodyFits
+        childContainer.isHidden = !bodyFits
     }
 
     private func tabSegmentIndex(for state: DynamicIslandPresentationState) -> Int? {
@@ -1990,9 +2068,51 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         taskController.visibleTaskKeysForSelfTest()
     }
 
+    func confirmationInitialInputResponder() -> NSResponder? {
+        confirmationController?.initialInputResponder()
+    }
+
     func sourceFilterIsHiddenForSelfTest() -> Bool {
         _ = view
         return sourceFilter.isHidden
+    }
+
+    func headerLayoutSnapshotForSelfTest() -> DynamicIslandWorkspaceHeaderLayoutSnapshot {
+        _ = view
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        var visibleFrames = [titleField.frame]
+        if !tabs.isHidden {
+            visibleFrames.append(tabs.frame)
+        }
+        if !sourceFilter.isHidden {
+            visibleFrames.append(sourceFilter.frame)
+        }
+        if !refreshButton.isHidden {
+            visibleFrames.append(refreshButton.frame)
+        }
+        if !collapseButton.isHidden {
+            visibleFrames.append(collapseButton.frame)
+        }
+        if !hideButton.isHidden {
+            visibleFrames.append(hideButton.frame)
+        }
+        return DynamicIslandWorkspaceHeaderLayoutSnapshot(
+            bounds: view.bounds,
+            titleFrame: titleField.frame,
+            tabsFrame: tabs.frame,
+            sourceFilterFrame: sourceFilter.frame,
+            refreshButtonFrame: refreshButton.frame,
+            collapseButtonFrame: collapseButton.frame,
+            hideButtonFrame: hideButton.frame,
+            tabsIsHidden: tabs.isHidden,
+            sourceFilterIsHidden: sourceFilter.isHidden,
+            trailingButtonsAreHidden: refreshButton.isHidden
+                && collapseButton.isHidden
+                && hideButton.isHidden,
+            bodyIsHidden: childContainer.isHidden,
+            visibleFrames: visibleFrames
+        )
     }
 
     func topLevelTabLabelsForSelfTest() -> [String] {
