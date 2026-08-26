@@ -393,7 +393,12 @@ private func runClaudeDesktopTaskDiscoverySelfTest() {
     let metadataURL = sessionDirectory.appendingPathComponent(
         "\(localSessionID).json"
     )
-    var currentTime = Date()
+    // 时间线必须与转写内容同源：以前 now/mtime 取真实当前时间、内容却
+    // 固定在 2026-08-14，于是「活跃」断言实际测的是 mtime 而非对话活动。
+    // 活跃判定改看内容时间后，这里跟着对齐到内容之后 1 秒。
+    var currentTime = ISO8601DateFormatter().date(
+        from: "2026-08-14T08:00:02Z"
+    ) ?? Date()
     defer { try? fileManager.removeItem(at: home) }
 
     let userRecord = #"{"type":"user","timestamp":"2026-08-14T08:00:00.000Z","cwd":"/desktop/outputs","message":{"role":"user","content":"Desktop 会话识别回归"}}"#

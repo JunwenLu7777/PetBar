@@ -964,6 +964,12 @@ private func runClaudeLargeToolTailRecoverySelfTest() throws {
     )
     try data.write(to: transcriptURL)
 
+    // now 必须贴着夹具内容的时间：活跃判定看的是内容时间而非文件 mtime，
+    // 取真实当前时间会让这份 2026-08-17 的转写被判为陈旧而整条消失，
+    // 本用例要验的回扫恢复就无从断言了。
+    let fixtureNow = ISO8601DateFormatter().date(
+        from: "2026-08-17T05:30:01Z"
+    ) ?? Date()
     let reader = ClaudeTaskProgressReader(
         homeDirectory: temporaryRoot,
         indexRootDirectory: temporaryRoot.appendingPathComponent(
@@ -971,7 +977,7 @@ private func runClaudeLargeToolTailRecoverySelfTest() throws {
         ),
         environment: [:],
         claudeExecutable: { nil },
-        now: { Date() }
+        now: { fixtureNow }
     )
     var snapshot = reader.read()
     var remaining = TranscriptReadBudget.transcriptEvents

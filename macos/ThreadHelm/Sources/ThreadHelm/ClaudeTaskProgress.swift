@@ -323,7 +323,11 @@ final class ClaudeTaskProgressReader {
         var activeTools: [String: (text: String, updatedAt: Date)] = [:]
         var activeToolSourceKeys: [String: String] = [:]
         var pendingUserInputCalls = Set<String>()
-        var lastUpdatedAt: Date
+        /// 文件层面的最后改动，**不代表对话活动**：Claude 会在重新打开
+        /// 会话时改写转写尾部的 last-prompt / permission-mode，本机 30 份
+        /// 转写里 29 份都带这种无 timestamp 的尾巴。判定任务状态一律用
+        /// firstContentUpdatedAt / lastContentUpdatedAt。
+        var fileTouchedAt: Date
         var lastStopReason: String?
         var lastMeaningfulRole: String?
         var failed = false
@@ -331,15 +335,14 @@ final class ClaudeTaskProgressReader {
         var publicMessages: [AgentActivityEntry] = []
         var terminalSourceKey: String?
         /// 只由转写内容里的真实 timestamp 推进，绝不受文件 mtime 影响。
-        /// lastUpdatedAt 以 mtime 起步并取 max，会话被重新打开时尾部的
-        /// last-prompt / permission-mode 会刷新 mtime 却不带新对话，
-        /// 那时 lastUpdatedAt 会永远停在“今天”，让陈旧任务判定失效。
+        /// fileTouchedAt 以 mtime 起步并取 max，被尾部元数据刷新后会永远
+        /// 停在“今天”，用它判定任务状态就再也认不出陈旧会话。
         var lastContentUpdatedAt: Date?
         /// 内容里的第一条时间戳，用于 startedAt 退化成文件 mtime 时兜底。
         var firstContentUpdatedAt: Date?
 
         init(modificationDate: Date) {
-            lastUpdatedAt = modificationDate
+            fileTouchedAt = modificationDate
         }
 
         @discardableResult
@@ -363,8 +366,8 @@ final class ClaudeTaskProgressReader {
                     recordTimestamp
                 )
             }
-            let timestamp = recordTimestamp ?? lastUpdatedAt
-            lastUpdatedAt = max(lastUpdatedAt, timestamp)
+            let timestamp = recordTimestamp ?? fileTouchedAt
+            fileTouchedAt = max(fileTouchedAt, timestamp)
             if let cwd = record["cwd"] as? String, cwd.hasPrefix("/") {
                 detectedWorkingDirectory = cwd
             }
@@ -518,7 +521,7 @@ final class ClaudeTaskProgressReader {
             statusOverride: String?, allowsAgentOpen: Bool
         ) -> TaskProgressItem? {
             // 有真实内容时间就用它：mtime 可能被无对话的尾部元数据刷新。
-            let effectiveUpdatedAt = lastContentUpdatedAt ?? lastUpdatedAt
+            let effectiveUpdatedAt = lastContentUpdatedAt ?? fileTouchedAt
             // 无匹配进程时 startedAt 会退化成文件 mtime，而 mtime 可能晚于
             // 最后一条内容，算出来的持续时间就成了 0。这种情况改用内容起点。
             let effectiveStartedAt: Date
@@ -550,7 +553,9 @@ final class ClaudeTaskProgressReader {
             } else if lastStopReason == "end_turn" {
                 kind = .completed
             } else if (!activeTools.isEmpty || lastStopReason == "tool_use"),
-                      now.timeIntervalSince(modificationDate) <= 30 {
+                      // 同样不能看 mtime：刚打开一个陈旧会话就会被尾部
+                      // 元数据刷成“刚刚动过”，从而误判成正在运行。
+                      now.timeIntervalSince(effectiveUpdatedAt) <= 30 {
                 kind = .running
             } else {
                 return nil
