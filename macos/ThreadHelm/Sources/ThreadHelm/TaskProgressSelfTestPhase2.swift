@@ -528,6 +528,44 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
             "com.apple.Terminal",
         ]
     )
+    let runningWezTermResumePreference = claudeResumeTerminalPreference(
+        runningBundleIdentifiers: ["com.github.wez.wezterm"],
+        installedBundleIdentifiers: [
+            "com.github.wez.wezterm",
+            "com.apple.Terminal",
+        ]
+    )
+    // WezTerm 只在 cli spawn 成功时才算命中，且必须把窗口带到前台。
+    var wezTermSpawnArguments: [String] = []
+    // 计数而非布尔：失败路径若误调 activate，布尔会被成功那次掩盖。
+    var wezTermActivateCount = 0
+    let wezTermSpawned = openCommandInWezTerm(
+        "cd -- '/tmp/claude-project' && exec '/bin/claude' --resume 'x'",
+        executableURL: URL(fileURLWithPath: "/opt/homebrew/bin/wezterm"),
+        runProcess: { _, arguments in
+            wezTermSpawnArguments = arguments
+            return true
+        },
+        activate: { wezTermActivateCount += 1 }
+    )
+    // spawn 失败必须回落，不能谎报成功。
+    let wezTermSpawnFailure = openCommandInWezTerm(
+        "cd -- '/tmp' && exec '/bin/claude' --resume 'x'",
+        executableURL: URL(fileURLWithPath: "/opt/homebrew/bin/wezterm"),
+        runProcess: { _, _ in false },
+        activate: { wezTermActivateCount += 1 }
+    )
+    // 找不到可执行文件时连 spawn 都不该尝试。
+    var wezTermMissingExecutableRan = false
+    let wezTermMissingExecutable = openCommandInWezTerm(
+        "cd -- '/tmp' && exec '/bin/claude' --resume 'x'",
+        executableURL: nil,
+        runProcess: { _, _ in
+            wezTermMissingExecutableRan = true
+            return true
+        },
+        activate: { wezTermActivateCount += 1 }
+    )
     let terminalTTYFocus = terminalFocusScript(tty: "/dev/ttys003")
     let completedClaudeItem = TaskProgressItem(
         title: "已完成的 Claude 会话",
@@ -652,6 +690,19 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
               "com.googlecode.iterm2",
               "com.apple.Terminal",
           ],
+          runningWezTermResumePreference == [
+              "com.github.wez.wezterm",
+              "com.apple.Terminal",
+          ],
+          wezTermSpawned,
+          wezTermActivateCount == 1,
+          wezTermSpawnArguments == [
+              "cli", "spawn", "--", "/bin/zsh", "-lc",
+              "cd -- '/tmp/claude-project' && exec '/bin/claude' --resume 'x'",
+          ],
+          !wezTermSpawnFailure,
+          !wezTermMissingExecutable,
+          !wezTermMissingExecutableRan,
           ottyCompoundResume.contains(
               "set targetTab to do script \"\(escapedCompoundClaudeResumeCommand)\""
           ),

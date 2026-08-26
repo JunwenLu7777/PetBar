@@ -524,9 +524,11 @@ func claudeResumeTerminalPreference(
     runningBundleIdentifiers: Set<String>,
     installedBundleIdentifiers: Set<String>
 ) -> [String] {
+    // WezTerm 排在系统终端之前：Terminal.app 永远算已安装，是最后兜底。
     let priority = [
         "io.appmakes.otty",
         "com.googlecode.iterm2",
+        "com.github.wez.wezterm",
         "com.apple.Terminal",
     ]
     let running = priority.filter(runningBundleIdentifiers.contains)
@@ -750,6 +752,7 @@ func openCommandInPreferredTerminal(_ command: String) -> Bool {
     let supportedBundleIdentifiers = [
         "io.appmakes.otty",
         "com.googlecode.iterm2",
+        "com.github.wez.wezterm",
         "com.apple.Terminal",
     ]
     let runningBundleIdentifiers = Set(
@@ -785,6 +788,10 @@ func openCommandInPreferredTerminal(_ command: String) -> Bool {
             {
                 return true
             }
+        case "com.github.wez.wezterm":
+            if openCommandInWezTerm(command) {
+                return true
+            }
         case "com.apple.Terminal":
             let escapedCommand = appleScriptEscapedString(command)
             let source = """
@@ -801,6 +808,84 @@ func openCommandInPreferredTerminal(_ command: String) -> Bool {
         }
     }
     return false
+}
+
+/// WezTerm 走自己的 CLI，不走 Apple Events：CLI 直接连它的 mux server，
+/// 不需要自动化或辅助功能授权。授权被拒时 AppleScript 只会静默失败，
+/// 用户看到的就是点了没反应。
+func locateWezTermExecutable(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    bundleURL: URL? = NSWorkspace.shared.urlForApplication(
+        withBundleIdentifier: "com.github.wez.wezterm"
+    ),
+    isExecutableFile: (String) -> Bool = {
+        FileManager.default.isExecutableFile(atPath: $0)
+    }
+) -> URL? {
+    var candidates: [String] = []
+    if let bundleURL {
+        candidates.append(
+            bundleURL.appendingPathComponent("Contents/MacOS/wezterm").path
+        )
+    }
+    if let pathEnvironment = environment["PATH"], !pathEnvironment.isEmpty {
+        candidates += pathEnvironment
+            .split(separator: ":", omittingEmptySubsequences: true)
+            .map {
+                URL(fileURLWithPath: String($0), isDirectory: true)
+                    .appendingPathComponent("wezterm").path
+            }
+    }
+    candidates += ["/opt/homebrew/bin/wezterm", "/usr/local/bin/wezterm"]
+    return candidates.first(where: isExecutableFile).map {
+        URL(fileURLWithPath: $0)
+    }
+}
+
+/// 只用 `cli spawn`：它在已开着的窗口里新建标签页并立即返回。
+/// 不用 `wezterm start`——没有实例时它会持有 GUI 直到窗口关闭，
+/// 那会挂住调用方。spawn 失败即返回 false，由调用方回落到下一个终端。
+@discardableResult
+func openCommandInWezTerm(
+    _ command: String,
+    executableURL: URL? = locateWezTermExecutable(),
+    runProcess: (URL, [String]) -> Bool = runWezTermProcess,
+    activate: () -> Void = activateWezTerm
+) -> Bool {
+    guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          let executableURL
+    else { return false }
+    guard runProcess(
+        executableURL,
+        ["cli", "spawn", "--", "/bin/zsh", "-lc", command]
+    ) else { return false }
+    activate()
+    return true
+}
+
+func runWezTermProcess(_ executableURL: URL, _ arguments: [String]) -> Bool {
+    let process = Process()
+    process.executableURL = executableURL
+    process.arguments = arguments
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
+        return false
+    }
+    process.waitUntilExit()
+    return process.terminationStatus == 0
+}
+
+func activateWezTerm() {
+    guard let bundleURL = NSWorkspace.shared.urlForApplication(
+        withBundleIdentifier: "com.github.wez.wezterm"
+    ) else { return }
+    NSWorkspace.shared.openApplication(
+        at: bundleURL,
+        configuration: NSWorkspace.OpenConfiguration()
+    )
 }
 
 func openOMPSession(sessionID: String) -> Bool {
