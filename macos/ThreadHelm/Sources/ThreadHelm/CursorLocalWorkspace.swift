@@ -502,8 +502,9 @@ enum CursorLocalWorkspace {
               !nativeID.hasPrefix("unknown-")
         else { return nil }
 
+        // 同 Codex/Claude：项目根可能是指向外置卷的符号链接。
         guard let projects = try? fileManager.contentsOfDirectory(
-            at: projectsRoot,
+            at: projectsRoot.standardizedFileURL.resolvingSymlinksInPath(),
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return nil }

@@ -580,7 +580,11 @@ enum TranscriptIndexError: Error {
 }
 
 struct TranscriptIndexStore {
-    static let schemaVersion = 1
+    // v3：Codex item_completed 归一化改变了公开消息的提取语义。旧 checkpoint
+    // 的 committedOffset 已推进到文件尾且描述符为空，不失效就永远不会回头
+    // 重扫，升级后的会话会一直没有公开输出。
+    // （v2 只归一化了 reducer，冷扫描判定仍是旧格式，同样要作废。）
+    static let schemaVersion = 3
     static let maximumFileBytes = 512 * 1_024
     static let maximumDescriptors: UInt = 256
     static let maximumPublicMessages = 32

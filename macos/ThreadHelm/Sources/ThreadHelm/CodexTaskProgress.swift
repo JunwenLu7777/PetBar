@@ -88,11 +88,26 @@ final class CodexTaskProgressReader {
                 || line.contains("function_call_output")
                 || line.contains("custom_tool_call_output")
                 || line.contains("session_meta")
+                // Codex 0.147 起改用 item_completed 承载消息与工具；只放行
+                // 需要的 item 类型，thinking 与压缩记录仍不进解析。
+                || line.contains(#""AgentMessage""#)
+                || line.contains(#""UserMessage""#)
+                || line.contains(#""CommandExecution""#)
+                || line.contains(#""McpToolCall""#)
             else { return nil }
             guard let data = line.data(using: .utf8),
                   let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let payload = record["payload"] as? [String: Any]
+                  var payload = record["payload"] as? [String: Any]
             else { return nil }
+            // 新格式归一化回既有 payload 语义：下游分支与 81 条真值夹具都
+            // 保持原样，旧 rollout 仍走原路径。
+            if record["type"] as? String == "event_msg",
+               payload["type"] as? String == "item_completed" {
+                guard let mapped = CodexTaskProgressReader
+                    .normalizedCompletedItemPayload(payload)
+                else { return nil }
+                payload = mapped
+            }
             if record["type"] as? String == "session_meta",
                let rawCwd = payload["cwd"] as? String,
                let cwd = normalizedAbsolutePath(rawCwd) {
@@ -195,6 +210,17 @@ final class CodexTaskProgressReader {
                     trimEvents()
                     lastUpdatedAt = eventDate
                     return .publicMessage
+                } else if payloadType == "tool_completed",
+                          let activity = payload["activity"] as? String {
+                    // 新格式只在工具结束后落盘，因此只记历史活动，不写
+                    // activeTools——否则会把已结束的工具显示成“正在”。
+                    lastUpdatedAt = eventDate
+                    events = appendingTaskActivityEvent(
+                        TaskActivityEvent(kind: .tool, occurredAt: eventDate, text: activity),
+                        to: events
+                    )
+                    trimEvents()
+                    return .currentTool
                 }
                 return nil
             }
@@ -853,8 +879,19 @@ final class CodexTaskProgressReader {
         guard let data = line.data(using: .utf8),
               let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               record["type"] as? String == "event_msg",
-              let payload = record["payload"] as? [String: Any],
-              payload["type"] as? String == "agent_message",
+              var payload = record["payload"] as? [String: Any]
+        else {
+            return false
+        }
+        // 与 reducer 走同一套归一化，否则新格式的公开消息不会进冷扫描
+        // 描述符，历史记录也不会被 apply。
+        if payload["type"] as? String == "item_completed" {
+            guard let mapped = normalizedCompletedItemPayload(payload) else {
+                return false
+            }
+            payload = mapped
+        }
+        guard payload["type"] as? String == "agent_message",
               ["commentary", "final_answer"].contains(
                   (payload["phase"] as? String)?.lowercased() ?? ""
               ),
@@ -908,6 +945,59 @@ final class CodexTaskProgressReader {
         default:
             return "正在使用工具"
         }
+    }
+
+    /// Codex 0.147 起把用户消息、助手消息和工具调用统一写成
+    /// `event_msg/item_completed`，旧的 agent_message、user_message 与
+    /// custom_tool_call 事件不再出现。这里映射回既有 payload 语义，
+    /// 使下游 reducer 分支与真值夹具都不必改动。
+    /// thinking（Reasoning）、上下文压缩和图片查看不属于公开活动，返回 nil。
+    private static func normalizedCompletedItemPayload(
+        _ payload: [String: Any]
+    ) -> [String: Any]? {
+        guard let item = payload["item"] as? [String: Any],
+              let itemType = item["type"] as? String
+        else { return nil }
+        switch itemType {
+        case "AgentMessage":
+            guard let message = completedItemText(item) else { return nil }
+            var mapped: [String: Any] = [
+                "type": "agent_message",
+                "message": message,
+            ]
+            if let phase = item["phase"] as? String {
+                mapped["phase"] = phase
+            }
+            return mapped
+        case "UserMessage":
+            guard let message = completedItemText(item) else { return nil }
+            return ["type": "user_message", "message": message]
+        case "CommandExecution":
+            // 命令内容一律不进事件文本，只保留固定的脱敏描述。
+            return [
+                "type": "tool_completed",
+                "activity": safeToolActivity(name: "exec_command"),
+            ]
+        case "McpToolCall":
+            return [
+                "type": "tool_completed",
+                "activity": safeToolActivity(name: item["tool"] as? String ?? ""),
+            ]
+        default:
+            return nil
+        }
+    }
+
+    /// 只取 item.content 里的文本分量：`local_image` 等非文本分量跳过。
+    private static func completedItemText(_ item: [String: Any]) -> String? {
+        guard let content = item["content"] as? [[String: Any]] else { return nil }
+        let text = content.compactMap { entry -> String? in
+            guard (entry["type"] as? String)?.lowercased() == "text" else {
+                return nil
+            }
+            return entry["text"] as? String
+        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     private static func budgetedPublicActivityText(_ text: String) -> String {
@@ -1252,7 +1342,12 @@ final class CodexTaskProgressReader {
 
         nextRolloutScanAt = now.addingTimeInterval(rolloutRescanInterval)
         let codexHome = codexHomeURL()
-        let sessionsURL = codexHome.appendingPathComponent("sessions", isDirectory: true)
+        // sessions 可能被搬到外置卷、只在家目录留符号链接：URL 枚举器不跟随
+        // 符号链接根，不解析就会把整个会话目录当成空目录。
+        let sessionsURL = codexHome
+            .appendingPathComponent("sessions", isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
         guard let enumerator = fileManager.enumerator(
             at: sessionsURL,
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
@@ -1471,6 +1566,9 @@ final class CodexTaskProgressReader {
     private static func isHistoricalColdRecordSafeToApply(_ line: String) -> Bool {
         line.contains("session_meta")
             || line.contains("user_message")
+            // 新格式的用户消息不含 user_message 字面量。工具记录同旧格式
+            // 一样仍不回放，历史工具不该显示成当前活动。
+            || line.contains(#""UserMessage""#)
             || isPublicMessageLine(line)
     }
 

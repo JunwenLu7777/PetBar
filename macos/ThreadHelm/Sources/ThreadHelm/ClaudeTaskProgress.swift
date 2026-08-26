@@ -330,6 +330,11 @@ final class ClaudeTaskProgressReader {
         var events: [TaskActivityEvent] = []
         var publicMessages: [AgentActivityEntry] = []
         var terminalSourceKey: String?
+        /// 只由转写内容里的真实 timestamp 推进，绝不受文件 mtime 影响。
+        /// lastUpdatedAt 以 mtime 起步并取 max，会话被重新打开时尾部的
+        /// last-prompt / permission-mode 会刷新 mtime 却不带新对话，
+        /// 那时 lastUpdatedAt 会永远停在“今天”，让陈旧任务判定失效。
+        var lastContentUpdatedAt: Date?
 
         init(modificationDate: Date) {
             lastUpdatedAt = modificationDate
@@ -345,7 +350,14 @@ final class ClaudeTaskProgressReader {
             guard let data = line.data(using: .utf8),
                   let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return nil }
-            let timestamp = ClaudeTaskProgressReader.timestamp(from: record) ?? lastUpdatedAt
+            let recordTimestamp = ClaudeTaskProgressReader.timestamp(from: record)
+            if let recordTimestamp {
+                lastContentUpdatedAt = max(
+                    lastContentUpdatedAt ?? recordTimestamp,
+                    recordTimestamp
+                )
+            }
+            let timestamp = recordTimestamp ?? lastUpdatedAt
             lastUpdatedAt = max(lastUpdatedAt, timestamp)
             if let cwd = record["cwd"] as? String, cwd.hasPrefix("/") {
                 detectedWorkingDirectory = cwd
@@ -493,10 +505,19 @@ final class ClaudeTaskProgressReader {
             modificationDate: Date, now: Date,
             statusOverride: String?, allowsAgentOpen: Bool
         ) -> TaskProgressItem? {
+            // 有真实内容时间就用它：mtime 可能被无对话的尾部元数据刷新。
+            let effectiveUpdatedAt = lastContentUpdatedAt ?? lastUpdatedAt
             let kind: TaskProgressKind
             if failed {
                 kind = .failed
-            } else if !pendingUserInputCalls.isEmpty {
+            } else if !pendingUserInputCalls.isEmpty,
+                      now.timeIntervalSince(effectiveUpdatedAt)
+                          <= completedTaskPanelRetention {
+                // 只在内容仍新鲜时才算当前阻塞。转写尾部的 last-prompt 与
+                // permission-mode 会在会话被重新打开时刷新文件 mtime，
+                // 不带任何新对话；只看 mtime 会让上个月卡住的等待输入
+                // 一直显示为阻塞，且持续时间无限增长。
+                // 进程侧报出的 activeKind 不受此限制——那是真的在等用户。
                 kind = .waitingForInput
             } else if let activeKind {
                 if activeKind == .waitingForInput,
@@ -556,7 +577,8 @@ final class ClaudeTaskProgressReader {
                 terminalEvent: terminalEvent
             )
             return TaskProgressItem(
-                title: title, kind: kind, startedAt: startedAt, updatedAt: lastUpdatedAt,
+                title: title, kind: kind, startedAt: startedAt,
+                updatedAt: effectiveUpdatedAt,
                 source: .claudeCode, activityText: activityText, statusOverride: statusOverride,
                 sessionID: sessionID.lowercased(),
                 workingDirectory: cwd.isEmpty ? nil : cwd,
@@ -1234,8 +1256,9 @@ final class ClaudeTaskProgressReader {
 
         var byPath: [String: TranscriptCandidate] = [:]
         for root in roots {
+            // 同 Codex：转写根可能是指向外置卷的符号链接，必须先解析。
             guard let enumerator = fileManager.enumerator(
-                at: root.url,
+                at: root.url.standardizedFileURL.resolvingSymlinksInPath(),
                 includingPropertiesForKeys: [
                     .contentModificationDateKey,
                     .isRegularFileKey,
@@ -1542,8 +1565,9 @@ func claudeDesktopTranscriptRoots(
     for _ in 0..<3 {
         var nextDirectories: [URL] = []
         for directory in searchDirectories {
+            // contentsOfDirectory(at:) 与枚举器一样不跟随符号链接根。
             let children = (try? fileManager.contentsOfDirectory(
-                at: directory,
+                at: directory.standardizedFileURL.resolvingSymlinksInPath(),
                 includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsPackageDescendants]
             )) ?? []
