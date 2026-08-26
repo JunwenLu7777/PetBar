@@ -522,6 +522,8 @@ final class ClaudeTaskProgressReader {
         ) -> TaskProgressItem? {
             // 有真实内容时间就用它：mtime 可能被无对话的尾部元数据刷新。
             let effectiveUpdatedAt = lastContentUpdatedAt ?? fileTouchedAt
+            // 上游状态文案跟随 kind：kind 被改写时它必须一起失效。
+            var overriddenStatusText = statusOverride
             // 无匹配进程时 startedAt 会退化成文件 mtime，而 mtime 可能晚于
             // 最后一条内容，算出来的持续时间就成了 0。这种情况改用内容起点。
             let effectiveStartedAt: Date
@@ -546,7 +548,11 @@ final class ClaudeTaskProgressReader {
                 if activeKind == .waitingForInput,
                    lastStopReason == "end_turn",
                    lastMeaningfulRole == "assistant" {
+                    // 转写证明这轮已经收尾，不采信上游的等待态。上游的
+                    // 状态文案（如「已阻塞」）也必须一并丢弃，否则会出现
+                    // 标签写着「已阻塞」、却被归类成已完成的自相矛盾。
                     kind = .completed
+                    overriddenStatusText = nil
                 } else {
                     kind = activeKind
                 }
@@ -604,7 +610,8 @@ final class ClaudeTaskProgressReader {
             return TaskProgressItem(
                 title: title, kind: kind, startedAt: effectiveStartedAt,
                 updatedAt: effectiveUpdatedAt,
-                source: .claudeCode, activityText: activityText, statusOverride: statusOverride,
+                source: .claudeCode, activityText: activityText,
+                statusOverride: overriddenStatusText,
                 sessionID: sessionID.lowercased(),
                 workingDirectory: cwd.isEmpty ? nil : cwd,
                 processID: processID, processStartIdentity: processStartIdentity,
