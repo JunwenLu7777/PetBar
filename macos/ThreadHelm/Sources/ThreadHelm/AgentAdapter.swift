@@ -1102,7 +1102,15 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                     .nativeNavigation,
                     .quota,
                 ],
-                unknown: [.exactReturn]
+                // 审批类能力记为 unknown 而非 unsupported：Codex 的 hooks 是
+                // stable 特性，PermissionRequest 与 PreToolUse 都能阻断并等待
+                // 外部裁决，平台层面并不缺这个口子——是 ThreadHelm 尚未接入。
+                // 未列出即 unsupported，那等于对用户断言平台做不到。
+                unknown: [
+                    .exactReturn,
+                    .inAppPermission,
+                    .inAppQuestion,
+                ]
             )
         ),
         AgentMetadata(
@@ -1144,7 +1152,14 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                     .subagentEvents,
                     .managedIntegration,
                 ],
-                unknown: [.stableIdentity, .exactReturn]
+                // preToolUse 会被 await 且能返回 deny，平台支持拦截；
+                // ThreadHelm 尚未接入，且缺运行时实证，故记 unknown。
+                unknown: [
+                    .stableIdentity,
+                    .exactReturn,
+                    .inAppPermission,
+                    .inAppQuestion,
+                ]
             )
         ),
         AgentMetadata(
@@ -1162,9 +1177,15 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                     .nativeNavigation,
                     .managedIntegration,
                 ],
+                // ZCode 自带 PermissionRequest 事件，PreToolUse 也先于权限
+                // 求值执行并可 deny。ThreadHelm 目前只注册了六个观测事件，
+                // 未注册审批——平台能力与接入状态是两件事。
                 unknown: [
                     .stableIdentity,
                     .exactReturn,
+                    .inAppPermission,
+                    .inAppQuestion,
+                    .inAppPlanApproval,
                 ]
             )
         ),
@@ -1183,7 +1204,14 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                     .nativeNavigation,
                     .managedIntegration,
                 ],
-                unknown: [.stableIdentity, .exactReturn]
+                // ThreadHelm 的扩展已经挂在可阻断的 tool_call 上，只是
+                // handler 目前返回 void。平台支持，接入未做完。
+                unknown: [
+                    .stableIdentity,
+                    .exactReturn,
+                    .inAppPermission,
+                    .inAppQuestion,
+                ]
             )
         ),
     ]

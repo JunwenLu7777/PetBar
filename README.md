@@ -21,7 +21,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 - 检测到独立 Claude Code CLI 或 Claude Desktop 内置 CLI 时，可显示 Claude Code 的 5h、周额度与 Fable 周额度；均未安装时只显示 Codex 来源。已安装但未登录或读取失败时保留 Claude Code 状态提示；不显示 Token、Credits 或行情模块。
 - 任务控制台统一显示本机 Codex、Claude Code（包括 Claude Desktop 本地 Agent 会话）、Cursor、ZCode 和 OMP；Desktop 会话只读显示，不把应用聚焦、目录 fallback 或终端恢复冒充为精确会话返回。
 - Agents 页面同时显示本机检测版本、真值夹具测试版本、支持能力和已知限制。
-- 只有本机发现到的所有固定版本分量完全匹配时才显示 `validated`：Codex `0.145.0`、Claude Code `2.1.226`、Cursor Desktop `3.15.19` + Agent CLI `2026.04.15-dccdccd`、ZCode `3.7.6` + build `3.7.6.4691`、OMP `17.3.2`。缺版本、只匹配一部分或版本漂移都会显示 `unvalidated`，不会沿用旧版本的能力结论，也不会安装或修复该 Agent 的受管集成；卸载仍可只移除 ThreadHelm 自己的条目。
+- 只有本机发现到的所有固定版本分量完全匹配时才显示 `validated`：Codex `0.147.0`、Claude Code `2.1.226`、Cursor Desktop `3.15.19` + Agent CLI `2026.04.15-dccdccd`、ZCode `3.7.6` + build `3.7.6.4691`、OMP `17.3.2`。缺版本、只匹配一部分或版本漂移都会显示 `unvalidated`，不会沿用旧版本的能力结论，也不会安装或修复该 Agent 的受管集成；卸载仍可只移除 ThreadHelm 自己的条目。
 - 运行中任务会显示开始时间与持续时间；已完成/失败任务的持续时间会固定，不继续增长。
 - 运行中任务预览只显示公开助手输出，新内容会及时替换，同时保留可滚动的完整输出；不展示 thinking、工具参数或原始工具输出。
 - 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json`、CLI 会话公开输出和 Claude Desktop 本地 Agent transcript；不会发起远程第三方行情请求。

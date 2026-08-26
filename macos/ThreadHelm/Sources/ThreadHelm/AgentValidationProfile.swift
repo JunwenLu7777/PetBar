@@ -82,7 +82,7 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
             supportedCapabilitiesSummary:
                 "支持：状态、问题提醒、原生线程打开、额度",
             knownLimitation:
-                "限制：精确返回未独立确认；权限与计划需回到 Codex 处理"
+                "限制：精确返回未独立确认；hooks 为 stable 特性且可阻断，但 ThreadHelm 尚未接入审批，当前仍需回到 Codex 处理"
         ),
         AgentValidationProfile(
             agentID: .claudeCode,
@@ -110,7 +110,7 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
             supportedCapabilitiesSummary:
                 "支持：状态、原生应用/项目打开、子 Agent 事件",
             knownLimitation:
-                "限制：精确会话返回及阻塞/输入识别尚未验证"
+                "限制：精确会话返回未验证；preToolUse 可返回 deny，但 ThreadHelm 尚未接入且无运行时实证"
         ),
         AgentValidationProfile(
             agentID: .zcode,
@@ -129,14 +129,14 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
             ],
             supportedCapabilitiesSummary: "支持：状态、原生应用/项目打开",
             knownLimitation:
-                "限制：精确会话、问题/计划语义和 SessionEnd 尚未验证"
+                "限制：精确会话与 SessionEnd 未验证；平台有 PermissionRequest 与可阻断的 PreToolUse，ThreadHelm 仅注册观测事件"
         ),
         AgentValidationProfile(
             agentID: .omp,
             testedVersion: "17.3.2",
             supportedCapabilitiesSummary: "支持：状态、原生会话跳转",
             knownLimitation:
-                "限制：跳转通过 resume 发起；精确落点未独立确认"
+                "限制：跳转通过 resume 发起，精确落点未独立确认；tool_call 可阻断且为 fail-closed，ThreadHelm 的 handler 目前只观测"
         ),
     ]
     return Dictionary(uniqueKeysWithValues: profiles.map {

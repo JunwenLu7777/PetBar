@@ -162,9 +162,20 @@ func runAgentIntegrationSelfTest() {
           registry.metadata(for: .omp)?.capabilities.status(
               for: .nativeNavigation
           ) == .supported,
+          // 平台支持、ThreadHelm 未接入 → unknown，不能是 unsupported，
+          // 后者等于对用户断言平台做不到。真正要守的边界是下面那条：
+          // 除 Claude Code 之外，谁都不许标成 supported。
           registry.metadata(for: .omp)?.capabilities.status(
               for: .inAppPermission
-          ) == .unsupported,
+          ) == .unknown,
+          registry.metadata(for: .claudeCode)?.capabilities.status(
+              for: .inAppPermission
+          ) == .supported,
+          [.codex, .cursor, .zcode, .omp].allSatisfy({ agentID in
+              registry.metadata(for: agentID)?.capabilities.status(
+                  for: .inAppPermission
+              ) != .supported
+          }),
           registry.metadata(for: .omp)?.capabilities.status(
               for: .exactReturn
           ) == .unknown,
