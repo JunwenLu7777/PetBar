@@ -4,7 +4,7 @@ Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-
 
 | Agent | Installed version | Installation discovery | Lifecycle events | Stable identity |
 | --- | --- | --- | --- | --- |
-| Codex | 0.145.0 | `codex --version`, local process/session state | Existing ThreadHelm reader observes active turns, terminal states, and retained recent sessions | Supported: native thread UUID |
+| Codex | 0.147.0 | `codex --version`, local process/session state | Existing ThreadHelm reader observes active turns, terminal states, and retained recent sessions | Supported: native thread UUID |
 | Claude Code | 2.1.226 | `claude --version`, `claude agents --json` | Agent snapshot, top-level transcript, live process, and existing permission hook | Supported: Claude session ID plus a separately checked live process |
 | Cursor | Desktop 3.15.19; Agent CLI 2026.04.15-dccdccd | Application bundle plus separate desktop and Agent CLI commands | The managed hook adapter normalizes official session/tool/stop signals into the bounded local event store; installed-hook replay remains pending | Candidate `session_id` is documented; resumable identity mapping remains unknown until an end-to-end fixture passes |
 | ZCode | 3.7.6 (build 3.7.6.4691) | Application bundle `dev.zcode.app`; bundled CLI exists inside the app | The managed hook adapter observes the documented lifecycle subset without inventing SessionEnd; installed-hook replay remains pending | Unknown; no stable session identity has been proven from this installed version |

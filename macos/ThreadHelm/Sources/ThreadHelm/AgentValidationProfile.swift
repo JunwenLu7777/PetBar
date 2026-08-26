@@ -78,7 +78,7 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
     let profiles = [
         AgentValidationProfile(
             agentID: .codex,
-            testedVersion: "0.145.0",
+            testedVersion: "0.147.0",
             supportedCapabilitiesSummary:
                 "支持：状态、问题提醒、原生线程打开、额度",
             knownLimitation:

@@ -22,6 +22,7 @@ func runTaskProgressSelfTest() -> Never {
     runCodexClaudeTranscriptProviderRegressionSelfTest(now: now, started: started)
     runCodexClaudeAtomicReplaceCacheSelfTest()
     runCodexTailMetadataBackfillSelfTest(now: now, started: started)
+    runCodexCompletedItemFormatSelfTest()
     runTaskProgressSelfTestPhase2(now: now, started: started)
     runTaskProgressRefreshGateSelfTest()
     guard runTaskProgressRefreshStabilityRegressionSelfTest() else {
@@ -503,6 +504,89 @@ private func runCodexTailMetadataBackfillSelfTest(now: Date, started: String) {
           item?.activityText == "正在验证大型会话"
     else {
         fputs("Codex tail metadata cwd backfill failed\n", stderr)
+        exit(1)
+    }
+}
+
+/// Codex 0.147 起把用户消息、助手消息和工具调用统一写成
+/// `event_msg/item_completed`，旧的 agent_message / user_message /
+/// custom_tool_call 不再出现。81 条真值夹具走的是脱敏信号而非 JSONL，
+/// 覆盖不到这段归一化，所以在这里端到端验一次。
+private func runCodexCompletedItemFormatSelfTest() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "threadhelm-codex-item-completed-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let rolloutURL = directory.appendingPathComponent(
+        "rollout-2026-08-26T00-00-00-00000000-0000-0000-0000-00000000000f.jsonl"
+    )
+    let environmentKey = "THREADHELM_TASK_ROLLOUT_FILE"
+    let previousValue = getenv(environmentKey).map { String(cString: $0) }
+    defer {
+        if let previousValue {
+            setenv(environmentKey, previousValue, 1)
+        } else {
+            unsetenv(environmentKey)
+        }
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    let secret = "机密命令内容不得进入事件文本"
+    let sessionMeta = #"{"type":"session_meta","payload":{"cwd":"/tmp/threadhelm-item-project","thread_source":"user"}}"#
+    // UserMessage 的 content 分量是小写 "text"，AgentMessage 是大写 "Text"。
+    let userItem = #"{"timestamp":"2026-08-26T00:00:01Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"新格式任务标题"},{"type":"local_image","path":"x.png"}]}}}"#
+    let taskStarted = #"{"timestamp":"2026-08-26T00:00:02Z","type":"event_msg","payload":{"type":"task_started"}}"#
+    let reasoningItem = #"{"timestamp":"2026-08-26T00:00:03Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"Reasoning","id":"r1","summary_text":["这条 thinking 绝不能出现"]}}}"#
+    let agentItem = #"{"timestamp":"2026-08-26T00:00:04Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"m1","phase":"commentary","content":[{"type":"Text","text":"新格式公开输出"}]}}}"#
+    let commandItem = #"{"timestamp":"2026-08-26T00:00:05Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"e1","status":"completed","command":["/bin/zsh","-lc","echo \#(secret)"],"stdout":"\#(secret)"}}}"#
+
+    do {
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            [
+                sessionMeta, userItem, taskStarted,
+                reasoningItem, agentItem, commandItem,
+            ]
+            .joined(separator: "\n")
+            .appending("\n")
+            .utf8
+        ).write(to: rolloutURL)
+    } catch {
+        fputs("Codex item_completed fixture failed\n", stderr)
+        exit(1)
+    }
+
+    setenv(environmentKey, rolloutURL.path, 1)
+    let item = CodexTaskProgressReader(
+        indexRootDirectory: directory.appendingPathComponent(
+            "transcript-index", isDirectory: true
+        )
+    ).readCollection().items.first
+    let eventTexts = (item?.events ?? []).map(\.text)
+    let publicTexts = (item?.projection.publicMessages ?? []).map(\.text)
+
+    guard item?.title == "新格式任务标题",
+          item?.workingDirectory == "/tmp/threadhelm-item-project",
+          publicTexts.contains("新格式公开输出"),
+          // 工具记录在冷扫描回放中被有意跳过：历史工具不该显示成当前
+          // 活动，这与旧格式 function_call 的处理一致。锁定该行为。
+          !eventTexts.contains(where: { $0.contains("正在运行命令") }),
+          // 无论回放与否，命令与 stdout 都不得进入任何面向用户的文本。
+          !eventTexts.contains(where: { $0.contains(secret) }),
+          !publicTexts.contains(where: { $0.contains(secret) }),
+          // thinking 不属于公开活动。
+          !eventTexts.contains(where: { $0.contains("绝不能出现") }),
+          !publicTexts.contains(where: { $0.contains("绝不能出现") })
+    else {
+        fputs("Codex item_completed normalization failed\n", stderr)
+        fputs("  title=\(item?.title ?? "nil")\n", stderr)
+        fputs("  cwd=\(item?.workingDirectory ?? "nil")\n", stderr)
+        fputs("  kind=\(String(describing: item?.kind))\n", stderr)
+        fputs("  events=\(eventTexts)\n", stderr)
+        fputs("  public=\(publicTexts)\n", stderr)
         exit(1)
     }
 }

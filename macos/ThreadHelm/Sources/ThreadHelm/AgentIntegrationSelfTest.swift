@@ -270,7 +270,7 @@ private func runAgentVersionTruthSelfTest() {
         agentID: .codex,
         isInstalled: true,
         components: [
-            AgentVersionComponent(key: "version", label: "Version", value: "0.145.0"),
+            AgentVersionComponent(key: "version", label: "Version", value: "0.147.0"),
         ]
     )
     let codexMetadata = builtInAgentMetadata().first { $0.id == .codex }
@@ -332,7 +332,7 @@ private func runAgentVersionTruthSelfTest() {
           ) == .unsupported,
           codexMetadata?.capabilities.status(for: .exactReturn) == .unknown,
           ompMetadata?.capabilities.status(for: .exactReturn) == .unknown,
-          normalizedAgentVersion(from: "codex-cli 0.145.0") == "0.145.0",
+          normalizedAgentVersion(from: "codex-cli 0.147.0") == "0.147.0",
           normalizedAgentVersion(from: "2.1.226 (Claude Code)") == "2.1.226",
           normalizedAgentVersion(from: "2026.04.14-ee4b43a")
             == "2026.04.14-ee4b43a"
