@@ -335,6 +335,8 @@ final class ClaudeTaskProgressReader {
         /// last-prompt / permission-mode 会刷新 mtime 却不带新对话，
         /// 那时 lastUpdatedAt 会永远停在“今天”，让陈旧任务判定失效。
         var lastContentUpdatedAt: Date?
+        /// 内容里的第一条时间戳，用于 startedAt 退化成文件 mtime 时兜底。
+        var firstContentUpdatedAt: Date?
 
         init(modificationDate: Date) {
             lastUpdatedAt = modificationDate
@@ -354,6 +356,10 @@ final class ClaudeTaskProgressReader {
             if let recordTimestamp {
                 lastContentUpdatedAt = max(
                     lastContentUpdatedAt ?? recordTimestamp,
+                    recordTimestamp
+                )
+                firstContentUpdatedAt = min(
+                    firstContentUpdatedAt ?? recordTimestamp,
                     recordTimestamp
                 )
             }
@@ -402,6 +408,12 @@ final class ClaudeTaskProgressReader {
                     terminalSourceKey = location.map {
                         "bytes-\($0.startOffset)-\($0.byteCount)"
                     } ?? "terminal"
+                } else {
+                    // rate_limit 之类的错误常在中途出现又自行恢复。不清除
+                    // 就会让一次瞬时错误把整个会话永久标成失败——哪怕它
+                    // 后来正常 end_turn 收尾。以最后一次助手轮次为准。
+                    failed = false
+                    terminalSourceKey = nil
                 }
                 guard let content = message["content"] as? [[String: Any]]
                 else { return nil }
@@ -507,6 +519,14 @@ final class ClaudeTaskProgressReader {
         ) -> TaskProgressItem? {
             // 有真实内容时间就用它：mtime 可能被无对话的尾部元数据刷新。
             let effectiveUpdatedAt = lastContentUpdatedAt ?? lastUpdatedAt
+            // 无匹配进程时 startedAt 会退化成文件 mtime，而 mtime 可能晚于
+            // 最后一条内容，算出来的持续时间就成了 0。这种情况改用内容起点。
+            let effectiveStartedAt: Date
+            if let firstContentUpdatedAt, startedAt > effectiveUpdatedAt {
+                effectiveStartedAt = firstContentUpdatedAt
+            } else {
+                effectiveStartedAt = startedAt
+            }
             let kind: TaskProgressKind
             if failed {
                 kind = .failed
@@ -577,7 +597,7 @@ final class ClaudeTaskProgressReader {
                 terminalEvent: terminalEvent
             )
             return TaskProgressItem(
-                title: title, kind: kind, startedAt: startedAt,
+                title: title, kind: kind, startedAt: effectiveStartedAt,
                 updatedAt: effectiveUpdatedAt,
                 source: .claudeCode, activityText: activityText, statusOverride: statusOverride,
                 sessionID: sessionID.lowercased(),
