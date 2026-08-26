@@ -28,6 +28,26 @@ final class CodexTaskProgressReader {
             self.explicitlyVisibleIDs = explicitlyVisibleIDs
             self.isAvailable = isAvailable
         }
+
+        /// 未读集合里最新的 thread。thread id 是 UUIDv7，前 48 bit 是毫秒
+        /// 时间戳，因此字典序即时间序。
+        var newestKnownThreadID: String? {
+            ids.max()
+        }
+
+        /// 未读信号是否覆盖到这个会话。Codex 在某个版本后不再往
+        /// `unread-thread-ids-by-host-v1` 写新会话，集合就此定格；此后创建
+        /// 的会话既不在集合里、也从未被它记录过，用「不在集合里」推断
+        /// 「已读」会把它们全部误判掉，已完成的任务再也不会出现。
+        func covers(threadID: String) -> Bool {
+            guard isAvailable else { return false }
+            guard let newest = newestKnownThreadID else {
+                // 空集合有歧义：可能是全部已读，也可能是信号从未记录。
+                // 无从分辨时保持原语义——不在集合里即视为已读。
+                return true
+            }
+            return threadID.lowercased() <= newest
+        }
     }
 
     private struct RolloutCandidate {
@@ -1145,7 +1165,11 @@ final class CodexTaskProgressReader {
                 now: now,
                 retention: fallbackVisibility
             ) else { return false }
-            if unreadState.isAvailable, let threadID {
+            // 只有当未读信号确实覆盖到这个会话时，才用它判断是否已读。
+            // 信号定格之后创建的会话一律不在集合里，那不代表用户读过。
+            if unreadState.isAvailable,
+               let threadID,
+               unreadState.covers(threadID: threadID) {
                 return unreadState.ids.contains(threadID)
             }
             return true

@@ -1546,6 +1546,14 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         ids: [],
         isAvailable: false
     )
+    // 未读信号定格：集合里全是旧 thread，此后创建的会话从未被它记录。
+    // thread id 是 UUIDv7，字典序即时间序。
+    let staleSignalState = CodexTaskProgressReader.UnreadThreadState(
+        ids: ["019ecbd4-4be0-7362-adb5-fcce435d88fe"],
+        isAvailable: true
+    )
+    let threadNewerThanSignal = "01a03cdd-decc-76b1-91d4-e782100a9ced"
+    let threadOlderThanSignal = "019eb000-0000-7000-8000-000000000000"
     let completedVisibilityCases = [
         CodexTaskProgressReader.shouldDisplay(
             kind: .completed,
@@ -1575,6 +1583,31 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
             modificationDate: now.addingTimeInterval(-3600),
             now: now,
             unreadState: unreadState
+        ),
+        // 信号定格之后创建的会话：不在集合里不代表已读，必须显示。
+        CodexTaskProgressReader.shouldDisplay(
+            kind: .completed,
+            threadID: threadNewerThanSignal,
+            modificationDate: now,
+            now: now,
+            unreadState: staleSignalState
+        ),
+        // 信号覆盖得到的旧会话：不在集合里就是真的已读，仍要隐藏，
+        // 否则等于废掉「已读不再占位」这个产品意图。
+        !CodexTaskProgressReader.shouldDisplay(
+            kind: .completed,
+            threadID: threadOlderThanSignal,
+            modificationDate: now,
+            now: now,
+            unreadState: staleSignalState
+        ),
+        // 空集合语义不变：无从分辨读没读时，保持「不在集合里即已读」。
+        !CodexTaskProgressReader.shouldDisplay(
+            kind: .completed,
+            threadID: threadNewerThanSignal,
+            modificationDate: now,
+            now: now,
+            unreadState: readState
         ),
         !CodexTaskProgressReader.shouldDisplay(
             kind: .completed,
