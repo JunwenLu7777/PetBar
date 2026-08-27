@@ -1329,13 +1329,13 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                     .lifecycleObservation,
                     .nativeNavigation,
                     .managedIntegration,
+                    .inAppPermission,
                 ],
-                // ThreadHelm 的扩展已经挂在可阻断的 tool_call 上，只是
-                // handler 目前返回 void。平台支持，接入未做完。
+                // OMP 的扩展事件里没有对应问题回答的入口，平台是否另有
+                // 途径没验证过，记 unknown 而非 unsupported。
                 unknown: [
                     .stableIdentity,
                     .exactReturn,
-                    .inAppPermission,
                     .inAppQuestion,
                 ]
             )

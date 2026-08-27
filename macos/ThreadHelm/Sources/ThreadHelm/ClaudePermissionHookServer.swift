@@ -55,6 +55,27 @@ struct PermissionHookRoute {
             encode: { ClaudePermissionProtocol.responseBody(for: $0, prompt: $1) }
         )
     }
+
+    /// OMP 的扩展自己把 tool_call 事件整形成 Claude 那套字段名再发过来，
+    /// 所以入向复用同一个解析器；出向必须换成 OMP 的 {block, reason}。
+    static func omp(
+        token: @escaping () -> String? = { OMPPermissionTokenStore.token() }
+    ) -> PermissionHookRoute {
+        PermissionHookRoute(
+            agentID: .omp,
+            path: OMPPermissionHookConstants.path,
+            expectedToken: token,
+            decode: {
+                try ClaudePermissionProtocol.decodePrompt(
+                    from: $0,
+                    agentID: .omp
+                )
+            },
+            encode: { decision, _ in
+                OMPPermissionProtocol.responseBody(for: decision)
+            }
+        )
+    }
 }
 
 final class ClaudePermissionHookServer {
@@ -88,7 +109,7 @@ final class ClaudePermissionHookServer {
     private(set) var state: State = .stopped
 
     init(
-        routes: [PermissionHookRoute] = [.claude(), .codex(), .zcode()],
+        routes: [PermissionHookRoute] = [.claude(), .codex(), .zcode(), .omp()],
         liveness: PermissionGateLivenessStore? = nil
     ) {
         self.routes = Dictionary(

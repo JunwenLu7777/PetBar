@@ -260,7 +260,7 @@ private func dynamicIslandPreviewAgentStatuses() -> [AgentRuntimeStatus] {
             installed: true,
             compatibility: .validated,
             integrationStatus: .disabled,
-            version: "17.3.2",
+            version: "17.3.5",
             health: .healthy,
             summary: "本机可用"
         ),

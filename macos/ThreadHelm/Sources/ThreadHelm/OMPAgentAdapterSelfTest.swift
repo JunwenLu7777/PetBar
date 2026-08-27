@@ -59,7 +59,7 @@ private func runOMPDelayedVersionDiscoverySelfTest() throws {
           /usr/bin/touch "\(attemptURL.path)"
           /bin/sleep 3
         fi
-        /bin/echo 17.3.2
+        /bin/echo 17.3.5
         """.appending("\n").utf8
     ).write(to: executableURL)
     try manager.setAttributes(
@@ -72,7 +72,7 @@ private func runOMPDelayedVersionDiscoverySelfTest() throws {
         "PATH": "/usr/bin:/bin",
     ])
     guard discovery.isInstalled,
-          discovery.version == "17.3.2",
+          discovery.version == "17.3.5",
           discovery.compatibility == .validated
     else {
         throw OMPAgentAdapterSelfTestError.failed(
@@ -136,7 +136,8 @@ private func runOMPIntegrationLifecycleSelfTest() throws {
             version: "17.3.2",
             compatibility: .unknown
         )
-    }, executablePath: { "/tmp/ThreadHelm" })
+    }, executablePath: { "/tmp/ThreadHelm" },
+        timeoutStore: InMemoryOMPToolCallTimeoutStore(value: 600_000))
 
     let collisionRoot = temporaryRoot.appendingPathComponent(
         "omp-unowned-collision",
@@ -181,7 +182,7 @@ private func runOMPIntegrationLifecycleSelfTest() throws {
             version: nil,
             compatibility: .unknown
         )
-    })
+    }, timeoutStore: InMemoryOMPToolCallTimeoutStore(value: 600_000))
     guard try unavailableAdapter.installIntegration(
         in: .isolated(at: unavailableRoot)
     ) == .unchanged,
@@ -265,7 +266,8 @@ private func runOMPStateOnlyContractSelfTest() throws {
         resumeSession: {
             resumedSessionID = $0
             return true
-        }
+        },
+        timeoutStore: InMemoryOMPToolCallTimeoutStore(value: 600_000)
     )
     let observation = try adapter.observe()
     let report = observation.snapshots.first.map(adapter.open(session:))
@@ -294,6 +296,8 @@ private func runOMPStateOnlyContractSelfTest() throws {
 
     let generatedFiles = OMPExtensionConfiguration.generatedFilesForSelfTest()
     let generatedText = generatedFiles["index.ts"]?.lowercased() ?? ""
+    // 会话控制类 API 在整个扩展里都不许出现：观测和审批都没有理由
+    // 替用户开会话、发消息或注册工具。
     let forbiddenFragments = [
         "omp.sendusermessage",
         "omp.sendmessage",
@@ -304,11 +308,6 @@ private func runOMPStateOnlyContractSelfTest() throws {
         "ctx.switchsession",
         "ctx.ui",
         "rawprompt",
-        "tool_args",
-        "tool_output",
-        "command",
-        "cwd",
-        "workingdirectory",
         "secret",
         "password",
     ]
@@ -317,6 +316,31 @@ private func runOMPStateOnlyContractSelfTest() throws {
     }) {
         throw OMPAgentAdapterSelfTestError.failed(
             "generated extension contains forbidden fragment \(forbidden)"
+        )
+    }
+
+    // 内容类字段（命令、工作目录、工具入参）的边界按通道区分，不能
+    // 一刀切禁掉：审批闸门必须把它们呈给用户，否则用户无从判断自己
+    // 在批准什么；而观测通道只报状态，碰到任何一个都是泄露。
+    guard let observationBody = ompSelfTestObservationBody(generatedText) else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "generated extension has no observation body to inspect"
+        )
+    }
+    let observationForbidden = [
+        "tool_args",
+        "tool_output",
+        "tool_input",
+        "command",
+        "cwd",
+        "workingdirectory",
+        "input",
+    ]
+    if let leaked = observationForbidden.first(where: {
+        observationBody.contains($0)
+    }) {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "observation payload leaks \(leaked)"
         )
     }
 
@@ -403,7 +427,8 @@ private func runOMPGeneratedExtensionLoadSelfTest(
                 compatibility: .unknown
             )
         },
-        executablePath: { "/tmp/ThreadHelm" }
+        executablePath: { "/tmp/ThreadHelm" },
+        timeoutStore: InMemoryOMPToolCallTimeoutStore(value: 600_000)
     )
     let scope = AgentIntegrationScope.isolated(at: temporaryRoot)
     guard try adapter.installIntegration(in: scope) == .installed else {
@@ -883,4 +908,14 @@ private func ompSelfTestEvent(
         activitySummary: nil,
         workingDirectory: workingDirectory
     )
+}
+
+
+/// 切出观测 emit 真正发送的那段 body 字面量。审批 handler 需要携带
+/// 命令与工作目录，所以内容边界只能按通道分别断言，不能整文件一刀切。
+private func ompSelfTestObservationBody(_ script: String) -> String? {
+    guard let start = script.range(of: "const body = {") else { return nil }
+    let rest = script[start.upperBound...]
+    guard let end = rest.range(of: "};") else { return nil }
+    return String(rest[..<end.lowerBound])
 }

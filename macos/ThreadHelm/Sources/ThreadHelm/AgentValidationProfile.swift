@@ -134,10 +134,11 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
         ),
         AgentValidationProfile(
             agentID: .omp,
-            testedVersion: "17.3.2",
-            supportedCapabilitiesSummary: "支持：状态、原生会话跳转",
+            testedVersion: "17.3.5",
+            supportedCapabilitiesSummary:
+                "支持：状态、权限确认、原生会话跳转、受管集成",
             knownLimitation:
-                "限制：跳转通过 resume 发起，精确落点未独立确认；tool_call 可阻断且为 fail-closed，ThreadHelm 的 handler 目前只观测"
+                "限制：跳转通过 resume 发起，精确落点未独立确认；handler 超时默认 30 秒且按墙钟计，安装时会抬到 600 秒并在卸载时还原；扩展加载失败时闸门不存在而 OMP 只打一行告警；OMP 真机发起的审批尚未在本机端到端验证，契约取自其 settings schema 与 emitToolCall 实现"
         ),
     ]
     return Dictionary(uniqueKeysWithValues: profiles.map {

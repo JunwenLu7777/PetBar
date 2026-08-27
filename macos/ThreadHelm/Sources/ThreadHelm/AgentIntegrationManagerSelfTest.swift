@@ -557,7 +557,8 @@ private func makeIntegrationManagerRegistry(
         ),
         OMPAgentAdapter(
             discovery: installed,
-            executablePath: { "/tmp/ThreadHelm" }
+            executablePath: { "/tmp/ThreadHelm" },
+            timeoutStore: InMemoryOMPToolCallTimeoutStore(value: 600_000)
         ),
     ])
 }

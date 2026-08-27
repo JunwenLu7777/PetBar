@@ -13,9 +13,20 @@ struct OMPAgentAdapter: AgentAdapter {
     private let readEvents: () throws -> [AgentEvent]
     private let executablePath: () -> String
     private let resumeSession: (String) -> Bool
+    /// `omp config set` 的副作用跨不出进程边界，隔离 scope 管不住它。
+    /// 做成依赖，隔离自测才不会改到本机 OMP 的真实设置。
+    private let timeoutStore: OMPToolCallTimeoutStore
 
     var managedIntegrationRelativePaths: [String] {
-        [".omp/agent/extensions/threadhelm-state-observer"]
+        [
+            ".omp/agent/extensions/threadhelm-state-observer",
+            ".omp/agent/\(OMPPermissionHookConstants.tokenFileName)",
+            ".omp/agent/\(OMPManagedSettingsRecord.filename)",
+            // 抬高 handler 超时要经 `omp config set`，而它会按 schema
+            // 重写整份 config.yml、静默丢弃当前版本不认的值。列进受管
+            // 路径是为了让安装前的备份覆盖到它。
+            ".omp/agent/config.yml",
+        ]
     }
 
     init(
@@ -31,13 +42,15 @@ struct OMPAgentAdapter: AgentAdapter {
         executablePath: @escaping () -> String = {
             Bundle.main.executableURL?.path ?? "/usr/bin/true"
         },
-        resumeSession: @escaping (String) -> Bool = openOMPSession
+        resumeSession: @escaping (String) -> Bool = openOMPSession,
+        timeoutStore: OMPToolCallTimeoutStore = OMPConfigCommandTimeoutStore()
     ) {
         self.metadata = metadata!
         discoveryProvider = discovery
         self.readEvents = readEvents
         self.executablePath = executablePath
         self.resumeSession = resumeSession
+        self.timeoutStore = timeoutStore
     }
 
     func discover() -> AgentDiscovery {
@@ -59,10 +72,7 @@ struct OMPAgentAdapter: AgentAdapter {
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationOperationResult {
         guard discover().isInstalled else { return .unchanged }
-        let changed = try OMPExtensionConfiguration.install(
-            in: scope,
-            executablePath: executablePath()
-        )
+        let changed = try prepareGate(in: scope)
         return changed ? .installed : .unchanged
     }
 
@@ -70,18 +80,68 @@ struct OMPAgentAdapter: AgentAdapter {
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationOperationResult {
         guard discover().isInstalled else { return .unchanged }
-        let changed = try OMPExtensionConfiguration.install(
-            in: scope,
-            executablePath: executablePath()
-        )
+        let changed = try prepareGate(in: scope)
         return changed ? .repaired : .unchanged
     }
 
     func uninstallIntegration(
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationOperationResult {
+        let directory = try ompManagedAgentDirectory(in: scope)
+        // 先撤设置再撤扩展：反过来的话，中途失败会留下一个被我们改过
+        // 却没人认领的超时值。
+        let restoredTimeout = restoreToolCallTimeout(directory: directory)
+        OMPPermissionTokenStore.removeToken(directory: directory)
         let changed = try OMPExtensionConfiguration.uninstall(in: scope)
-        return changed ? .uninstalled : .unchanged
+        return (changed || restoredTimeout) ? .uninstalled : .unchanged
+    }
+
+    /// 装扩展、备好令牌、并把 handler 超时抬到人能反应过来的量级。
+    private func prepareGate(in scope: AgentIntegrationScope) throws -> Bool {
+        let directory = try ompManagedAgentDirectory(in: scope)
+        // 令牌必须先于扩展落盘：扩展一旦被 OMP 加载就会去读它，读不到
+        // 只能按拒绝兜底，把用户挡在自己的工具外面。
+        try OMPPermissionTokenStore.ensureToken(directory: directory)
+        let raisedTimeout = raiseToolCallTimeoutIfNeeded(directory: directory)
+        let changed = try OMPExtensionConfiguration.install(
+            in: scope,
+            executablePath: executablePath()
+        )
+        return changed || raisedTimeout
+    }
+
+    private func raiseToolCallTimeoutIfNeeded(directory: URL) -> Bool {
+        // 已经记过原值就说明这次是重复安装，不能再记一次——否则第二次
+        // 会把我们自己写的值当成用户的原值，卸载时还原不回去。
+        guard OMPManagedSettingsRecord.previousTimeout(directory: directory)
+            == nil
+        else { return false }
+        let current = timeoutStore.read()
+        guard case .raise(let from, let to) = ompToolCallTimeoutPlan(
+            currentValue: current
+        ) else { return false }
+        guard timeoutStore.write(to) else { return false }
+        try? OMPManagedSettingsRecord.write(
+            previousTimeout: from,
+            directory: directory
+        )
+        return true
+    }
+
+    private func restoreToolCallTimeout(directory: URL) -> Bool {
+        guard let previous = OMPManagedSettingsRecord.previousTimeout(
+            directory: directory
+        ) else { return false }
+        switch previous {
+        case .some(let value):
+            _ = timeoutStore.write(value)
+        case .none:
+            // 我们改之前用户根本没设过这个键，还原就是把它清掉，
+            // 而不是写回默认值——那会留下一条用户没写过的配置。
+            _ = timeoutStore.reset()
+        }
+        OMPManagedSettingsRecord.remove(directory: directory)
+        return true
     }
 
     func observe() throws -> AgentObservation {
@@ -260,10 +320,28 @@ enum OMPExtensionConfiguration {
             == ownershipContent
     }
 
-    private static func scriptContent(executablePath: String) -> String {
-        let encodedPath = (try? JSONEncoder().encode(executablePath))
+    private static func jsonString(_ value: String, fallback: String) -> String {
+        let encoder = JSONEncoder()
+        // 默认会把 / 转义成 \/。JSON 层面等价，但生成的脚本里满屏
+        // "\/Users\/…" 既难读也难 grep。
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        return (try? encoder.encode(value))
             .flatMap { String(data: $0, encoding: .utf8) }
-            ?? "\"/usr/bin/true\""
+            ?? fallback
+    }
+
+    private static func scriptContent(executablePath: String) -> String {
+        let encodedPath = jsonString(executablePath, fallback: "\"/usr/bin/true\"")
+        let encodedGateURL = jsonString(
+            OMPPermissionHookConstants.url,
+            fallback: "\"\""
+        )
+        // 令牌路径写进脚本，令牌本身不写：轮换时不必重写扩展，
+        // 而扩展文件的权限也不必按机密对待。
+        let encodedTokenPath = jsonString(
+            OMPPermissionTokenStore.tokenURL().path,
+            fallback: "\"\""
+        )
         return """
         // \(marker)
         import type {
@@ -271,8 +349,14 @@ enum OMPExtensionConfiguration {
           ExtensionContext
         } from "@oh-my-pi/pi-coding-agent";
         import { spawn } from "node:child_process";
+        import { readFileSync } from "node:fs";
 
         const THREADHELM = \(encodedPath);
+        const GATE_URL = \(encodedGateURL);
+        const TOKEN_PATH = \(encodedTokenPath);
+        const EXTENSION_DEADLINE_MS = \(
+            OMPPermissionHookConstants.extensionDeadlineMilliseconds
+        );
         let sequence = 0;
 
         function safeText(value: unknown, fallback: string): string {
@@ -315,6 +399,94 @@ enum OMPExtensionConfiguration {
           }
         }
 
+        // 审批闸门。与上面的观测 emit 有本质区别：那条是 best-effort、
+        // 出错即算了；这条决定工具跑不跑，任何异常路径都必须显式拦截。
+        //
+        // OMP 在 handler 超时或抛异常时会自己回落成 block:true，但那条
+        // 兜底只在 handler 真的失败时生效。若这里 catch 之后静默返回
+        // undefined，工具就直接执行了——闸门形同虚设。所以下面每一条
+        // 失败路径都显式 return block。
+        async function requestApproval(
+          event: { toolName?: string; toolCallId?: string; input?: unknown },
+          ctx: ExtensionContext
+        ): Promise<{ block: boolean; reason?: string } | undefined> {
+          let token: string;
+          try {
+            token = readFileSync(TOKEN_PATH, "utf8").trim();
+            if (!token) throw new Error("empty token");
+          } catch (error) {
+            return {
+              block: true,
+              reason:
+                "ThreadHelm 审批闸门未就绪（读不到令牌），已按拒绝处理。"
+            };
+          }
+
+          const controller = new AbortController();
+          const timer = setTimeout(
+            () => controller.abort(),
+            EXTENSION_DEADLINE_MS
+          );
+          try {
+            const response = await fetch(GATE_URL, {
+              method: "POST",
+              signal: controller.signal,
+              headers: {
+                "Content-Type": "application/json",
+                "X-ThreadHelm-Hook-Token": token
+              },
+              body: JSON.stringify({
+                hook_event_name: "PermissionRequest",
+                tool_name: safeText(event.toolName, "UnknownTool"),
+                tool_use_id: safeText(event.toolCallId, "omp-tool-call"),
+                tool_input: event.input ?? {},
+                session_id: safeText(
+                  ctx.sessionManager.getSessionId(),
+                  "omp-session-unknown"
+                ),
+                cwd: typeof process.cwd === "function" ? process.cwd() : ""
+              })
+            });
+            if (!response.ok) {
+              return {
+                block: true,
+                reason:
+                  "ThreadHelm 未能确认这次操作（闸门返回 " +
+                  response.status +
+                  "），已按拒绝处理。"
+              };
+            }
+            const verdict = await response.json();
+            if (verdict && verdict.block === true) {
+              return {
+                block: true,
+                reason:
+                  typeof verdict.reason === "string" && verdict.reason
+                    ? verdict.reason
+                    : "用户拒绝了这次操作。"
+              };
+            }
+            // 明确放行才放行。裁决体读不懂时不能当成同意。
+            if (verdict && verdict.block === false) {
+              return undefined;
+            }
+            return {
+              block: true,
+              reason: "ThreadHelm 返回了无法解读的裁决，已按拒绝处理。"
+            };
+          } catch (error) {
+            const aborted = controller.signal.aborted;
+            return {
+              block: true,
+              reason: aborted
+                ? "等待 ThreadHelm 确认超时，已按拒绝处理。"
+                : "无法连接 ThreadHelm 审批闸门，已按拒绝处理。"
+            };
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+
         export default function threadHelmStateObserver(omp: ExtensionAPI): void {
           omp.on("session_start", (_event, ctx) => emit("session_start", ctx));
           omp.on("agent_start", (_event, ctx) => emit("agent_start", ctx));
@@ -327,7 +499,10 @@ enum OMPExtensionConfiguration {
                 : "success";
             emit("agent_end", ctx, outcome);
           });
-          omp.on("tool_call", (_event, ctx) => emit("tool_call", ctx));
+          omp.on("tool_call", async (event, ctx) => {
+            emit("tool_call", ctx);
+            return await requestApproval(event, ctx);
+          });
           omp.on("tool_result", (_event, ctx) => emit("tool_result", ctx));
           omp.on("session_compact", (_event, ctx) => emit("session_compact", ctx));
           omp.on("session_shutdown", (_event, ctx) => emit("session_shutdown", ctx));
