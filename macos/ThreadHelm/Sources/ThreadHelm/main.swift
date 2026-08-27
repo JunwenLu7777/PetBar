@@ -138,6 +138,10 @@ if CommandLine.arguments.contains("--self-test-permission-gate-liveness") {
     runPermissionGateLivenessSelfTest()
 }
 
+if CommandLine.arguments.contains("--self-test-omp-permission") {
+    runOMPPermissionSelfTest()
+}
+
 if CommandLine.arguments.contains("--self-test-dynamic-island") {
     runDynamicIslandSelfTest()
 }

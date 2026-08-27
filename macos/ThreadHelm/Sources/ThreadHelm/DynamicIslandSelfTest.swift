@@ -1285,7 +1285,7 @@ private func assertDynamicIslandTaskWorkspace() {
                 AgentVersionComponent(
                     key: "version",
                     label: "Version",
-                    value: "17.3.2"
+                    value: "17.3.5"
                 ),
             ]
         default:

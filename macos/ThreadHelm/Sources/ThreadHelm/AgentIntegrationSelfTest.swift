@@ -162,12 +162,12 @@ func runAgentIntegrationSelfTest() {
           registry.metadata(for: .omp)?.capabilities.status(
               for: .nativeNavigation
           ) == .supported,
-          // 平台支持、ThreadHelm 未接入 → unknown，不能是 unsupported，
+          // 平台支持但 ThreadHelm 未接入 → unknown，不能是 unsupported，
           // 后者等于对用户断言平台做不到。真正要守的边界是下面那条：
-          // 只有已接入并端到端验证过的 agent 才许标 supported。
+          // 只有已接入的 agent 才许标 supported。
           registry.metadata(for: .omp)?.capabilities.status(
               for: .inAppPermission
-          ) == .unknown,
+          ) == .supported,
           registry.metadata(for: .claudeCode)?.capabilities.status(
               for: .inAppPermission
           ) == .supported,
@@ -180,11 +180,10 @@ func runAgentIntegrationSelfTest() {
           registry.metadata(for: .zcode)?.capabilities.status(
               for: .inAppPermission
           ) == .supported,
-          [.cursor, .omp].allSatisfy({ agentID in
-              registry.metadata(for: agentID)?.capabilities.status(
-                  for: .inAppPermission
-              ) != .supported
-          }),
+          // Cursor 仍未接入，是这条边界唯一的反例。
+          registry.metadata(for: .cursor)?.capabilities.status(
+              for: .inAppPermission
+          ) != .supported,
           // ZCode 没有问题回答与计划审批的 hook 事件，不能顺势标上。
           [AgentCapability.inAppQuestion, .inAppPlanApproval]
               .allSatisfy({ capability in

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "agentId": "codex",
   "observedAgentVersion": "0.150.1",
-  "baselineCommit": "620ac7b6b60f15b1cfbf10200c3092d968cd7f36",
+  "baselineCommit": "4e220c79ed2ce3506fd1f39e9f61a0cac803161d",
   "redaction": {
     "status": "redacted",
     "excluded": ["rawPrompt", "hiddenReasoning", "fullToolArguments", "toolOutput", "secrets", "personalPaths"]
