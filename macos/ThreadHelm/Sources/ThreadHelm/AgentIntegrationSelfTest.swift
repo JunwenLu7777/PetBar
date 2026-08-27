@@ -317,6 +317,72 @@ private func runAgentVersionTruthSelfTest() {
             AgentVersionComponent(key: "version", label: "Version", value: "0.150.1"),
         ]
     )
+    // 判据合成表逐格钉死。探测结论优先于版本：探测是直接证据，版本只是间接
+    // 推断。notProbed 那一行必须与接入探测之前的行为完全一致，否则这次拆分
+    // 就悄悄改了线上判定。
+    let compositionTable: [(AgentVersionDrift, AgentProbeOutcome, AgentCompatibility)] = [
+        (.matchesBaseline, .notProbed, .validated),
+        (.drifted, .notProbed, .unvalidated),
+        (.baselineUnavailable, .notProbed, .unknown),
+        // 通道断了：无论版本对不对，都不能宣称可用。
+        (.matchesBaseline, .channelBroken(reason: "probe"), .unvalidated),
+        (.drifted, .channelBroken(reason: "probe"), .unvalidated),
+        // 通道活着但语义未验：不宣称已验证，也不当作坏的。版本漂移不再
+        // 一票否决——这正是这次改造要解开的死锁。
+        (.matchesBaseline, .channelLive, .unknown),
+        (.drifted, .channelLive, .unknown),
+        (.baselineUnavailable, .channelLive, .unknown),
+        // 亲测拦住过：版本漂移也不推翻直接证据。
+        (.matchesBaseline, .semanticsVerified, .validated),
+        (.drifted, .semanticsVerified, .validated),
+    ]
+    let compositionHolds = compositionTable.allSatisfy { drift, probe, expected in
+        agentCompatibility(versionDrift: drift, probe: probe) == expected
+    }
+    // 版本偏移本身只回答"分量是否全等"，不掺入探测。
+    let driftHolds = agentVersionDrift(
+        agentID: .zcode,
+        components: [
+            AgentVersionComponent(key: "version", label: "Version", value: "3.9.1"),
+            AgentVersionComponent(key: "build", label: "build", value: "3.9.1.5853"),
+        ]
+    ) == .matchesBaseline
+        && agentVersionDrift(
+            agentID: .zcode,
+            components: [
+                AgentVersionComponent(key: "version", label: "Version", value: "3.9.1"),
+                AgentVersionComponent(key: "build", label: "build", value: "3.9.2.6069"),
+            ]
+        ) == .drifted
+        // 分量重名说明采集侧坏了，不能当匹配。
+        && agentVersionDrift(
+            agentID: .codex,
+            components: [
+                AgentVersionComponent(key: "version", label: "Version", value: "0.150.1"),
+                AgentVersionComponent(key: "version", label: "Version", value: "0.150.1"),
+            ]
+        ) == .drifted
+        && agentVersionDrift(agentID: .codex, components: [], profiles: [:])
+            == .baselineUnavailable
+    // 探测结论能穿透版本漂移：同一组漂移分量，带 semanticsVerified 就该判
+    // validated。这一条是第 2、3 步的地基，先钉住。
+    let probeOverridesDrift = versionValidatedAgentDiscovery(
+        agentID: .zcode,
+        isInstalled: true,
+        components: [
+            AgentVersionComponent(key: "version", label: "Version", value: "3.9.2"),
+            AgentVersionComponent(key: "build", label: "build", value: "3.9.2.6069"),
+        ],
+        probe: .semanticsVerified
+    ).compatibility == .validated
+    // 未安装时探测结论一概不作数。
+    let uninstalledIgnoresProbe = versionValidatedAgentDiscovery(
+        agentID: .zcode,
+        isInstalled: false,
+        components: [],
+        probe: .semanticsVerified
+    ).compatibility == .unknown
+
     let codexMetadata = builtInAgentMetadata().first { $0.id == .codex }
     let ompMetadata = builtInAgentMetadata().first { $0.id == .omp }
     let driftedCodexAdapter = CodexAgentAdapter(
@@ -341,6 +407,10 @@ private func runAgentVersionTruthSelfTest() {
     ).first
 
     guard Set(profiles.keys) == Set(AgentID.builtInOrder),
+          compositionHolds,
+          driftHolds,
+          probeOverridesDrift,
+          uninstalledIgnoresProbe,
           cursorPinned.compatibility == .validated,
           cursorPinned.version == "3.17.21",
           cursorPinned.versionComponents.map(\.key) == ["desktop", "agentCLI"],

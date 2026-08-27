@@ -19,6 +19,61 @@ enum AgentCompatibility: String, Equatable {
     static let unsupportedVersion = AgentCompatibility.unvalidated
 }
 
+/// 实测到的能力状态。
+///
+/// 分两层是因为两层的成本差三个数量级：连通性可以无副作用地反复探（回读配置、
+/// 看最近有没有收到过该 Agent 的 hook 事件），而「deny 真能拦住」必须实际
+/// 发生一次工具调用。压成一个值就表达不了「通道在、阻断语义没验过」——那恰恰
+/// 是 Agent 发了新版之后最常见的状态。
+enum AgentProbeOutcome: Equatable {
+    /// 尚未探测。此时判据回落到版本比对，与探测接入前的行为一致。
+    case notProbed
+    /// L1 失败：受管条目不见了、被改写，或该 Agent 从未回传过 hook 事件。
+    case channelBroken(reason: String)
+    /// L1 通过：通道确实活着，但阻断语义没有在当前版本上验证过。
+    case channelLive
+    /// L1 与 L2 都通过：亲测拦住过一次真实工具调用。
+    case semanticsVerified
+}
+
+/// 本机版本相对基线的偏移。
+///
+/// 它不再决定能力是否可用——版本号只是「能力还能用吗」的一个很差的代理指标：
+/// ZCode 的 hook 契约由内嵌 CLI 决定而基线钉的是 App 版本，两者可以各走各的；
+/// OMP 的 extensionHandlers.toolCallTimeoutMs 在同一个 minor 号段内出现过。
+/// 所以偏移的唯一职责是决定探测结论何时失效。
+enum AgentVersionDrift: Equatable {
+    case matchesBaseline
+    case drifted
+    /// 没有基线可比（未安装，或该 Agent 没有 validation profile）。
+    case baselineUnavailable
+}
+
+/// 由版本偏移与探测结论合成对外的兼容性判定。
+///
+/// 探测结论优先于版本：探测是直接证据，版本是间接推断。只有在还没探测过时
+/// 才回落到版本比对，以保持探测接入前后的行为一致。
+func agentCompatibility(
+    versionDrift: AgentVersionDrift,
+    probe: AgentProbeOutcome
+) -> AgentCompatibility {
+    switch probe {
+    case .notProbed:
+        switch versionDrift {
+        case .matchesBaseline: return .validated
+        case .drifted: return .unvalidated
+        case .baselineUnavailable: return .unknown
+        }
+    case .channelBroken:
+        return .unvalidated
+    case .channelLive:
+        // 通道活着但语义未验：既不能宣称已验证，也不该当作坏的。
+        return .unknown
+    case .semanticsVerified:
+        return .validated
+    }
+}
+
 struct AgentVersionComponent: Equatable {
     let key: String
     let label: String
@@ -48,10 +103,38 @@ struct AgentDiscovery: Equatable {
     }
 }
 
+/// 计算本机版本分量相对基线的偏移。
+///
+/// 判定仍然要求全部分量精确相等：分量本来就是为了捕捉「App 版本没动而内嵌
+/// CLI 换代」这类漂移才拆开的，放宽任何一个分量都会让它漏报。变的只是这个
+/// 结果的用途——它现在决定探测结论何时失效，不再直接决定能力。
+func agentVersionDrift(
+    agentID: AgentID,
+    components: [AgentVersionComponent],
+    profiles: [AgentID: AgentValidationProfile] = builtInAgentValidationProfiles()
+) -> AgentVersionDrift {
+    guard let expected = profiles[agentID]?.testedVersionComponents else {
+        return .baselineUnavailable
+    }
+    let actualValues = Dictionary(
+        components.map { ($0.key, $0.value) },
+        uniquingKeysWith: { _, latest in latest }
+    )
+    let expectedValues = Dictionary(
+        uniqueKeysWithValues: expected.map { ($0.key, $0.value) }
+    )
+    // 分量重名说明采集侧出了问题，此时不能当作匹配。
+    let hasUniqueComponents = actualValues.count == components.count
+    return hasUniqueComponents && actualValues == expectedValues
+        ? .matchesBaseline
+        : .drifted
+}
+
 func versionValidatedAgentDiscovery(
     agentID: AgentID,
     isInstalled: Bool,
-    components: [AgentVersionComponent]
+    components: [AgentVersionComponent],
+    probe: AgentProbeOutcome = .notProbed
 ) -> AgentDiscovery {
     guard isInstalled else {
         return AgentDiscovery(
@@ -62,28 +145,11 @@ func versionValidatedAgentDiscovery(
         )
     }
 
-    let profiles = builtInAgentValidationProfiles()
-    guard let expected = profiles[agentID]?.testedVersionComponents else {
-        return AgentDiscovery(
-            isInstalled: true,
-            version: components.first?.value,
-            compatibility: .unknown,
-            versionComponents: components
-        )
-    }
-    let actualValues = Dictionary(
-        components.map { ($0.key, $0.value) },
-        uniquingKeysWith: { _, latest in latest }
-    )
-    let expectedValues = Dictionary(
-        uniqueKeysWithValues: expected.map { ($0.key, $0.value) }
-    )
-    let hasUniqueComponents = actualValues.count == components.count
-    let isValidated = hasUniqueComponents && actualValues == expectedValues
+    let drift = agentVersionDrift(agentID: agentID, components: components)
     return AgentDiscovery(
         isInstalled: true,
         version: components.first?.value,
-        compatibility: isValidated ? .validated : .unvalidated,
+        compatibility: agentCompatibility(versionDrift: drift, probe: probe),
         versionComponents: components
     )
 }
