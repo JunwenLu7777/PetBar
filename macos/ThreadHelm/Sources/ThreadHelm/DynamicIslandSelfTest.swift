@@ -1254,7 +1254,7 @@ private func assertDynamicIslandTaskWorkspace() {
                 AgentVersionComponent(
                     key: "version",
                     label: "Version",
-                    value: "0.147.0"
+                    value: "0.150.1"
                 ),
             ]
         case .claudeCode:
@@ -1343,7 +1343,7 @@ private func assertDynamicIslandTaskWorkspace() {
                   && !summary.contains("主人复核")
           }),
           agentHealthRows.first?.contains(
-              "本机 0.147.0 · 已验证 · 测试 0.147.0"
+              "本机 0.150.1 · 已验证 · 测试 0.150.1"
           ) == true,
           agentHealthRows.first(where: { $0.contains("Cursor") })?.contains(
               "Desktop 3.15.19 · Agent CLI 2026.04.14-ee4b43a · unvalidated"

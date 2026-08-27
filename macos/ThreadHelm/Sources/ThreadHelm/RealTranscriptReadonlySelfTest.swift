@@ -290,8 +290,12 @@ private func newestStableJSONL(
     let stableBefore = Date().addingTimeInterval(-10 * 60)
     var best: (url: URL, modifiedAt: Date)?
     for root in roots {
+        // 会话目录常被搬到外置卷、只在家目录留一个符号链接。URL 枚举器
+        // 不跟随符号链接根，不解析就会把整个目录当成空的——这条只读验收
+        // 会因此报 provider-unavailable，看起来像厂商没数据。
+        let resolvedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
         guard let enumerator = fileManager.enumerator(
-            at: root,
+            at: resolvedRoot,
             includingPropertiesForKeys: [
                 .contentModificationDateKey,
                 .isRegularFileKey,

@@ -78,11 +78,11 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
     let profiles = [
         AgentValidationProfile(
             agentID: .codex,
-            testedVersion: "0.147.0",
+            testedVersion: "0.150.1",
             supportedCapabilitiesSummary:
-                "支持：状态、问题提醒、原生线程打开、额度",
+                "支持：状态、权限确认、原生线程打开、额度、受管集成",
             knownLimitation:
-                "限制：精确返回未独立确认；hooks 为 stable 特性且可阻断，但 ThreadHelm 尚未接入审批，当前仍需回到 Codex 处理"
+                "限制：精确返回未独立确认；权限闸门需在 Codex 中信任一次 hooks.json 才生效，未信任时 hook 静默不加载；Codex 不支持问题回答与计划审批 hook"
         ),
         AgentValidationProfile(
             agentID: .claudeCode,

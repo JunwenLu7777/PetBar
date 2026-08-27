@@ -492,14 +492,22 @@ func claudeAttentionReason(
 struct CodexAgentAdapter: AgentAdapter {
     let metadata: AgentMetadata
     private let readCollection: () -> TaskProgressCollectionSnapshot
+    private let permissionQueue: () -> ClaudePermissionQueueSnapshot
     private let discoveryProvider: () -> AgentDiscovery
     private let openURL: (URL) -> Bool
+
+    var managedIntegrationRelativePaths: [String] {
+        [".codex/hooks.json", ".codex/\(CodexHookConstants.tokenFileName)"]
+    }
 
     init(
         metadata: AgentMetadata? = builtInAgentMetadata().first {
             $0.id == .codex
         },
         reader: CodexTaskProgressReader = CodexTaskProgressReader(),
+        permissionQueue: @escaping () -> ClaudePermissionQueueSnapshot = {
+            .empty
+        },
         discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider(
             agentID: .codex
         ) {
@@ -510,6 +518,7 @@ struct CodexAgentAdapter: AgentAdapter {
         self.init(
             metadata: metadata,
             readCollection: { reader.readCollection() },
+            permissionQueue: permissionQueue,
             discovery: discovery,
             openURL: openURL
         )
@@ -520,6 +529,9 @@ struct CodexAgentAdapter: AgentAdapter {
             $0.id == .codex
         },
         readCollection: @escaping () -> TaskProgressCollectionSnapshot,
+        permissionQueue: @escaping () -> ClaudePermissionQueueSnapshot = {
+            .empty
+        },
         discovery: @escaping () -> AgentDiscovery = makeLocalAgentDiscoveryProvider(
             agentID: .codex
         ) {
@@ -529,6 +541,7 @@ struct CodexAgentAdapter: AgentAdapter {
     ) {
         self.metadata = metadata!
         self.readCollection = readCollection
+        self.permissionQueue = permissionQueue
         discoveryProvider = discovery
         self.openURL = openURL
     }
@@ -537,10 +550,61 @@ struct CodexAgentAdapter: AgentAdapter {
         discoveryProvider()
     }
 
+    func integrationStatus(in scope: AgentIntegrationScope) -> AgentIntegrationStatus {
+        do {
+            switch try CodexHookConfiguration.status(
+                at: codexHooksURL(in: scope, for: .read)
+            ) {
+            case .installed:
+                // 写进 hooks.json 只是第一步：Codex 要求用户在自己那边
+                // 信任一次，否则 hook 完全不加载——不报错也不告警。
+                // 令牌缺失说明这份配置不是本次安装写的，闸门连不通。
+                return CodexHookConfiguration.authenticationToken(
+                    for: try codexHooksURL(in: scope, for: .read)
+                ) != nil ? .installed : .needsRepair
+            case .missing:
+                return .notInstalled
+            case .conflict:
+                return .needsRepair
+            }
+        } catch {
+            return agentIntegrationStatusForFailedProbe(error)
+        }
+    }
+
+    func installIntegration(
+        in scope: AgentIntegrationScope
+    ) throws -> AgentIntegrationOperationResult {
+        let changed = try CodexHookConfiguration.install(
+            at: codexHooksURL(in: scope),
+            isCodexAvailable: { discover().isInstalled }
+        )
+        return changed ? .installed : .unchanged
+    }
+
+    func repairIntegration(
+        in scope: AgentIntegrationScope
+    ) throws -> AgentIntegrationOperationResult {
+        let changed = try CodexHookConfiguration.install(
+            at: codexHooksURL(in: scope),
+            isCodexAvailable: { discover().isInstalled }
+        )
+        return changed ? .repaired : .unchanged
+    }
+
+    func uninstallIntegration(
+        in scope: AgentIntegrationScope
+    ) throws -> AgentIntegrationOperationResult {
+        let changed = try CodexHookConfiguration.uninstall(
+            at: codexHooksURL(in: scope)
+        )
+        return changed ? .uninstalled : .unchanged
+    }
+
     func observe() throws -> AgentObservation {
         observation(
             from: readCollection().items,
-            permissionQueue: .empty
+            permissionQueue: permissionQueue()
         )
     }
 
@@ -750,6 +814,13 @@ private func claudeSettingsURL(
     try scope.managedURL(relativePath: ".claude/settings.json", for: access)
 }
 
+private func codexHooksURL(
+    in scope: AgentIntegrationScope,
+    for access: AgentIntegrationAccess = .write
+) throws -> URL {
+    try scope.managedURL(relativePath: ".codex/hooks.json", for: access)
+}
+
 private extension AgentAdapter {
     func observation(
         from items: [TaskProgressItem],
@@ -777,7 +848,7 @@ func agentSessionSnapshot(
     guard item.source == metadata.id,
           let nativeID = item.threadID ?? item.sessionID
     else { return nil }
-    let queueReasons = claudeQueueReasons(permissionQueue)
+    let queueReasons = claudeQueueReasons(permissionQueue, agentID: metadata.id)
     let queuedReason = queueReasons[item.sessionID?.lowercased() ?? ""]
     let reason = queuedReason ?? normalizedAttentionReason(for: item)
     let actionability = normalizedActionability(
@@ -850,10 +921,14 @@ private func normalizedActionability(
     return .viewOnly
 }
 
+/// 队列同时排着多家的请求，归因前必须按 agent 过滤：会话 ID 只在
+/// 单个 agent 内保证唯一，跨家比对没有意义。
 private func claudeQueueReasons(
-    _ queue: ClaudePermissionQueueSnapshot
+    _ queue: ClaudePermissionQueueSnapshot,
+    agentID: AgentID
 ) -> [String: AttentionReason] {
-    let entries = [queue.current].compactMap { $0 } + queue.pending
+    let entries = ([queue.current].compactMap { $0 } + queue.pending)
+        .filter { $0.agentID == agentID }
     var result: [String: AttentionReason] = [:]
     for entry in entries {
         guard let sessionID = entry.sessionID?.lowercased() else { continue }
@@ -998,11 +1073,41 @@ func makeGenericAgentDiscoveryProvider(
     return { cache.read() }
 }
 
+/// launchd 拉起的常驻面板只有 `/usr/bin:/bin:/usr/sbin:/sbin`。厂商 CLI
+/// 里有相当一部分是 `#!/usr/bin/env node` 之类的包装脚本（codex 就是），
+/// 在这个 PATH 下连解释器都找不到，`--version` 直接执行失败——于是版本读
+/// 不出来、能力被判 unvalidated，受管集成和审批闸门一并静默关闭。补上
+/// 常见的用户级 bin 目录，只影响我们自己起的这个探测子进程。
+private func agentVersionProbeEnvironment(
+    base: [String: String] = ProcessInfo.processInfo.environment,
+    homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+) -> [String: String] {
+    let interpreterDirectories = supplementalExecutableSearchDirectories(
+        homeDirectory: homeDirectory
+    )
+    var environment = base
+    let existing = (base["PATH"] ?? "")
+        .split(separator: ":", omittingEmptySubsequences: true)
+        .map(String.init)
+    let missing = interpreterDirectories.filter { !existing.contains($0) }
+    guard !missing.isEmpty else { return environment }
+    environment["PATH"] = (existing + missing).joined(separator: ":")
+    return environment
+}
+
+func agentVersionProbeEnvironmentForSelfTest(
+    base: [String: String],
+    homeDirectory: URL
+) -> [String: String] {
+    agentVersionProbeEnvironment(base: base, homeDirectory: homeDirectory)
+}
+
 private func localAgentVersion(executableURL: URL) -> String? {
     let process = Process()
     let stdout = Pipe()
     process.executableURL = executableURL
     process.arguments = ["--version"]
+    process.environment = agentVersionProbeEnvironment()
     process.standardOutput = stdout
     process.standardError = FileHandle.nullDevice
     do {
@@ -1101,14 +1206,14 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                     .stableIdentity,
                     .nativeNavigation,
                     .quota,
+                    .managedIntegration,
+                    .inAppPermission,
                 ],
-                // 审批类能力记为 unknown 而非 unsupported：Codex 的 hooks 是
-                // stable 特性，PermissionRequest 与 PreToolUse 都能阻断并等待
-                // 外部裁决，平台层面并不缺这个口子——是 ThreadHelm 尚未接入。
-                // 未列出即 unsupported，那等于对用户断言平台做不到。
+                // Codex 的 hooks 里没有 AskUserQuestion 与 ExitPlanMode 这类
+                // 事件，但平台是否另有途径没验证过——记 unknown 而不是
+                // unsupported，后者等于对用户断言平台做不到。
                 unknown: [
                     .exactReturn,
-                    .inAppPermission,
                     .inAppQuestion,
                 ]
             )
@@ -1215,4 +1320,28 @@ func builtInAgentMetadata() -> [AgentMetadata] {
             )
         ),
     ]
+}
+
+/// 打印每个 Agent 的本机发现结果与版本判定。放在 CLI 里是因为常驻面板
+/// 由 launchd 拉起、PATH 与终端不同，只有在同样的环境里问才有意义。
+func printAgentDiscovery() -> Never {
+    let profiles = builtInAgentValidationProfiles()
+    for adapter in builtInAgentAdapters() {
+        let discovery = adapter.discover()
+        let profile = profiles[adapter.metadata.id]
+        let bounded = validationBoundedAgentMetadata(
+            adapter.metadata,
+            discovery: discovery
+        )
+        let permission = bounded.capabilities.status(for: .inAppPermission)
+        print(
+            "\(adapter.metadata.id.rawValue)"
+                + " installed=\(discovery.isInstalled)"
+                + " version=\(discovery.version ?? "nil")"
+                + " pinned=\(profile?.testedVersion ?? "nil")"
+                + " compatibility=\(discovery.compatibility.rawValue)"
+                + " inAppPermission=\(permission.rawValue)"
+        )
+    }
+    exit(0)
 }

@@ -201,7 +201,8 @@ final class ClaudePermissionCoordinator {
             interactionKind: entry.prompt.interactionKind,
             title: entry.prompt.title,
             sessionID: entry.prompt.sessionID,
-            arrivedAt: entry.arrivedAt
+            arrivedAt: entry.arrivedAt,
+            agentID: entry.prompt.agentID
         )
     }
 }

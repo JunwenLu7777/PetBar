@@ -58,6 +58,9 @@ struct ClaudePermissionPrompt {
     let questions: [ClaudeQuestion]
     let originalToolInput: [String: Any]
     let suggestions: [ClaudePermissionSuggestion]
+    // 同 ClaudePermissionQueueItem：末尾加默认值，让既有构造点保持不变。
+    // 裁决回写必须按提问方的线协议编码，这个字段就是那个路由依据。
+    var agentID: AgentID = .claudeCode
 }
 
 enum ClaudePermissionUserDecision {

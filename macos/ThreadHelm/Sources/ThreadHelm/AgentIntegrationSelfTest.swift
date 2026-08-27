@@ -164,18 +164,30 @@ func runAgentIntegrationSelfTest() {
           ) == .supported,
           // 平台支持、ThreadHelm 未接入 → unknown，不能是 unsupported，
           // 后者等于对用户断言平台做不到。真正要守的边界是下面那条：
-          // 除 Claude Code 之外，谁都不许标成 supported。
+          // 只有已接入并端到端验证过的 agent 才许标 supported。
           registry.metadata(for: .omp)?.capabilities.status(
               for: .inAppPermission
           ) == .unknown,
           registry.metadata(for: .claudeCode)?.capabilities.status(
               for: .inAppPermission
           ) == .supported,
-          [.codex, .cursor, .zcode, .omp].allSatisfy({ agentID in
+          // Codex 走 command hook 转发到同一个闸门，已在 0.150.1 上实测
+          // 拦截、放行与离线回落。
+          registry.metadata(for: .codex)?.capabilities.status(
+              for: .inAppPermission
+          ) == .supported,
+          [.cursor, .zcode, .omp].allSatisfy({ agentID in
               registry.metadata(for: agentID)?.capabilities.status(
                   for: .inAppPermission
               ) != .supported
           }),
+          // Codex 没有问题回答与计划审批的 hook 事件，不能顺势标上。
+          registry.metadata(for: .codex)?.capabilities.status(
+              for: .inAppQuestion
+          ) == .unknown,
+          registry.metadata(for: .codex)?.capabilities.status(
+              for: .inAppPlanApproval
+          ) != .supported,
           registry.metadata(for: .omp)?.capabilities.status(
               for: .exactReturn
           ) == .unknown,
@@ -185,10 +197,8 @@ func runAgentIntegrationSelfTest() {
           registry.metadata(for: .zcode)?.capabilities.status(
               for: .exactReturn
           ) == .unknown,
-          registry.metadata(for: .codex)?.capabilities.status(
-              for: .managedIntegration
-          ) == .unsupported,
-          [.claudeCode, .cursor, .zcode, .omp].allSatisfy({ agentID in
+          // Codex 接入审批闸门后也开始写受管配置，五家都必须是 supported。
+          AgentID.builtInOrder.allSatisfy({ agentID in
               registry.metadata(for: agentID)?.capabilities.status(
                   for: .managedIntegration
               ) == .supported
@@ -281,7 +291,7 @@ private func runAgentVersionTruthSelfTest() {
         agentID: .codex,
         isInstalled: true,
         components: [
-            AgentVersionComponent(key: "version", label: "Version", value: "0.147.0"),
+            AgentVersionComponent(key: "version", label: "Version", value: "0.150.1"),
         ]
     )
     let codexMetadata = builtInAgentMetadata().first { $0.id == .codex }
@@ -338,9 +348,11 @@ private func runAgentVersionTruthSelfTest() {
           driftedCodexStatus?.metadata.capabilities.status(
               for: .nativeNavigation
           ) == .unknown,
+          // 版本漂移会把 supported 一律降级为 unknown，受管集成也不例外：
+          // 未在该版本验证过，就不能继续声称能安全改写它的配置。
           driftedCodexStatus?.metadata.capabilities.status(
               for: .managedIntegration
-          ) == .unsupported,
+          ) == .unknown,
           codexMetadata?.capabilities.status(for: .exactReturn) == .unknown,
           ompMetadata?.capabilities.status(for: .exactReturn) == .unknown,
           normalizedAgentVersion(from: "codex-cli 0.147.0") == "0.147.0",

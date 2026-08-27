@@ -428,6 +428,10 @@ struct ClaudePermissionQueueItem: Equatable {
     let title: String
     let sessionID: String?
     let arrivedAt: Date
+    // 排在末尾并带默认值：审批闸门最早只服务 Claude，二十余处构造点
+    // 都按那时的形状写死。加在中间会逼所有调用方跟着改，而它们中
+    // 大多数与 agent 归属无关。
+    var agentID: AgentID = .claudeCode
 }
 
 struct ClaudePermissionQueueSnapshot: Equatable {

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "agentId": "cursor",
   "observedAgentVersion": "3.15.19",
-  "baselineCommit": "b66fbd3bf8f02e4f8cf6ccf26e3c1c51561cb3b1",
+  "baselineCommit": "3d52877d063e5dbf89a2b439e2238a9dfbb70db5",
   "redaction": {
     "status": "redacted",
     "excluded": ["rawPrompt", "hiddenReasoning", "fullToolArguments", "toolOutput", "secrets", "personalPaths"]

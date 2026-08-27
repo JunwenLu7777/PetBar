@@ -9,10 +9,11 @@
 import Foundation
 
 private enum AgentTruthFixtureContract {
-    // 与夹具成对更新：本次把 Codex 的受验证版本提到 0.147.0。场景本身
-    // 未重新录制，改的是它们标注的 observedAgentVersion。
+    // 与夹具成对更新：本次把 Codex 的受验证版本提到 0.150.1，也就是
+    // 实测 PermissionRequest 闸门的那个版本。场景本身未重新录制，
+    // 改的是它们标注的 observedAgentVersion。
     static let baselineCommit =
-        "b66fbd3bf8f02e4f8cf6ccf26e3c1c51561cb3b1"
+        "3d52877d063e5dbf89a2b439e2238a9dfbb70db5"
 }
 
 struct AgentTruthReplayMetric: Equatable {

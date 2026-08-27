@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "baselineCommit": "b66fbd3bf8f02e4f8cf6ccf26e3c1c51561cb3b1",
+  "baselineCommit": "3d52877d063e5dbf89a2b439e2238a9dfbb70db5",
   "capturedAt": "2026-08-26T11:06:03Z",
   "agents": {
     "codex": {
       "agentId": "codex",
       "displayName": "Codex",
-      "version": "0.147.0",
+      "version": "0.150.1",
       "revalidateOnVersionChange": true,
       "discovery": {
         "status": "installed",
