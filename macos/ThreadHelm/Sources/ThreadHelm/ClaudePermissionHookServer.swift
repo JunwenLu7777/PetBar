@@ -56,6 +56,28 @@ struct PermissionHookRoute {
         )
     }
 
+    /// Cursor 的 preToolUse 负载字段名与 Claude 重合（tool_name /
+    /// tool_input / tool_use_id / cwd / session_id），入向复用同一个解析器；
+    /// 出向换成 Cursor 的 permission 三态。
+    static func cursor(
+        token: @escaping () -> String? = { CursorPermissionTokenStore.token() }
+    ) -> PermissionHookRoute {
+        PermissionHookRoute(
+            agentID: .cursor,
+            path: CursorPermissionHookConstants.path,
+            expectedToken: token,
+            decode: {
+                try ClaudePermissionProtocol.decodePrompt(
+                    from: $0,
+                    agentID: .cursor
+                )
+            },
+            encode: {
+                CursorPermissionProtocol.responseBody(for: $0, prompt: $1)
+            }
+        )
+    }
+
     /// OMP 的扩展自己把 tool_call 事件整形成 Claude 那套字段名再发过来，
     /// 所以入向复用同一个解析器；出向必须换成 OMP 的 {block, reason}。
     static func omp(
@@ -109,7 +131,9 @@ final class ClaudePermissionHookServer {
     private(set) var state: State = .stopped
 
     init(
-        routes: [PermissionHookRoute] = [.claude(), .codex(), .zcode(), .omp()],
+        routes: [PermissionHookRoute] = [
+            .claude(), .codex(), .zcode(), .omp(), .cursor(),
+        ],
         liveness: PermissionGateLivenessStore? = nil
     ) {
         self.routes = Dictionary(

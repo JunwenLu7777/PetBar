@@ -142,6 +142,10 @@ if CommandLine.arguments.contains("--self-test-omp-permission") {
     runOMPPermissionSelfTest()
 }
 
+if CommandLine.arguments.contains("--self-test-cursor-permission") {
+    runCursorPermissionSelfTest()
+}
+
 if CommandLine.arguments.contains("--self-test-dynamic-island") {
     runDynamicIslandSelfTest()
 }

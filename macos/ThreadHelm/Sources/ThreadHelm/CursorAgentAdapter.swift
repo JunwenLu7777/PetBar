@@ -47,7 +47,10 @@ struct CursorAgentAdapter: AgentAdapter {
     private let hookCommand: String
 
     var managedIntegrationRelativePaths: [String] {
-        [".cursor/hooks.json"]
+        [
+            ".cursor/hooks.json",
+            ".cursor/\(CursorPermissionHookConstants.tokenFileName)",
+        ]
     }
 
     init(
@@ -97,6 +100,11 @@ struct CursorAgentAdapter: AgentAdapter {
     ) throws -> AgentIntegrationOperationResult {
         guard discover().isInstalled else { return .unchanged }
         let url = try cursorHooksURL(in: scope)
+        // 令牌必须先于配置落盘：Cursor 一旦加载 hook 就会去读它，读不到
+        // 只能按兜底处理，把用户挡在自己的工具外面。
+        try CursorPermissionTokenStore.ensureToken(
+            directory: url.deletingLastPathComponent()
+        )
         let result = try CursorHookConfiguration.install(
             at: url,
             command: hookCommand
@@ -112,6 +120,9 @@ struct CursorAgentAdapter: AgentAdapter {
     ) throws -> AgentIntegrationOperationResult {
         guard discover().isInstalled else { return .unchanged }
         let url = try cursorHooksURL(in: scope)
+        try CursorPermissionTokenStore.ensureToken(
+            directory: url.deletingLastPathComponent()
+        )
         let result = try CursorHookConfiguration.install(
             at: url,
             command: hookCommand
@@ -125,9 +136,11 @@ struct CursorAgentAdapter: AgentAdapter {
     func uninstallIntegration(
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationOperationResult {
-        let changed = try CursorHookConfiguration.uninstall(
-            at: cursorHooksURL(in: scope)
+        let url = try cursorHooksURL(in: scope)
+        CursorPermissionTokenStore.removeToken(
+            directory: url.deletingLastPathComponent()
         )
+        let changed = try CursorHookConfiguration.uninstall(at: url)
         return changed ? .uninstalled : .unchanged
     }
 
@@ -293,10 +306,28 @@ private enum CursorHookConfiguration {
             } else {
                 entries = []
             }
-            let owned = entries.filter(isOwnedEntry)
+            let owned = entries.filter(isOwnedObservationEntry)
             if owned.isEmpty {
                 complete = false
                 continue
+            }
+            if event == CursorPermissionHookConstants.eventName {
+                let permissionEntries = entries.filter(isPermissionEntry)
+                let disabledElsewhere = entries.contains {
+                    isOwnedEntry($0) && isDisabledEntry($0)
+                }
+                // 停用状态下本就不该有审批 entry；启用状态下必须恰好一条
+                // 且形状正确，否则闸门要么没装、要么装成了旧形状。
+                if disabledElsewhere {
+                    if !permissionEntries.isEmpty { complete = false }
+                } else if permissionEntries.count != 1
+                    || !isExpectedPermissionEntry(
+                        permissionEntries[0],
+                        command: command
+                    )
+                {
+                    complete = false
+                }
             }
             foundOwned = true
             guard owned.count == 1, let entry = owned.first else {
@@ -391,12 +422,23 @@ private enum CursorHookConfiguration {
                 entries = []
             }
             let previous = entries
+            // 自家的两种 entry 一起摘掉再按固定顺序重建。分两段各自
+            // 比较会让顺序在 [观测,审批] 与 [审批,观测] 之间来回翻，
+            // 于是每次安装都被判成有改动。
             entries.removeAll(where: isOwnedEntry)
             entries.append(
                 disabledRequested
                     ? expectedDisabledEntry(for: event)
                     : expectedEntry(for: event, command: command)
             )
+            // 审批 hook 与观测那条并存于 preToolUse。Cursor 会跑完同一
+            // 事件的所有 hook 再合并结果，且按「任一 deny 即 deny」取最
+            // 保守的那个，所以共存是安全的。
+            if event == CursorPermissionHookConstants.eventName,
+               !disabledRequested
+            {
+                entries.append(expectedPermissionEntry(command: command))
+            }
             if !cursorHookEntriesAreEqual(previous, entries) {
                 changed = true
             }
@@ -470,6 +512,38 @@ private enum CursorHookConfiguration {
         ]
     }
 
+    /// 审批 hook。与观测 entry 是两种东西：600 秒预算而不是 1 秒、
+    /// failClosed 让 Cursor 在 hook 失败时自己判 deny、matcher 把只读
+    /// 工具挡在进程启动之前。
+    static func expectedPermissionEntry(command: String) -> [String: Any] {
+        [
+            "command": cursorPermissionCommand(observationCommand: command),
+            "timeout": CursorPermissionHookConstants.hookTimeoutSeconds,
+            "matcher": CursorPermissionHookConstants.matcher,
+            // Cursor 默认 failClosed=false，也就是 hook 一失败就放行。
+            // 审批闸门必须反过来。
+            "failClosed": true,
+            "threadhelmOwner": markerOwner,
+            "threadhelmAgent": markerAgent,
+            "threadhelmEvent": CursorPermissionHookConstants.eventName,
+            "threadhelmKind": "permission",
+        ]
+    }
+
+    static func isPermissionEntry(_ entry: [String: Any]) -> Bool {
+        (entry["threadhelmKind"] as? String) == "permission"
+    }
+
+    private static func isExpectedPermissionEntry(
+        _ entry: [String: Any],
+        command: String
+    ) -> Bool {
+        cursorHookEntriesAreEqual(
+            [entry],
+            [expectedPermissionEntry(command: command)]
+        )
+    }
+
     private static func isExpectedEntry(
         _ entry: [String: Any],
         event: String,
@@ -502,6 +576,12 @@ private enum CursorHookConfiguration {
             && (entry["threadhelmAgent"] as? String) == markerAgent
     }
 
+    /// 只认观测 entry。preToolUse 下同时挂着观测和审批两条，两者的形状
+    /// 完全不同，用同一个判据会让彼此都被判成「非预期」。
+    private static func isOwnedObservationEntry(_ entry: [String: Any]) -> Bool {
+        isOwnedEntry(entry) && !isPermissionEntry(entry)
+    }
+
     private static func isDisabledEntry(_ entry: [String: Any]) -> Bool {
         entry["threadhelmDisabled"] as? Bool == true
             || entry["disabled"] as? Bool == true
@@ -524,8 +604,20 @@ private enum CursorHookConfiguration {
     }
 }
 
-private enum CursorHookConfigurationError: Error {
+enum CursorHookConfigurationError: Error {
     case invalidJSON
+    case writeFailed(String)
+}
+
+extension CursorHookConfigurationError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .invalidJSON:
+            return "Cursor hooks.json 不是有效的 JSON 对象"
+        case .writeFailed(let reason):
+            return "写入 Cursor Hook 配置失败：\(reason)"
+        }
+    }
 }
 
 private func cursorAgentEvent(

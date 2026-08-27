@@ -46,6 +46,10 @@ struct AgentPermissionHookTransport {
     /// 自我兜底的截止时间：宁可自己先拒绝，也不能让厂商把 hook 杀掉——
     /// 被杀一律是 fail-open。
     let deadline: TimeInterval
+    /// 这次调用要不要真的去打扰用户。Cursor 的 preToolUse 每次工具调用
+    /// 都触发，把只读操作也弹成确认框只会让用户对确认框脱敏。返回 nil
+    /// 表示照常转发；返回一段输出表示就地放行，不惊动面板。
+    var shortCircuit: (Data) -> String? = { _ in nil }
 
     var fallbackOutput: String {
         switch fallback {
@@ -79,6 +83,10 @@ struct AgentPermissionHookTransport {
         return text
     }
 
+    /// Cursor 侧的就地放行输出。permission 缺省即「这条 hook 无意见」，
+    /// 由 Cursor 自己的权限流程照常处理。
+    static let cursorPassThroughOutput = "{}"
+
     static func codex() -> AgentPermissionHookTransport {
         AgentPermissionHookTransport(
             agentID: .codex,
@@ -104,8 +112,28 @@ struct AgentPermissionHookTransport {
         )
     }
 
+    static func cursor() -> AgentPermissionHookTransport {
+        AgentPermissionHookTransport(
+            agentID: .cursor,
+            flag: CursorPermissionHookConstants.flag,
+            url: CursorPermissionHookConstants.url,
+            resolveToken: { CursorPermissionTokenStore.token() },
+            // Cursor 支持 ask：闸门够不着时把决定权交回它自己的权限流程，
+            // 既不替用户放行，也不把他锁在工具外面。
+            fallback: .handBackToVendor(
+                #"{"permission":"ask"}"#
+            ),
+            deadline: CursorPermissionHookConstants.requestTimeoutSeconds,
+            shortCircuit: { body in
+                cursorToolNameIsGuarded(in: body)
+                    ? nil
+                    : cursorPassThroughOutput
+            }
+        )
+    }
+
     static func all() -> [AgentPermissionHookTransport] {
-        [.codex(), .zcode()]
+        [.codex(), .zcode(), .cursor()]
     }
 }
 
@@ -145,6 +173,13 @@ func runAgentPermissionHookCommandIfRequested(
 
     guard let body = readInput(), !body.isEmpty else {
         writeOutput(transport.fallbackOutput)
+        return true
+    }
+
+    // 先看这次调用值不值得打扰用户。判断只依据 payload，不联网、不落盘，
+    // 所以只读工具的开销就是一次进程启动加一次 JSON 解析。
+    if let passThrough = transport.shortCircuit(body) {
+        writeOutput(passThrough)
         return true
     }
 
@@ -220,4 +255,19 @@ func postAgentPermissionRequest(
         return .noDecision
     }
     return outcome
+}
+
+/// 这次 preToolUse 涉及的工具要不要人来把关。
+///
+/// 解析失败一律按「需要把关」处理：读不懂的负载可能是新工具，也可能是
+/// 我们没跟上的格式变化，那时多问一次远好过默认放行。
+func cursorToolNameIsGuarded(
+    in body: Data,
+    guarded: Set<String> = CursorPermissionHookConstants.guardedToolNames
+) -> Bool {
+    guard let object = try? JSONSerialization.jsonObject(with: body),
+          let payload = object as? [String: Any],
+          let toolName = payload["tool_name"] as? String
+    else { return true }
+    return guarded.contains(toolName)
 }

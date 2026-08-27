@@ -13,7 +13,9 @@ enum AgentHookCommandContract {
     static let flag = "--agent-hook"
     static let inputReadLimit = 64 * 1_024
     static let adapterVersion = "threadhelm-hook-v1"
-    // Cursor's hook timeout is 1s. Keep 250 ms in reserve for vendor overhead.
+    // 观测 hook 只上报状态，绝不该拖住厂商。各家给的预算其实不小
+    // （Cursor 默认 60 秒且可配，ZCode 默认 60 秒），但那是给审批用的；
+    // 观测这条自己收紧到亚秒级，超时即放弃本次上报。
     static let synchronousBudget: TimeInterval = 0.75
 }
 

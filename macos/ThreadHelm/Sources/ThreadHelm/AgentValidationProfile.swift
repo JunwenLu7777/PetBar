@@ -94,23 +94,23 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
         ),
         AgentValidationProfile(
             agentID: .cursor,
-            testedVersion: "Desktop 3.15.19 · Agent CLI 2026.04.15-dccdccd",
+            testedVersion: "Desktop 3.17.21 · Agent CLI 2026.04.14-ee4b43a",
             testedVersionComponents: [
                 AgentVersionComponent(
                     key: "desktop",
                     label: "Desktop",
-                    value: "3.15.19"
+                    value: "3.17.21"
                 ),
                 AgentVersionComponent(
                     key: "agentCLI",
                     label: "Agent CLI",
-                    value: "2026.04.15-dccdccd"
+                    value: "2026.04.14-ee4b43a"
                 ),
             ],
             supportedCapabilitiesSummary:
-                "支持：状态、原生应用/项目打开、子 Agent 事件",
+                "支持：状态、权限确认、原生应用/项目打开、子 Agent 事件、受管集成",
             knownLimitation:
-                "限制：精确会话返回未验证；preToolUse 可返回 deny，但 ThreadHelm 尚未接入且无运行时实证"
+                "限制：精确会话返回未验证；Cursor 没有 PermissionRequest 事件，闸门走 preToolUse，只拦 Shell 与 Write，只读工具直接放行以免确认框沦为噪音；hook 失败默认放行，已在配置里开启 failClosed 由 Cursor 判 deny；Cursor 真机发起的审批尚未端到端验证，契约取自其 hooks 模块实现"
         ),
         AgentValidationProfile(
             agentID: .zcode,

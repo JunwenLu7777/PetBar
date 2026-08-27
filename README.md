@@ -18,15 +18,16 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 - 独立身份：Executable 为 `ThreadHelm`，Bundle ID 和 LaunchAgent label 均使用 `dev.threadhelm.app`。
 - 独立 App Icon：使用 `ThreadHelm.icns`，在 Dock 与应用切换器中显示 ThreadHelm 自己的图标。
 - 灵动岛是唯一展示方式：胶囊可点击展开，展开态包含任务、确认与额度工作区。
-- 确认工作区可直接回答 Claude Code 的权限、问题与计划请求，也可直接批准 Codex、ZCode 与 OMP 的工具授权；队列会标出每条请求来自哪个 Agent。
+- 确认工作区可直接回答 Claude Code 的权限、问题与计划请求，也可直接批准 Codex、ZCode、OMP 与 Cursor 的工具授权；队列会标出每条请求来自哪个 Agent。
 - Codex 侧需在 Codex 里信任一次 ThreadHelm 写入的 `~/.codex/hooks.json`，未信任时 Codex 会静默跳过 hook、闸门不生效；且只有 Codex 自己发起审批（`approval_policy` 不为 `never`）时才会触发。面板未启动或裁决超时时不会放行，而是交回 Codex 自己的批准界面。
 - ZCode 侧不需要额外授信，但 `yolo` 模式不请求批准、闸门不会触发。ZCode 在 hook 失败时会直接执行工具，所以闸门够不着面板时由 ThreadHelm 主动返回拒绝兜底，而不是放行。
-- OMP 侧的 handler 超时默认 30 秒且按墙钟计（等待面板也算），安装时会经 `omp config set` 抬到 600 秒，卸载时还原成原值；你若自己设过更大的值则原样保留。OMP 在 handler 失败时由框架自动拦截，是三家里唯一内建 fail-closed 的。
+- OMP 侧的 handler 超时默认 30 秒且按墙钟计（等待面板也算），安装时会经 `omp config set` 抬到 600 秒，卸载时还原成原值；你若自己设过更大的值则原样保留。OMP 在 handler 失败时由框架自动拦截，是几家里唯一内建 fail-closed 的。
+- Cursor 没有对应的审批事件，闸门走 `preToolUse`——它每次工具调用都触发，所以只拦 `Shell` 与 `Write`，`Read`/`Grep` 这类只读操作直接放行，否则确认框会多到让人脱敏。hook 失败时 Cursor 默认放行，配置里已开启 `failClosed` 交由它判 deny；面板够不着时返回 `ask`，把决定权交回 Cursor 自己的权限流程，而不是替你放行。
 - 装好配置不等于闸门在工作：三家厂商都可能静默地不加载 hook（Codex 未授信、ZCode 配置被判无效、Claude 那边被别的 command hook 占位），而配置文件都还在。所以 Agents 页会分别显示「闸门已验证在线」与「闸门尚未验证」——后者表示尚未收到过审批请求，可能只是还没触发，也可能是没生效。安装完成时也会列出还需确认的项。这个判定基于观测到的事实（面板真的收到过该 Agent 的审批请求），不解析厂商内部状态，记录留在 `~/Library/Application Support/ThreadHelm/permission-gate-liveness.json`，跨升级保留。
 - 检测到独立 Claude Code CLI 或 Claude Desktop 内置 CLI 时，可显示 Claude Code 的 5h、周额度与 Fable 周额度；均未安装时只显示 Codex 来源。已安装但未登录或读取失败时保留 Claude Code 状态提示；不显示 Token、Credits 或行情模块。
 - 任务控制台统一显示本机 Codex、Claude Code（包括 Claude Desktop 本地 Agent 会话）、Cursor、ZCode 和 OMP；Desktop 会话只读显示，不把应用聚焦、目录 fallback 或终端恢复冒充为精确会话返回。
 - Agents 页面同时显示本机检测版本、真值夹具测试版本、支持能力和已知限制。
-- 只有本机发现到的所有固定版本分量完全匹配时才显示 `validated`：Codex `0.150.1`、Claude Code `2.1.226`、Cursor Desktop `3.15.19` + Agent CLI `2026.04.15-dccdccd`、ZCode `3.9.1` + build `3.9.1.5853`、OMP `17.3.2`。缺版本、只匹配一部分或版本漂移都会显示 `unvalidated`，不会沿用旧版本的能力结论，也不会安装或修复该 Agent 的受管集成；卸载仍可只移除 ThreadHelm 自己的条目。
+- 只有本机发现到的所有固定版本分量完全匹配时才显示 `validated`：Codex `0.150.1`、Claude Code `2.1.226`、Cursor Desktop `3.17.21` + Agent CLI `2026.04.14-ee4b43a`、ZCode `3.9.1` + build `3.9.1.5853`、OMP `17.3.2`。缺版本、只匹配一部分或版本漂移都会显示 `unvalidated`，不会沿用旧版本的能力结论，也不会安装或修复该 Agent 的受管集成；卸载仍可只移除 ThreadHelm 自己的条目。
 - 运行中任务会显示开始时间与持续时间；已完成/失败任务的持续时间会固定，不继续增长。
 - 运行中任务预览只显示公开助手输出，新内容会及时替换，同时保留可滚动的完整输出；不展示 thinking、工具参数或原始工具输出。
 - 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json`、CLI 会话公开输出和 Claude Desktop 本地 Agent transcript；不会发起远程第三方行情请求。

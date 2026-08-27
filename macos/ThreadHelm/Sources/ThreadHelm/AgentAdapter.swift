@@ -1277,13 +1277,14 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                     .nativeNavigation,
                     .subagentEvents,
                     .managedIntegration,
+                    .inAppPermission,
                 ],
-                // preToolUse 会被 await 且能返回 deny，平台支持拦截；
-                // ThreadHelm 尚未接入，且缺运行时实证，故记 unknown。
+                // Cursor 没有对应问题回答的 hook 事件——它内部那张映射表
+                // 把 PermissionRequest 和 Notification 都写成 null。平台是否
+                // 另有途径没验证过，记 unknown 而非 unsupported。
                 unknown: [
                     .stableIdentity,
                     .exactReturn,
-                    .inAppPermission,
                     .inAppQuestion,
                 ]
             )
