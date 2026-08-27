@@ -1388,7 +1388,7 @@ private func assertDynamicIslandTaskWorkspace() {
     )
     guard workspace.agentHealthRowSummariesForSelfTest()
         .first(where: { $0.contains("ZCode") })?
-        .contains("本机版本未知 · unvalidated · 测试 3.7.6") == true
+        .contains("本机版本未知 · unvalidated · 测试 3.9.1") == true
     else {
         fputs("dynamic island missing agent version validation self-test failed\n", stderr)
         exit(1)

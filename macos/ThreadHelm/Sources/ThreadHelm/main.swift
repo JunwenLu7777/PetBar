@@ -20,10 +20,10 @@ if runAgentHookCommandIfRequested() {
     exit(0)
 }
 
-// Codex 的审批闸门走 command hook：这条转发会阻塞到用户裁决为止，
-// 与上面那些快速 fail-open 的观测 hook 不同，必须先于它们之外的一切
-// 初始化，并且全程只往 stdout 写裁决 JSON。
-if runCodexPermissionHookCommandIfRequested() {
+// Codex 与 ZCode 的审批闸门走命令型 hook：这条转发会阻塞到用户裁决
+// 为止，与上面那些快速 fail-open 的观测 hook 不同，必须先于它们之外的
+// 一切初始化，并且全程只往 stdout 写裁决 JSON。
+if runAgentPermissionHookCommandIfRequested() {
     exit(0)
 }
 
@@ -124,6 +124,10 @@ if CommandLine.arguments.contains("--self-test-claude-hook") {
 
 if CommandLine.arguments.contains("--self-test-codex-hook") {
     runCodexHookSelfTest()
+}
+
+if CommandLine.arguments.contains("--self-test-zcode-permission") {
+    runZCodePermissionSelfTest()
 }
 
 if CommandLine.arguments.contains("--self-test-dynamic-island") {

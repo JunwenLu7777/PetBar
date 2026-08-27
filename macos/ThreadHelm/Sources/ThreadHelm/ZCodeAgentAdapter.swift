@@ -40,6 +40,7 @@ struct ZCodeHookEnvelope: Codable, Equatable {
 
 enum ZCodeHookConfigurationError: Error, Equatable {
     case invalidConfig
+    case writeFailed(String)
 }
 
 extension ZCodeHookConfigurationError: LocalizedError {
@@ -47,6 +48,8 @@ extension ZCodeHookConfigurationError: LocalizedError {
         switch self {
         case .invalidConfig:
             return "ZCode Hook 配置格式无效"
+        case .writeFailed(let reason):
+            return "写入 ZCode Hook 配置失败：\(reason)"
         }
     }
 }
@@ -87,7 +90,9 @@ enum ZCodeHookConfiguration {
     private static let legacyConfigOwnershipContent = Data(
         "threadhelm-managed-zcode-config-v1\n".utf8
     )
-    static let managedEvents = [
+    /// 只观测、不干预的事件。它们走 --agent-hook 快速通道，250ms 预算，
+    /// 超时即放行。
+    static let observationEvents = [
         "SessionStart",
         "UserPromptSubmit",
         "PreToolUse",
@@ -95,6 +100,17 @@ enum ZCodeHookConfiguration {
         "PostToolUseFailure",
         "Stop",
     ]
+
+    /// 审批事件走完全不同的形状：另一个旗标、另一套超时预算，而且会
+    /// 一直阻塞到用户裁决。混进观测列表会让它按 250ms 被杀掉，然后
+    /// fail-open——工具照跑，用户什么都看不到。
+    static let permissionEvent = "PermissionRequest"
+
+    static let managedEvents = observationEvents + [permissionEvent]
+
+    static func isPermissionEvent(_ eventName: String) -> Bool {
+        eventName == permissionEvent
+    }
 
     static func status(
         at configURL: URL,
@@ -173,6 +189,11 @@ enum ZCodeHookConfiguration {
         isZCodeAvailable: () -> Bool
     ) throws -> Bool {
         guard isZCodeAvailable() else { return false }
+        // 令牌必须先于配置落盘：hook 进程一旦被 ZCode 拉起就会立刻去读它，
+        // 读不到就只能按拒绝兜底，把用户挡在自己的工具外面。
+        try ZCodePermissionTokenStore.ensureToken(
+            directory: configURL.deletingLastPathComponent()
+        )
         let manager = FileManager.default
         let configurationExisted = manager.fileExists(
             atPath: configURL.path
@@ -296,6 +317,9 @@ enum ZCodeHookConfiguration {
     @discardableResult
     static func uninstall(at configURL: URL) throws -> Bool {
         let manager = FileManager.default
+        ZCodePermissionTokenStore.removeToken(
+            directory: configURL.deletingLastPathComponent()
+        )
         let ownershipURL = configOwnershipURL(for: configURL)
         let marker = configOwnershipMarker(at: ownershipURL)
         let markerExists = marker.exists
@@ -406,28 +430,29 @@ enum ZCodeHookConfiguration {
               let hooks = config["hooks"] as? [String: Any],
               Set(hooks.keys) == ["events"],
               let events = hooks["events"] as? [String: Any],
-              Set(events.keys) == Set(managedEvents)
+              // 接入审批闸门之前的 ThreadHelm 只写六个观测事件。那份配置
+              // 同样是我们自己写的，卸载时照样该整份移除——只认新形态会
+              // 让老用户的配置永远删不干净。
+              [Set(observationEvents), Set(managedEvents)]
+                  .contains(Set(events.keys))
         else { return false }
 
-        return managedEvents.allSatisfy { eventName in
+        return events.keys.allSatisfy { eventName in
             guard let matchers = events[eventName] as? [[String: Any]],
                   matchers.count == 1,
                   Set(matchers[0].keys) == ["hooks"],
                   let eventHooks = matchers[0]["hooks"] as? [[String: Any]],
                   eventHooks.count == 1,
                   let hook = eventHooks.first,
-                  Set(hook.keys) == Set([
-                      "type",
-                      "command",
-                      "args",
-                      "timeoutMs",
-                      "statusMessage",
-                  ]),
                   isOwnedHook(hook),
-                  hook["command"] is String,
-                  hook["args"] as? [String]
-                    == ["--agent-hook", "zcode", eventName],
-                  hook["timeoutMs"] as? Int == 250
+                  let command = hook["command"] as? String,
+                  jsonObjectsEqual(
+                      hook,
+                      managedHook(
+                          eventName: eventName,
+                          executablePath: command
+                      )
+                  )
             else { return false }
             return true
         }
@@ -469,7 +494,16 @@ enum ZCodeHookConfiguration {
         eventName: String,
         executablePath: String
     ) -> [String: Any] {
-        [
+        if isPermissionEvent(eventName) {
+            return [
+                "type": "process",
+                "command": executablePath,
+                "args": [ZCodePermissionHookConstants.flag],
+                "timeoutMs": ZCodePermissionHookConstants.hookTimeoutMilliseconds,
+                "statusMessage": ZCodePermissionHookConstants.statusMessage,
+            ]
+        }
+        return [
             "type": "process",
             "command": executablePath,
             "args": ["--agent-hook", "zcode", eventName],
@@ -562,8 +596,12 @@ enum ZCodeHookConfiguration {
 
     private static func isOwnedHook(_ hook: [String: Any]) -> Bool {
         let args = hook["args"] as? [String] ?? []
-        return hook["type"] as? String == "process"
-            && hook["statusMessage"] as? String == managedStatusMessage
+        guard hook["type"] as? String == "process" else { return false }
+        if args == [ZCodePermissionHookConstants.flag] {
+            return hook["statusMessage"] as? String
+                == ZCodePermissionHookConstants.statusMessage
+        }
+        return hook["statusMessage"] as? String == managedStatusMessage
             && Array(args.prefix(2)) == ["--agent-hook", "zcode"]
     }
 
@@ -572,19 +610,20 @@ enum ZCodeHookConfiguration {
         eventName: String,
         executablePath: String
     ) -> Bool {
-        Set(hook.keys) == Set([
+        guard Set(hook.keys) == Set([
             "type",
             "command",
             "args",
             "timeoutMs",
             "statusMessage",
-        ])
-            && hook["type"] as? String == "process"
-            && hook["command"] as? String == executablePath
-            && hook["args"] as? [String]
-                == ["--agent-hook", "zcode", eventName]
-            && hook["timeoutMs"] as? Int == 250
-            && hook["statusMessage"] as? String == managedStatusMessage
+        ]),
+        hook["type"] as? String == "process",
+        hook["command"] as? String == executablePath
+        else { return false }
+        return jsonObjectsEqual(
+            hook,
+            managedHook(eventName: eventName, executablePath: executablePath)
+        )
     }
 
     private static func hasLegacyOwnedHook(
@@ -659,6 +698,7 @@ struct ZCodeAgentAdapter: AgentAdapter {
         [
             ".zcode/cli/config.json",
             ".zcode/cli/.threadhelm-config-owner",
+            ".zcode/cli/\(ZCodePermissionHookConstants.tokenFileName)",
         ]
     }
 
@@ -811,7 +851,10 @@ struct ZCodeAgentAdapter: AgentAdapter {
     private func normalizedEvent(from envelope: ZCodeHookEnvelope) -> AgentEvent? {
         let observedAt = envelope.observedAt ?? now()
         let eventType = envelope.eventType
-        guard ZCodeHookConfiguration.managedEvents.contains(eventType) else {
+        // 审批事件不走观测通道：它有独立的旗标与阻塞语义，出现在这里
+        // 只可能是伪造或错配的信封。
+        guard ZCodeHookConfiguration.observationEvents.contains(eventType)
+        else {
             return nil
         }
         let nativeID = sanitizedIdentity(envelope.sessionID)

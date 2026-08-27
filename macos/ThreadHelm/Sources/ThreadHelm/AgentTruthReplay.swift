@@ -9,11 +9,11 @@
 import Foundation
 
 private enum AgentTruthFixtureContract {
-    // 与夹具成对更新：本次把 Codex 的受验证版本提到 0.150.1，也就是
-    // 实测 PermissionRequest 闸门的那个版本。场景本身未重新录制，
-    // 改的是它们标注的 observedAgentVersion。
+    // 与夹具成对更新：本次把 ZCode 的受验证版本提到 3.9.1，也就是
+    // 接入 PermissionRequest 闸门时本机在跑的那个版本。场景本身未
+    // 重新录制，改的是它们标注的 observedAgentVersion。
     static let baselineCommit =
-        "3d52877d063e5dbf89a2b439e2238a9dfbb70db5"
+        "620ac7b6b60f15b1cfbf10200c3092d968cd7f36"
 }
 
 struct AgentTruthReplayMetric: Equatable {

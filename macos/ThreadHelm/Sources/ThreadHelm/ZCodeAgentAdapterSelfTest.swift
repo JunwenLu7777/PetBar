@@ -681,9 +681,13 @@ private func runZCodeSemanticMergeSelfTest(at root: URL) throws {
           hooks["timeoutMs"] as? Int == 4_321,
           let events = hooks["events"] as? [String: Any],
           let permission = events["PermissionRequest"] as? [[String: Any]],
-          permission.count == 1,
+          // 审批闸门接入后 ThreadHelm 也往这个事件里挂自己的 hook，
+          // 但用户原有的那条必须原样留着——ZCode 会把多个裁决按
+          // 「任一 deny 即 deny」合并，共存是安全的。
+          permission.count == 2,
           zcodeSelfTestFirstCommand(in: permission.first)
             == "keep-native-permission",
+          zcodeSelfTestOwnedHooks(in: permission).count == 1,
           ZCodeHookConfiguration.managedEvents.allSatisfy({
               let matchers = events[$0] as? [[String: Any]] ?? []
               return zcodeSelfTestOwnedHooks(in: matchers).count == 1
@@ -1056,7 +1060,17 @@ private func zcodeSelfTestOwnedHook(
     eventName: String,
     executablePath: String
 ) -> [String: Any] {
-    [
+    // 审批 hook 与观测 hook 形状不同：另一个旗标、另一套超时预算。
+    if ZCodeHookConfiguration.isPermissionEvent(eventName) {
+        return [
+            "type": "process",
+            "command": executablePath,
+            "args": [ZCodePermissionHookConstants.flag],
+            "timeoutMs": ZCodePermissionHookConstants.hookTimeoutMilliseconds,
+            "statusMessage": ZCodePermissionHookConstants.statusMessage,
+        ]
+    }
+    return [
         "type": "process",
         "command": executablePath,
         "args": ["--agent-hook", "zcode", eventName],
@@ -1071,11 +1085,15 @@ private func zcodeSelfTestOwnedHooks(
     matchers.flatMap { matcher -> [[String: Any]] in
         let hooks = matcher["hooks"] as? [[String: Any]] ?? []
         return hooks.filter { hook in
-            hook["type"] as? String == "process"
-                && hook["statusMessage"] as? String
-                    == "ThreadHelm state observer"
-                && Array((hook["args"] as? [String] ?? []).prefix(2))
-                    == ["--agent-hook", "zcode"]
+            guard hook["type"] as? String == "process" else { return false }
+            let args = hook["args"] as? [String] ?? []
+            if args == [ZCodePermissionHookConstants.flag] {
+                return hook["statusMessage"] as? String
+                    == ZCodePermissionHookConstants.statusMessage
+            }
+            return hook["statusMessage"] as? String
+                == "ThreadHelm state observer"
+                && Array(args.prefix(2)) == ["--agent-hook", "zcode"]
         }
     }
 }

@@ -288,14 +288,23 @@ func runCodexHookSelfTest() -> Never {
         arguments: [String],
         input: Data?,
         token: String?,
-        outcome: CodexPermissionHookOutcome
+        outcome: AgentPermissionHookOutcome
     ) -> (handled: Bool, output: String) {
         var written = ""
-        let handled = runCodexPermissionHookCommandIfRequested(
+        let handled = runAgentPermissionHookCommandIfRequested(
             arguments: arguments,
+            transports: [AgentPermissionHookTransport(
+                agentID: .codex,
+                flag: CodexHookConstants.hookCommandFlag,
+                url: CodexHookConstants.url,
+                resolveToken: { token },
+                fallback: .handBackToVendor(
+                    CodexHookConstants.noDecisionOutput
+                ),
+                deadline: 1
+            )],
             readInput: { input },
-            postDecision: { _, _ in outcome },
-            resolveToken: { token },
+            postDecision: { _, _, _ in outcome },
             writeOutput: { written += $0 }
         )
         return (handled, written)
@@ -323,10 +332,10 @@ func runCodexHookSelfTest() -> Never {
     // 闸门连不上时输出空裁决而不是空字符串：Codex 需要一份可解析的
     // 输出才会干净地回落到自己的批准 UI。
     for (label, input, outcome) in [
-        ("面板离线", Data(permissionFixture.utf8), CodexPermissionHookOutcome.noDecision),
+        ("面板离线", Data(permissionFixture.utf8), AgentPermissionHookOutcome.noDecision),
         ("stdin 为空", Data(), .noDecision),
         ("stdin 缺失", nil as Data?, .noDecision),
-    ] as [(String, Data?, CodexPermissionHookOutcome)] {
+    ] as [(String, Data?, AgentPermissionHookOutcome)] {
         let result = runHook(
             arguments: ["ThreadHelm", CodexHookConstants.hookCommandFlag],
             input: input,
@@ -342,20 +351,29 @@ func runCodexHookSelfTest() -> Never {
 
     // 没有令牌就不该把 payload 发出去——端口上可能是别的进程。
     var postWasAttempted = false
-    _ = runCodexPermissionHookCommandIfRequested(
+    _ = runAgentPermissionHookCommandIfRequested(
         arguments: ["ThreadHelm", CodexHookConstants.hookCommandFlag],
+        transports: [AgentPermissionHookTransport(
+            agentID: .codex,
+            flag: CodexHookConstants.hookCommandFlag,
+            url: CodexHookConstants.url,
+            resolveToken: { nil },
+            fallback: .handBackToVendor(CodexHookConstants.noDecisionOutput),
+            deadline: 1
+        )],
         readInput: { Data(permissionFixture.utf8) },
-        postDecision: { _, token in
+        postDecision: { _, token, _ in
             postWasAttempted = true
             return token == nil ? .noDecision : .decision(Data("{}".utf8))
         },
-        resolveToken: { nil },
         writeOutput: { _ in }
     )
     guard postWasAttempted,
-          postCodexPermissionRequest(
+          postAgentPermissionRequest(
               body: Data(permissionFixture.utf8),
-              token: nil
+              token: nil,
+              url: URL(string: CodexHookConstants.url),
+              timeout: 1
           ) == .noDecision
     else {
         fail("缺少令牌时不应发出请求")

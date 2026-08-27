@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "agentId": "claudeCode",
   "observedAgentVersion": "2.1.226",
-  "baselineCommit": "3d52877d063e5dbf89a2b439e2238a9dfbb70db5",
+  "baselineCommit": "620ac7b6b60f15b1cfbf10200c3092d968cd7f36",
   "redaction": {
     "status": "redacted",
     "excluded": ["rawPrompt", "hiddenReasoning", "fullToolArguments", "toolOutput", "secrets", "personalPaths"]

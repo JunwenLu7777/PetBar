@@ -1281,14 +1281,14 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                     .lifecycleObservation,
                     .nativeNavigation,
                     .managedIntegration,
+                    .inAppPermission,
                 ],
-                // ZCode 自带 PermissionRequest 事件，PreToolUse 也先于权限
-                // 求值执行并可 deny。ThreadHelm 目前只注册了六个观测事件，
-                // 未注册审批——平台能力与接入状态是两件事。
+                // ZCode 的 PermissionRequest 负载与裁决格式与 Claude 同形，
+                // 走同一条闸门。问题回答与计划审批没有对应的 hook 事件，
+                // 平台是否另有途径没验证过，记 unknown 而非 unsupported。
                 unknown: [
                     .stableIdentity,
                     .exactReturn,
-                    .inAppPermission,
                     .inAppQuestion,
                     .inAppPlanApproval,
                 ]

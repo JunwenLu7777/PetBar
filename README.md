@@ -18,11 +18,13 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 - 独立身份：Executable 为 `ThreadHelm`，Bundle ID 和 LaunchAgent label 均使用 `dev.threadhelm.app`。
 - 独立 App Icon：使用 `ThreadHelm.icns`，在 Dock 与应用切换器中显示 ThreadHelm 自己的图标。
 - 灵动岛是唯一展示方式：胶囊可点击展开，展开态包含任务、确认与额度工作区。
-- 确认工作区可直接回答 Claude Code 的权限、问题与计划请求，也可直接批准 Codex 的工具授权；队列会标出每条请求来自哪个 Agent。Codex 侧需在 Codex 里信任一次 ThreadHelm 写入的 `~/.codex/hooks.json`，未信任时 Codex 会静默跳过 hook，闸门不生效；且只有 Codex 自己发起审批（`approval_policy` 不为 `never`）时才会触发。面板未启动或裁决超时时不会放行，而是交回 Codex 自己的批准界面。
+- 确认工作区可直接回答 Claude Code 的权限、问题与计划请求，也可直接批准 Codex 与 ZCode 的工具授权；队列会标出每条请求来自哪个 Agent。
+- Codex 侧需在 Codex 里信任一次 ThreadHelm 写入的 `~/.codex/hooks.json`，未信任时 Codex 会静默跳过 hook、闸门不生效；且只有 Codex 自己发起审批（`approval_policy` 不为 `never`）时才会触发。面板未启动或裁决超时时不会放行，而是交回 Codex 自己的批准界面。
+- ZCode 侧不需要额外授信，但 `yolo` 模式不请求批准、闸门不会触发。ZCode 在 hook 失败时会直接执行工具，所以闸门够不着面板时由 ThreadHelm 主动返回拒绝兜底，而不是放行。
 - 检测到独立 Claude Code CLI 或 Claude Desktop 内置 CLI 时，可显示 Claude Code 的 5h、周额度与 Fable 周额度；均未安装时只显示 Codex 来源。已安装但未登录或读取失败时保留 Claude Code 状态提示；不显示 Token、Credits 或行情模块。
 - 任务控制台统一显示本机 Codex、Claude Code（包括 Claude Desktop 本地 Agent 会话）、Cursor、ZCode 和 OMP；Desktop 会话只读显示，不把应用聚焦、目录 fallback 或终端恢复冒充为精确会话返回。
 - Agents 页面同时显示本机检测版本、真值夹具测试版本、支持能力和已知限制。
-- 只有本机发现到的所有固定版本分量完全匹配时才显示 `validated`：Codex `0.150.1`、Claude Code `2.1.226`、Cursor Desktop `3.15.19` + Agent CLI `2026.04.15-dccdccd`、ZCode `3.7.6` + build `3.7.6.4691`、OMP `17.3.2`。缺版本、只匹配一部分或版本漂移都会显示 `unvalidated`，不会沿用旧版本的能力结论，也不会安装或修复该 Agent 的受管集成；卸载仍可只移除 ThreadHelm 自己的条目。
+- 只有本机发现到的所有固定版本分量完全匹配时才显示 `validated`：Codex `0.150.1`、Claude Code `2.1.226`、Cursor Desktop `3.15.19` + Agent CLI `2026.04.15-dccdccd`、ZCode `3.9.1` + build `3.9.1.5853`、OMP `17.3.2`。缺版本、只匹配一部分或版本漂移都会显示 `unvalidated`，不会沿用旧版本的能力结论，也不会安装或修复该 Agent 的受管集成；卸载仍可只移除 ThreadHelm 自己的条目。
 - 运行中任务会显示开始时间与持续时间；已完成/失败任务的持续时间会固定，不继续增长。
 - 运行中任务预览只显示公开助手输出，新内容会及时替换，同时保留可滚动的完整输出；不展示 thinking、工具参数或原始工具输出。
 - 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json`、CLI 会话公开输出和 Claude Desktop 本地 Agent transcript；不会发起远程第三方行情请求。
@@ -39,7 +41,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 6. 安装完成后会复制到 `~/Applications/ThreadHelm.app`，并启动 `dev.threadhelm.app`。
 7. 若希望当前 Codex 运行中新建任务的原生气泡也自动静音，可在“系统设置 → 隐私与安全 → 辅助功能”中为“ThreadHelm”开启权限；未开启不影响核心功能。
 
-安装会处理版本为 `validated` 的 Codex、Claude Code、Cursor、ZCode 和 OMP 受管本机集成；其他版本会跳过。ZCode 配置原本不存在时会直接创建并启用受管 Hook，已有配置的 `hooks.enabled` 仍原样保留。新版本启动失败时会恢复旧 App、LaunchAgent 和受管配置。恢复点及手工处理方式见[本机运维说明](docs/threadhelm-local-operations.md)。
+安装会处理版本为 `validated` 的 Codex、Claude Code、Cursor、ZCode 和 OMP 受管本机集成；其他版本会跳过。ZCode 配置原本不存在时会直接创建并启用受管 Hook，已有配置的 `hooks.enabled` 仍原样保留；用户自己已注册的 `PermissionRequest` 处理器会与 ThreadHelm 的并存（ZCode 按「任一拒绝即拒绝」合并裁决）。新版本启动失败时会恢复旧 App、LaunchAgent 和受管配置。恢复点及手工处理方式见[本机运维说明](docs/threadhelm-local-operations.md)。
 
 检查安装状态：
 

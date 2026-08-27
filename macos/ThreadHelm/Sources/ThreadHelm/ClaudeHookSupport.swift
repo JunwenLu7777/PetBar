@@ -98,7 +98,14 @@ enum ClaudePermissionProtocol {
     private static let maximumPlanCharacters = 8_000
     private static let maximumSuggestions = 20
 
-    static func decodePrompt(from body: Data) throws -> ClaudePermissionPrompt {
+    /// ZCode 的 hook payload 与 Claude 逐字段同形——它自己就带一层
+    /// snake_case 兼容键（hook_event_name/tool_name/tool_input/
+    /// permission_suggestions…），所以这里只需要知道是谁在问，好把
+    /// 界面文案和裁决归属标对。
+    static func decodePrompt(
+        from body: Data,
+        agentID: AgentID = .claudeCode
+    ) throws -> ClaudePermissionPrompt {
         guard body.count <= ClaudeHookConstants.maximumBodyBytes,
               let object = try? JSONSerialization.jsonObject(with: body),
               let payload = object as? [String: Any]
@@ -160,7 +167,8 @@ enum ClaudePermissionProtocol {
         let presentation = promptPresentation(
             kind: interactionKind,
             toolName: toolName,
-            description: description
+            description: description,
+            agentID: agentID
         )
 
         return ClaudePermissionPrompt(
@@ -174,7 +182,8 @@ enum ClaudePermissionProtocol {
             planText: planText,
             questions: questions,
             originalToolInput: toolInput,
-            suggestions: suggestions
+            suggestions: suggestions,
+            agentID: agentID
         )
     }
 
@@ -332,23 +341,25 @@ enum ClaudePermissionProtocol {
     private static func promptPresentation(
         kind: ClaudePermissionInteractionKind,
         toolName: String,
-        description: String?
+        description: String?,
+        agentID: AgentID
     ) -> (title: String, message: String) {
+        let name = agentPresentation(for: agentID).shortName
         switch kind {
         case .askUserQuestion:
             return (
-                "Claude 等你回答",
-                "回答后会直接返回当前 Claude Code 会话。"
+                "\(name) 等你回答",
+                "回答后会直接返回当前 \(name) 会话。"
             )
         case .exitPlanMode:
             return (
-                "Claude 请求确认计划",
-                "批准后 Claude 会离开计划模式并继续执行。"
+                "\(name) 请求确认计划",
+                "批准后 \(name) 会离开计划模式并继续执行。"
             )
         case .toolApproval:
-            let fallback = "Claude 请求使用 \(safeToolDisplayName(toolName))。"
+            let fallback = "\(name) 请求使用 \(safeToolDisplayName(toolName))。"
             return (
-                "Claude 等你确认",
+                "\(name) 等你确认",
                 description ?? fallback
             )
         }
