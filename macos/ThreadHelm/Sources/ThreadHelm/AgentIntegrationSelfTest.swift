@@ -172,15 +172,26 @@ func runAgentIntegrationSelfTest() {
               for: .inAppPermission
           ) == .supported,
           // Codex 走 command hook 转发到同一个闸门，已在 0.150.1 上实测
-          // 拦截、放行与离线回落。
+          // 拦截、放行与离线回落。ZCode 的负载与裁决格式与 Claude 同形，
+          // 走同一条线路。
           registry.metadata(for: .codex)?.capabilities.status(
               for: .inAppPermission
           ) == .supported,
-          [.cursor, .zcode, .omp].allSatisfy({ agentID in
+          registry.metadata(for: .zcode)?.capabilities.status(
+              for: .inAppPermission
+          ) == .supported,
+          [.cursor, .omp].allSatisfy({ agentID in
               registry.metadata(for: agentID)?.capabilities.status(
                   for: .inAppPermission
               ) != .supported
           }),
+          // ZCode 没有问题回答与计划审批的 hook 事件，不能顺势标上。
+          [AgentCapability.inAppQuestion, .inAppPlanApproval]
+              .allSatisfy({ capability in
+                  registry.metadata(for: .zcode)?.capabilities.status(
+                      for: capability
+                  ) == .unknown
+              }),
           // Codex 没有问题回答与计划审批的 hook 事件，不能顺势标上。
           registry.metadata(for: .codex)?.capabilities.status(
               for: .inAppQuestion
@@ -275,16 +286,16 @@ private func runAgentVersionTruthSelfTest() {
         agentID: .zcode,
         isInstalled: true,
         components: [
-            AgentVersionComponent(key: "version", label: "Version", value: "3.7.6"),
-            AgentVersionComponent(key: "build", label: "build", value: "3.7.6.4691"),
+            AgentVersionComponent(key: "version", label: "Version", value: "3.9.1"),
+            AgentVersionComponent(key: "build", label: "build", value: "3.9.1.5853"),
         ]
     )
     let zcodeDriftedBuild = versionValidatedAgentDiscovery(
         agentID: .zcode,
         isInstalled: true,
         components: [
-            AgentVersionComponent(key: "version", label: "Version", value: "3.7.6"),
-            AgentVersionComponent(key: "build", label: "build", value: "3.7.6.5000"),
+            AgentVersionComponent(key: "version", label: "Version", value: "3.9.1"),
+            AgentVersionComponent(key: "build", label: "build", value: "3.9.1.5000"),
         ]
     )
     let codexPinned = versionValidatedAgentDiscovery(
@@ -324,7 +335,7 @@ private func runAgentVersionTruthSelfTest() {
           cursorDrifted.compatibility == .unvalidated,
           cursorMissingCLI.compatibility == .unvalidated,
           zcodePinned.compatibility == .validated,
-          zcodePinned.versionComponents.map(\.value) == ["3.7.6", "3.7.6.4691"],
+          zcodePinned.versionComponents.map(\.value) == ["3.9.1", "3.9.1.5853"],
           zcodeDriftedBuild.compatibility == .unvalidated,
           codexPinned.compatibility == .validated,
           profiles[.codex]?.effectiveCapabilities(

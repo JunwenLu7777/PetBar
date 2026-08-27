@@ -373,11 +373,7 @@ enum CodexHookConfiguration {
     }
 
     private static func makeAuthenticationToken() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess {
-            return Data(bytes).base64EncodedString()
-        }
-        return UUID().uuidString + UUID().uuidString
+        AgentPermissionTokenFactory.make()
     }
 
     // MARK: 处理器识别

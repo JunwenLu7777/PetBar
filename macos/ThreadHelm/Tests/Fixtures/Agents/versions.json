@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "baselineCommit": "3d52877d063e5dbf89a2b439e2238a9dfbb70db5",
+  "baselineCommit": "620ac7b6b60f15b1cfbf10200c3092d968cd7f36",
   "capturedAt": "2026-08-26T11:06:03Z",
   "agents": {
     "codex": {
@@ -49,8 +49,8 @@
     "zcode": {
       "agentId": "zcode",
       "displayName": "ZCode",
-      "version": "3.7.6",
-      "build": "3.7.6.4691",
+      "version": "3.9.1",
+      "build": "3.9.1.5853",
       "revalidateOnVersionChange": true,
       "discovery": {
         "status": "installed",

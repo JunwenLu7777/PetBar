@@ -36,6 +36,25 @@ struct PermissionHookRoute {
             }
         )
     }
+
+    /// ZCode 的 hook 负载与裁决格式与 Claude 逐字段同形，编解码直接复用。
+    /// 差别只在于谁在问、令牌从哪来。
+    static func zcode(
+        token: @escaping () -> String? = { ZCodePermissionTokenStore.token() }
+    ) -> PermissionHookRoute {
+        PermissionHookRoute(
+            agentID: .zcode,
+            path: ZCodePermissionHookConstants.path,
+            expectedToken: token,
+            decode: {
+                try ClaudePermissionProtocol.decodePrompt(
+                    from: $0,
+                    agentID: .zcode
+                )
+            },
+            encode: { ClaudePermissionProtocol.responseBody(for: $0, prompt: $1) }
+        )
+    }
 }
 
 final class ClaudePermissionHookServer {
@@ -64,7 +83,7 @@ final class ClaudePermissionHookServer {
     private var pendingRequests: [UUID: PendingRequest] = [:]
     private(set) var state: State = .stopped
 
-    init(routes: [PermissionHookRoute] = [.claude(), .codex()]) {
+    init(routes: [PermissionHookRoute] = [.claude(), .codex(), .zcode()]) {
         self.routes = Dictionary(
             routes.map { ($0.path, $0) },
             uniquingKeysWith: { first, _ in first }

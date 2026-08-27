@@ -114,22 +114,23 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
         ),
         AgentValidationProfile(
             agentID: .zcode,
-            testedVersion: "3.7.6 · build 3.7.6.4691",
+            testedVersion: "3.9.1 · build 3.9.1.5853",
             testedVersionComponents: [
                 AgentVersionComponent(
                     key: "version",
                     label: "Version",
-                    value: "3.7.6"
+                    value: "3.9.1"
                 ),
                 AgentVersionComponent(
                     key: "build",
                     label: "build",
-                    value: "3.7.6.4691"
+                    value: "3.9.1.5853"
                 ),
             ],
-            supportedCapabilitiesSummary: "支持：状态、原生应用/项目打开",
+            supportedCapabilitiesSummary:
+                "支持：状态、权限确认、原生应用/项目打开、受管集成",
             knownLimitation:
-                "限制：精确会话与 SessionEnd 未验证；平台有 PermissionRequest 与可阻断的 PreToolUse，ThreadHelm 仅注册观测事件"
+                "限制：精确会话与 SessionEnd 未验证；yolo 模式不请求批准，闸门不会触发；ZCode 真机发起的审批尚未在本机端到端验证，契约取自应用内 schema 与负载构造代码；hook 失败在 ZCode 一侧一律放行，闸门够不着时由 ThreadHelm 主动拒绝兜底；仅注册用户级 hook，项目级受工作区信任门控"
         ),
         AgentValidationProfile(
             agentID: .omp,

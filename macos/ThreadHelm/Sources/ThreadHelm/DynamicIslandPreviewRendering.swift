@@ -240,7 +240,7 @@ private func dynamicIslandPreviewAgentStatuses() -> [AgentRuntimeStatus] {
             installed: true,
             compatibility: .validated,
             integrationStatus: .needsRepair,
-            version: "3.7.6",
+            version: "3.9.1",
             health: .degraded,
             summary: "受管配置漂移"
         ),
