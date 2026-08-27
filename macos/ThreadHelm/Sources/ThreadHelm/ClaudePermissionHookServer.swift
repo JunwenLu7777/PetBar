@@ -1,6 +1,43 @@
 import Foundation
 import Network
 
+/// 一条按路径区分的审批线路。Claude 与 Codex 共用同一个监听端口，
+/// 但各有各的令牌来源与线协议：令牌不共享，任一方的配置泄漏都不会
+/// 让攻击者能向另一方伪造裁决请求。
+struct PermissionHookRoute {
+    let agentID: AgentID
+    let path: String
+    let expectedToken: () -> String?
+    let decode: (Data) throws -> ClaudePermissionPrompt
+    let encode: (ClaudePermissionUserDecision, ClaudePermissionPrompt) -> Data?
+
+    static func claude(
+        token: @escaping () -> String? = { ClaudeHookConfiguration.authenticationToken() }
+    ) -> PermissionHookRoute {
+        PermissionHookRoute(
+            agentID: .claudeCode,
+            path: ClaudeHookConstants.path,
+            expectedToken: token,
+            decode: { try ClaudePermissionProtocol.decodePrompt(from: $0) },
+            encode: { ClaudePermissionProtocol.responseBody(for: $0, prompt: $1) }
+        )
+    }
+
+    static func codex(
+        token: @escaping () -> String? = { CodexHookConfiguration.authenticationToken() }
+    ) -> PermissionHookRoute {
+        PermissionHookRoute(
+            agentID: .codex,
+            path: CodexHookConstants.path,
+            expectedToken: token,
+            decode: { try CodexPermissionProtocol.decodePrompt(from: $0) },
+            encode: { decision, _ in
+                CodexPermissionProtocol.responseBody(for: decision)
+            }
+        )
+    }
+}
+
 final class ClaudePermissionHookServer {
     typealias PromptHandler = (
         ClaudePermissionPrompt,
@@ -18,7 +55,7 @@ final class ClaudePermissionHookServer {
     var onPrompt: PromptHandler?
     var onRequestExpired: ((UUID) -> Void)?
 
-    private let expectedAuthenticationToken: String?
+    private let routes: [String: PermissionHookRoute]
     private let queue = DispatchQueue(
         label: "dev.threadhelm.claude-permission-hook",
         qos: .userInitiated
@@ -27,11 +64,17 @@ final class ClaudePermissionHookServer {
     private var pendingRequests: [UUID: PendingRequest] = [:]
     private(set) var state: State = .stopped
 
-    init(
-        expectedAuthenticationToken: String? = ClaudeHookConfiguration
-            .authenticationToken()
-    ) {
-        self.expectedAuthenticationToken = expectedAuthenticationToken
+    init(routes: [PermissionHookRoute] = [.claude(), .codex()]) {
+        self.routes = Dictionary(
+            routes.map { ($0.path, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    convenience init(expectedAuthenticationToken: String?) {
+        self.init(routes: [
+            .claude(token: { expectedAuthenticationToken }),
+        ])
     }
 
     static func isAuthenticated(
@@ -150,7 +193,7 @@ final class ClaudePermissionHookServer {
 
     private func handle(_ request: HTTPRequest, connection: NWConnection) {
         guard request.method == "POST",
-              request.path == ClaudeHookConstants.path
+              let route = routes[request.path]
         else {
             sendHTTPResponse(
                 status: 404,
@@ -163,7 +206,7 @@ final class ClaudePermissionHookServer {
 
         guard Self.isAuthenticated(
             headers: request.headers,
-            expectedToken: expectedAuthenticationToken
+            expectedToken: route.expectedToken()
         ) else {
             sendHTTPResponse(
                 status: 403,
@@ -186,13 +229,17 @@ final class ClaudePermissionHookServer {
 
         let prompt: ClaudePermissionPrompt
         do {
-            prompt = try ClaudePermissionProtocol.decodePrompt(from: request.body)
+            prompt = try route.decode(request.body)
         } catch {
             sendNoDecision(connection: connection)
             return
         }
 
-        let pending = PendingRequest(prompt: prompt, connection: connection)
+        let pending = PendingRequest(
+            prompt: prompt,
+            route: route,
+            connection: connection
+        )
         let timeout = DispatchWorkItem { [weak self] in
             self?.expire(requestID: prompt.requestID)
         }
@@ -231,10 +278,7 @@ final class ClaudePermissionHookServer {
                   let pending = self.pendingRequests.removeValue(forKey: requestID)
             else { return }
             pending.timeoutWorkItem?.cancel()
-            if let body = ClaudePermissionProtocol.responseBody(
-                for: decision,
-                prompt: pending.prompt
-            ) {
+            if let body = pending.route.encode(decision, pending.prompt) {
                 self.sendHTTPResponse(
                     status: 200,
                     reason: "OK",
@@ -335,11 +379,19 @@ final class ClaudePermissionHookServer {
 
 private final class PendingRequest {
     let prompt: ClaudePermissionPrompt
+    /// 记住来路：裁决必须按提问方的线协议编码，而请求挂起期间
+    /// 路由表本身可能已经变了。
+    let route: PermissionHookRoute
     let connection: NWConnection
     var timeoutWorkItem: DispatchWorkItem?
 
-    init(prompt: ClaudePermissionPrompt, connection: NWConnection) {
+    init(
+        prompt: ClaudePermissionPrompt,
+        route: PermissionHookRoute,
+        connection: NWConnection
+    ) {
         self.prompt = prompt
+        self.route = route
         self.connection = connection
     }
 }

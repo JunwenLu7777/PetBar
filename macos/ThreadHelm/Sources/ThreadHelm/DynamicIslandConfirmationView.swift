@@ -220,7 +220,7 @@ final class DynamicIslandConfirmationViewController:
         queueStack.spacing = 8
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("queue"))
-        column.title = "Claude 确认队列"
+        column.title = "确认队列"
         queueTableView.addTableColumn(column)
         queueTableView.headerView = nil
         queueTableView.delegate = self
@@ -229,7 +229,7 @@ final class DynamicIslandConfirmationViewController:
         queueTableView.intercellSpacing = NSSize(width: 0, height: 4)
         queueTableView.backgroundColor = .clear
         queueTableView.selectionHighlightStyle = .regular
-        queueTableView.setAccessibilityLabel("Claude 确认队列")
+        queueTableView.setAccessibilityLabel("确认队列")
         queueScrollView.documentView = queueTableView
         queueScrollView.hasVerticalScroller = true
         queueScrollView.drawsBackground = false
@@ -470,7 +470,10 @@ final class DynamicIslandConfirmationViewController:
                 ? DynamicIslandPalette.primaryText
                 : DynamicIslandPalette.secondaryText
             title.stringValue = "\(index + 1)  \(row.item.title)"
-            detail.stringValue = "\(kindTitle(row.item.interactionKind)) · CLAUDE"
+            // 队列会同时排 Claude 与 Codex 的请求，来源必须写在行里，
+            // 否则用户无从判断自己批的是哪一家。
+            detail.stringValue = "\(kindTitle(row.item.interactionKind))"
+                + " · \(agentQueueCode(row.item.agentID))"
             detail.textColor = DynamicIslandPalette.secondaryText
             time.stringValue = compactQueueAgeText(row.item.arrivedAt)
             time.alignment = .right
@@ -493,8 +496,12 @@ final class DynamicIslandConfirmationViewController:
         }
     }
 
+    private func agentQueueCode(_ agentID: AgentID) -> String {
+        agentPresentation(for: agentID).shortName.uppercased()
+    }
+
     private func buildToolApproval(prompt: ClaudePermissionPrompt) {
-        overlineField.stringValue = "CLAUDE · THREADHELM"
+        overlineField.stringValue = "\(agentQueueCode(prompt.agentID)) · THREADHELM"
         formTitleField.stringValue = "\(kindTitle(prompt.interactionKind)) · \(prompt.toolName)"
         formMessageField.stringValue = prompt.message
         rawSummary = boundedRawSummary(from: prompt.originalToolInput)

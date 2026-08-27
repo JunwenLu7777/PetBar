@@ -63,7 +63,7 @@ func foregroundHandledAgentSessionKeys(
         let nativeID = current.sessionID?.lowercased()
             ?? "request-\(current.requestID.uuidString.lowercased())"
         return [AgentSessionIdentity(
-            agentID: .claudeCode,
+            agentID: current.agentID,
             nativeID: nativeID
         ).key]
     case nil, .hidden, .capsule, .expanded(.agents), .expanded(.quota):

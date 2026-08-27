@@ -127,7 +127,8 @@ func runAgentIntegrationManagerSelfTest() {
         guard status.operation == .status,
               status.backupID == nil,
               status.agents.map(\.agentID) == AgentID.builtInOrder,
-              status.record(for: .codex)?.statusAfter == .notManaged,
+              // Codex 自接入审批闸门起也进入受管集合，五家再无例外。
+              status.record(for: .codex)?.statusAfter == .notInstalled,
               status.record(for: .claudeCode)?.statusAfter == .notInstalled,
               status.record(for: .cursor)?.statusAfter == .notInstalled,
               status.record(for: .zcode)?.statusAfter == .notInstalled,
@@ -139,31 +140,31 @@ func runAgentIntegrationManagerSelfTest() {
         let installed = try manager.perform(.install, in: scope)
         guard installed.operation == .install,
               installed.backupID != nil,
-              installed.record(for: .codex)?.result == .notManaged,
+              installed.record(for: .codex)?.statusAfter == .installed,
               installed.record(for: .claudeCode)?.statusAfter == .installed,
               installed.record(for: .cursor)?.statusAfter == .installed,
               installed.record(for: .zcode)?.statusAfter == .installed,
               installed.record(for: .omp)?.statusAfter == .installed,
-              !fileManager.fileExists(
-                  atPath: root.appendingPathComponent(".codex").path
-              )
+              // 闸门的令牌必须与 hooks.json 一起落到隔离的 scope 里，
+              // 而不是漏写进用户真实的 ~/.codex。
+              fileManager.fileExists(
+                  atPath: root.appendingPathComponent(".codex/hooks.json").path
+              ),
+              CodexHookConfiguration.authenticationToken(
+                  for: root.appendingPathComponent(".codex/hooks.json")
+              ) != nil
         else {
-            failIntegrationManagerSelfTest("five-agent install/Codex no-op")
+            failIntegrationManagerSelfTest("five-agent install")
         }
 
         let repeated = try manager.perform(.install, in: scope)
-        guard repeated.agents.filter({ $0.agentID != .codex }).allSatisfy({
-            $0.result == .unchanged
-        }) else {
+        guard repeated.agents.allSatisfy({ $0.result == .unchanged }) else {
             failIntegrationManagerSelfTest("repeated install")
         }
 
         let uninstalled = try manager.perform(.uninstall, in: scope)
         guard uninstalled.agents.allSatisfy({ record in
-            record.agentID == .codex
-                ? record.result == .notManaged
-                : record.result == .uninstalled
-                    && record.statusAfter == .notInstalled
+            record.result == .uninstalled && record.statusAfter == .notInstalled
         }), try fixtures.unrelatedConfigurationIsPreserved()
         else {
             failIntegrationManagerSelfTest("five-agent uninstall/preservation")
@@ -171,10 +172,7 @@ func runAgentIntegrationManagerSelfTest() {
 
         let repaired = try manager.perform(.repair, in: scope)
         guard repaired.agents.allSatisfy({ record in
-            record.agentID == .codex
-                ? record.result == .notManaged
-                : record.result == .repaired
-                    && record.statusAfter == .installed
+            record.result == .repaired && record.statusAfter == .installed
         }) else {
             failIntegrationManagerSelfTest("five-agent repair")
         }
@@ -589,11 +587,10 @@ private func runIntegrationManagerVersionGateSelfTest(root: URL) throws {
         AgentIntegrationOperation.repair,
     ] {
         let report = try driftedManager.perform(operation, in: scope)
-        let managedRecords = report.agents.filter { $0.agentID != .codex }
         guard report.operation == operation,
               report.backupID != nil,
-              managedRecords.count == 4,
-              managedRecords.allSatisfy({
+              report.agents.count == 5,
+              report.agents.allSatisfy({
                   $0.result == .unchanged
                       && $0.statusBefore == .notInstalled
                       && $0.statusAfter == .notInstalled
@@ -613,10 +610,7 @@ private func runIntegrationManagerVersionGateSelfTest(root: URL) throws {
     _ = try validatedManager.perform(.install, in: scope)
     let uninstalled = try driftedManager.perform(.uninstall, in: scope)
     guard uninstalled.agents.allSatisfy({ record in
-        record.agentID == .codex
-            ? record.result == .notManaged
-            : record.result == .uninstalled
-                && record.statusAfter == .notInstalled
+        record.result == .uninstalled && record.statusAfter == .notInstalled
     }),
     try fixtures.unrelatedConfigurationIsPreserved(),
     !fileManager.fileExists(atPath: fixtures.ompManagedDirectory.path)

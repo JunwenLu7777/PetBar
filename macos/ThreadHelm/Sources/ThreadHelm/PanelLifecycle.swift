@@ -17,7 +17,25 @@ func shouldPresentClaudePermissionPanel(
     liveCodexDesktopRunning: Bool,
     claudeCompatibility: AgentCompatibility
 ) -> Bool {
-    guard claudeCompatibility == .validated else { return false }
+    shouldPresentPermissionPanel(
+        agentID: .claudeCode,
+        cachedCodexDesktopRunning: cachedCodexDesktopRunning,
+        liveCodexDesktopRunning: liveCodexDesktopRunning,
+        agentCompatibility: claudeCompatibility
+    )
+}
+
+func shouldPresentPermissionPanel(
+    agentID: AgentID,
+    cachedCodexDesktopRunning: Bool,
+    liveCodexDesktopRunning: Bool,
+    agentCompatibility: AgentCompatibility
+) -> Bool {
+    guard agentCompatibility == .validated else { return false }
+    // 请求来自 Codex 自己时，「用户正在用 Codex」已经由请求本身证明，
+    // 再要求 Codex Desktop 在跑就会把纯 CLI 用户挡在门外——闸门静默
+    // 交还原生 UI，看起来就像功能没生效。
+    guard agentID != .codex else { return true }
     // Workspace lifecycle notifications can arrive after a Claude hook
     // request. A stale cached true must never activate UI after Codex exits.
     guard cachedCodexDesktopRunning == liveCodexDesktopRunning else {

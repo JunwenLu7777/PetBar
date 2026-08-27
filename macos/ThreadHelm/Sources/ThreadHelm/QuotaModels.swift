@@ -393,18 +393,36 @@ func locateCodexExecutable(
         .map(URL.init(fileURLWithPath:))
 }
 
+/// launchd 拉起的常驻面板只有 `/usr/bin:/bin:/usr/sbin:/sbin`，用户装的
+/// CLI 一律不在其中。不补全就会退到后面的候选——比如桌面应用内嵌的那份
+/// codex——于是面板读到的版本和用户真正在跑的 CLI 不是同一个，版本判定
+/// 被判成漂移，受管集成与审批闸门随之静默关闭。
+func supplementalExecutableSearchDirectories(
+    homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+) -> [String] {
+    [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        homeDirectory.appendingPathComponent(".local/bin").path,
+    ]
+}
+
 private func executablePaths(
     named executableName: String,
     pathEnvironment: String?
 ) -> [String] {
-    guard let pathEnvironment, !pathEnvironment.isEmpty else { return [] }
-    return pathEnvironment
+    let configured = (pathEnvironment ?? "")
         .split(separator: ":", omittingEmptySubsequences: true)
-        .map {
-            URL(fileURLWithPath: String($0), isDirectory: true)
-                .appendingPathComponent(executableName)
-                .path
-        }
+        .map(String.init)
+    let supplemental = supplementalExecutableSearchDirectories()
+        .filter { !configured.contains($0) }
+    let directories = configured + supplemental
+    guard !directories.isEmpty else { return [] }
+    return directories.map {
+        URL(fileURLWithPath: $0, isDirectory: true)
+            .appendingPathComponent(executableName)
+            .path
+    }
 }
 
 final class QuotaProviderPreference {

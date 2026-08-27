@@ -20,6 +20,13 @@ if runAgentHookCommandIfRequested() {
     exit(0)
 }
 
+// Codex 的审批闸门走 command hook：这条转发会阻塞到用户裁决为止，
+// 与上面那些快速 fail-open 的观测 hook 不同，必须先于它们之外的一切
+// 初始化，并且全程只往 stdout 写裁决 JSON。
+if runCodexPermissionHookCommandIfRequested() {
+    exit(0)
+}
+
 if let integrationExitCode = AgentIntegrationCLI.runIfRequested() {
     exit(integrationExitCode)
 }
@@ -50,6 +57,12 @@ if CommandLine.arguments.contains("--restore-codex-overlay-notifications") {
 
 if CommandLine.arguments.contains("--check-accessibility") {
     printAccessibilityStatus()
+}
+
+// 版本判定决定受管集成与审批闸门开不开。它在常驻面板的受限 PATH 下
+// 与在终端里结果可能不同，所以要能在真实环境里当场问一句。
+if CommandLine.arguments.contains("--print-agent-discovery") {
+    printAgentDiscovery()
 }
 
 if CommandLine.arguments.contains("--suppress-native-activity-once") {
@@ -107,6 +120,10 @@ if CommandLine.arguments.contains("--self-test-claude-quota") {
 
 if CommandLine.arguments.contains("--self-test-claude-hook") {
     runClaudeHookSelfTest()
+}
+
+if CommandLine.arguments.contains("--self-test-codex-hook") {
+    runCodexHookSelfTest()
 }
 
 if CommandLine.arguments.contains("--self-test-dynamic-island") {

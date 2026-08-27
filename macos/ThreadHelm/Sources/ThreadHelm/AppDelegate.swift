@@ -621,13 +621,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             let cachedCodexDesktopRunning = self.cachedCodexDesktopRunning
             let liveCodexDesktopRunning = isCodexDesktopRunning()
-            let claudeCompatibility = self.dashboardStore.snapshot.agentStatuses
-                .first { $0.metadata.id == .claudeCode }?
+            // 按提问方取版本判据。用 Claude 的兼容性去决定 Codex 的请求
+            // 弹不弹，会让一家的版本漂移连带关掉另一家的闸门。
+            let agentCompatibility = self.dashboardStore.snapshot.agentStatuses
+                .first { $0.metadata.id == prompt.agentID }?
                 .discovery.compatibility ?? .unknown
-            let shouldPresent = shouldPresentClaudePermissionPanel(
+            let shouldPresent = shouldPresentPermissionPanel(
+                agentID: prompt.agentID,
                 cachedCodexDesktopRunning: cachedCodexDesktopRunning,
                 liveCodexDesktopRunning: liveCodexDesktopRunning,
-                claudeCompatibility: claudeCompatibility
+                agentCompatibility: agentCompatibility
             )
             if liveCodexDesktopRunning != cachedCodexDesktopRunning {
                 self.updateCodexDesktopRunningState(liveCodexDesktopRunning)
@@ -675,9 +678,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @discardableResult
+    /// Codex 的批准是同步阻塞的：hook 没返回前 Codex 不会自己弹框，
+    /// 所以「回到终端」这条路要先把裁决交还（由调用方发 nativeFallback，
+    /// 让 Codex 回落原生 UI），再把用户送到那个会话跟前。
+    private func openCodexForPermission(
+        _ prompt: ClaudePermissionPrompt
+    ) -> OpenResult {
+        guard let sessionID = prompt.sessionID,
+              let url = codexThreadURL(threadID: sessionID)
+        else {
+            return .unavailable
+        }
+        return NSWorkspace.shared.open(url) ? .unknown : .failed
+    }
+
     private func openTerminalForClaudePermission(
         _ prompt: ClaudePermissionPrompt
     ) -> OpenResult {
+        if prompt.agentID == .codex {
+            return openCodexForPermission(prompt)
+        }
         let request = claudeTerminalOpenRequest(
             for: prompt,
             taskItems: dashboardStore.snapshot.taskCollection.items
