@@ -311,7 +311,15 @@ enum CodexHookConfiguration {
         } else {
             configuration["hooks"] = hooks
         }
-        try writeConfiguration(configuration, to: hooksURL, makeBackup: true)
+        if configuration.isEmpty {
+            // hooks.json 只为 hook 而存在。摘掉自家条目后整份为空，说明
+            // 里面再没有别人的东西——留一个 `{}` 就是卸载没卸干净。用户
+            // 自己写的其他 hook 会让配置非空，走不到这里。
+            try backUpConfiguration(at: hooksURL)
+            try? FileManager.default.removeItem(at: hooksURL)
+        } else {
+            try writeConfiguration(configuration, to: hooksURL, makeBackup: true)
+        }
         removeAuthenticationToken(for: hooksURL)
         return true
     }
@@ -464,6 +472,21 @@ enum CodexHookConfiguration {
         return "未知处理器"
     }
 
+    /// 删除或覆写前先留一份带时间戳的副本。用户手工改过的内容不该因为
+    /// 一次卸载就无从找回。
+    private static func backUpConfiguration(at url: URL) throws {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: url.path) else { return }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let backupURL = url.deletingLastPathComponent().appendingPathComponent(
+            "\(url.lastPathComponent).threadhelm-backup-"
+                + "\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
+        )
+        try manager.copyItem(at: url, to: backupURL)
+    }
+
     private static func writeConfiguration(
         _ configuration: [String: Any],
         to url: URL,
@@ -475,15 +498,8 @@ enum CodexHookConfiguration {
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            if makeBackup, manager.fileExists(atPath: url.path) {
-                let formatter = DateFormatter()
-                formatter.locale = Locale(identifier: "en_US_POSIX")
-                formatter.dateFormat = "yyyyMMdd-HHmmss"
-                let backupURL = url.deletingLastPathComponent().appendingPathComponent(
-                    "\(url.lastPathComponent).threadhelm-backup-"
-                        + "\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
-                )
-                try manager.copyItem(at: url, to: backupURL)
+            if makeBackup {
+                try backUpConfiguration(at: url)
             }
             var data = try JSONSerialization.data(
                 withJSONObject: configuration,

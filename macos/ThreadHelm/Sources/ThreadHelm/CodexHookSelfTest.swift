@@ -243,6 +243,50 @@ func runCodexHookSelfTest() -> Never {
         fail("卸载后应清除令牌")
     }
 
+    // hooks.json 原本不存在时，卸载要把它删掉而不是留一个空 `{}`。
+    // 那个空壳既没用又让人以为还装着东西——卸载就该不留痕。
+    let freshURL = root.appendingPathComponent("fresh-hooks.json")
+    guard (try? CodexHookConfiguration.install(
+        at: freshURL,
+        hookCommand: command,
+        isCodexAvailable: { true }
+    )) == true,
+    FileManager.default.fileExists(atPath: freshURL.path),
+    (try? CodexHookConfiguration.uninstall(at: freshURL)) == true,
+    !FileManager.default.fileExists(atPath: freshURL.path)
+    else {
+        fail("卸载后应删除本就由我们创建的 hooks.json")
+    }
+
+    // 但用户自己的 hook 会让配置非空，那时只摘自家条目、保留文件。
+    let sharedURL = root.appendingPathComponent("shared-hooks.json")
+    let sharedSeed: [String: Any] = [
+        "hooks": [
+            "PreToolUse": [[
+                "matcher": "",
+                "hooks": [["type": "command", "command": "/opt/user/watch"]],
+            ]],
+        ],
+    ]
+    guard let seedData = try? JSONSerialization.data(
+        withJSONObject: sharedSeed
+    ), (try? seedData.write(to: sharedURL)) != nil,
+    (try? CodexHookConfiguration.install(
+        at: sharedURL,
+        hookCommand: command,
+        isCodexAvailable: { true }
+    )) == true,
+    (try? CodexHookConfiguration.uninstall(at: sharedURL)) == true,
+    FileManager.default.fileExists(atPath: sharedURL.path),
+    let survived = try? Data(contentsOf: sharedURL),
+    let survivedRoot = try? JSONSerialization.jsonObject(with: survived)
+        as? [String: Any],
+    let survivedHooks = survivedRoot["hooks"] as? [String: Any],
+    survivedHooks["PreToolUse"] != nil
+    else {
+        fail("卸载误删了含用户 hook 的 hooks.json")
+    }
+
     // Codex 未安装时不该往用户目录写任何东西。
     let untouchedURL = root.appendingPathComponent("absent.json")
     guard (try? CodexHookConfiguration.install(
