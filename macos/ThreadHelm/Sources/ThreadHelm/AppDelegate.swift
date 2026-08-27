@@ -194,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let healthWriter = RuntimeHealthWriter()
     private let dashboardStore = ActivityDashboardStore()
     private let agentRegistry = AgentRegistry.builtIn
+    private let permissionGateLiveness = PermissionGateLivenessStore()
     private let agentLiveEventStore = AgentLiveEventStore()
     private let agentOpenMeasurementStore = AgentOpenMeasurementStore()
     private let agentAttentionInterruptionGate =
@@ -613,7 +614,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         )
-        let server = ClaudePermissionHookServer()
+        let server = ClaudePermissionHookServer(
+            liveness: permissionGateLiveness
+        )
         server.onPrompt = { [weak self] prompt, completion in
             guard let self else {
                 completion(.nativeFallback)
@@ -1329,10 +1332,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let statuses = snapshot.agentStatuses.isEmpty
             ? agentRuntimeStatusPlaceholders(registry: agentRegistry)
             : snapshot.agentStatuses
-        snapshot.agentStatuses = agentRuntimeStatusesWithActivity(
-            statuses,
-            snapshots: snapshot.agentSnapshots,
-            attentionItems: snapshot.attentionItems
+        snapshot.agentStatuses = agentRuntimeStatusesWithGateLiveness(
+            agentRuntimeStatusesWithActivity(
+                statuses,
+                snapshots: snapshot.agentSnapshots,
+                attentionItems: snapshot.attentionItems
+            ),
+            records: permissionGateLiveness.snapshot()
         )
         snapshot.agentEventChannelAvailable = agentEventChannelAvailable
     }

@@ -638,7 +638,16 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
             profile: profile
         )
         capabilityField.textColor = DynamicIslandPalette.secondaryText
-        limitationField.stringValue = profile.knownLimitation
+        // 闸门状态排在限制之前：它是当下可行动的信息（去 Codex 里点
+        // Trust），而限制是长期背景。
+        if let gateText = permissionGateLivenessSummary(
+            status.permissionGateLiveness,
+            agentID: status.metadata.id
+        ) {
+            limitationField.stringValue = "\(gateText)\n\(profile.knownLimitation)"
+        } else {
+            limitationField.stringValue = profile.knownLimitation
+        }
         limitationField.textColor = DynamicIslandPalette.tertiaryText
 
         let healthColor = agentRuntimeHealthColor(status.diagnostics.health)

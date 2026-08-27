@@ -225,6 +225,10 @@ struct AgentRuntimeStatus: Equatable {
     let diagnostics: AgentDiagnostics
     let activeSessionCount: Int
     let attentionCount: Int
+    /// 配置装没装 ≠ 闸门有没有在工作。三家厂商都可能静默地不加载我们的
+    /// hook，这一项记录的是观测到的事实，排在末尾并带默认值，好让既有
+    /// 构造点保持不变。
+    var permissionGateLiveness: PermissionGateLiveness = .notApplicable
 }
 
 func agentRuntimeStatusPlaceholders(
@@ -318,6 +322,23 @@ func agentRuntimeStatusesMergingIntegration(
             activeSessionCount: status.activeSessionCount,
             attentionCount: status.attentionCount
         )
+    }
+}
+
+func agentRuntimeStatusesWithGateLiveness(
+    _ statuses: [AgentRuntimeStatus],
+    records: [AgentID: PermissionGateLivenessRecord]
+) -> [AgentRuntimeStatus] {
+    statuses.map { status in
+        var updated = status
+        updated.permissionGateLiveness = permissionGateLiveness(
+            capability: status.metadata.capabilities.status(
+                for: .inAppPermission
+            ),
+            integrationStatus: status.integrationStatus,
+            record: records[status.metadata.id]
+        )
+        return updated
     }
 }
 
@@ -1326,6 +1347,11 @@ func builtInAgentMetadata() -> [AgentMetadata] {
 /// 由 launchd 拉起、PATH 与终端不同，只有在同样的环境里问才有意义。
 func printAgentDiscovery() -> Never {
     let profiles = builtInAgentValidationProfiles()
+    let livenessRecords = PermissionGateLivenessStore().snapshot()
+    let scope = AgentIntegrationScope(
+        rootDirectory: FileManager.default.homeDirectoryForCurrentUser,
+        permitsLiveConfigurationChanges: true
+    )
     for adapter in builtInAgentAdapters() {
         let discovery = adapter.discover()
         let profile = profiles[adapter.metadata.id]
@@ -1334,14 +1360,68 @@ func printAgentDiscovery() -> Never {
             discovery: discovery
         )
         let permission = bounded.capabilities.status(for: .inAppPermission)
+        let integration = adapter.integrationStatus(in: scope)
+        let liveness = permissionGateLiveness(
+            capability: permission,
+            integrationStatus: integration,
+            record: livenessRecords[adapter.metadata.id]
+        )
+        let gate: String
+        switch liveness {
+        case .notApplicable: gate = "n/a"
+        case .neverObserved: gate = "unverified"
+        case .verified: gate = "verified"
+        }
         print(
             "\(adapter.metadata.id.rawValue)"
                 + " installed=\(discovery.isInstalled)"
                 + " version=\(discovery.version ?? "nil")"
                 + " pinned=\(profile?.testedVersion ?? "nil")"
                 + " compatibility=\(discovery.compatibility.rawValue)"
+                + " integration=\(integration.rawValue)"
                 + " inAppPermission=\(permission.rawValue)"
+                + " gate=\(gate)"
         )
+    }
+    exit(0)
+}
+
+/// 安装后打印一行「还差什么」。装好配置不等于闸门在工作，而这一步
+/// 目前对用户完全静默——只有等到某次危险操作没弹确认框才会发现。
+func printPermissionGateFollowUp() -> Never {
+    let livenessRecords = PermissionGateLivenessStore().snapshot()
+    let scope = AgentIntegrationScope(
+        rootDirectory: FileManager.default.homeDirectoryForCurrentUser,
+        permitsLiveConfigurationChanges: true
+    )
+    var pending: [String] = []
+    for adapter in builtInAgentAdapters() {
+        let discovery = adapter.discover()
+        let bounded = validationBoundedAgentMetadata(
+            adapter.metadata,
+            discovery: discovery
+        )
+        let liveness = permissionGateLiveness(
+            capability: bounded.capabilities.status(for: .inAppPermission),
+            integrationStatus: adapter.integrationStatus(in: scope),
+            record: livenessRecords[adapter.metadata.id]
+        )
+        guard liveness == .neverObserved else { continue }
+        if adapter.metadata.id == .codex {
+            pending.append(
+                "  \(bounded.shortName)：闸门尚未验证。"
+                    + "Codex 启动时若提示 “Hooks need review”，请选 Trust；"
+                    + "未信任时 Codex 会静默跳过 hook。"
+            )
+        } else {
+            pending.append(
+                "  \(bounded.shortName)：闸门尚未验证——还没收到过审批请求。"
+            )
+        }
+    }
+    if !pending.isEmpty {
+        print("审批闸门待确认：")
+        pending.forEach { print($0) }
     }
     exit(0)
 }

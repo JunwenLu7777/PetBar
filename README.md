@@ -21,6 +21,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 - 确认工作区可直接回答 Claude Code 的权限、问题与计划请求，也可直接批准 Codex 与 ZCode 的工具授权；队列会标出每条请求来自哪个 Agent。
 - Codex 侧需在 Codex 里信任一次 ThreadHelm 写入的 `~/.codex/hooks.json`，未信任时 Codex 会静默跳过 hook、闸门不生效；且只有 Codex 自己发起审批（`approval_policy` 不为 `never`）时才会触发。面板未启动或裁决超时时不会放行，而是交回 Codex 自己的批准界面。
 - ZCode 侧不需要额外授信，但 `yolo` 模式不请求批准、闸门不会触发。ZCode 在 hook 失败时会直接执行工具，所以闸门够不着面板时由 ThreadHelm 主动返回拒绝兜底，而不是放行。
+- 装好配置不等于闸门在工作：三家厂商都可能静默地不加载 hook（Codex 未授信、ZCode 配置被判无效、Claude 那边被别的 command hook 占位），而配置文件都还在。所以 Agents 页会分别显示「闸门已验证在线」与「闸门尚未验证」——后者表示尚未收到过审批请求，可能只是还没触发，也可能是没生效。安装完成时也会列出还需确认的项。这个判定基于观测到的事实（面板真的收到过该 Agent 的审批请求），不解析厂商内部状态，记录留在 `~/Library/Application Support/ThreadHelm/permission-gate-liveness.json`，跨升级保留。
 - 检测到独立 Claude Code CLI 或 Claude Desktop 内置 CLI 时，可显示 Claude Code 的 5h、周额度与 Fable 周额度；均未安装时只显示 Codex 来源。已安装但未登录或读取失败时保留 Claude Code 状态提示；不显示 Token、Credits 或行情模块。
 - 任务控制台统一显示本机 Codex、Claude Code（包括 Claude Desktop 本地 Agent 会话）、Cursor、ZCode 和 OMP；Desktop 会话只读显示，不把应用聚焦、目录 fallback 或终端恢复冒充为精确会话返回。
 - Agents 页面同时显示本机检测版本、真值夹具测试版本、支持能力和已知限制。

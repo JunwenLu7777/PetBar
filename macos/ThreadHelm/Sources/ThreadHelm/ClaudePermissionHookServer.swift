@@ -75,6 +75,10 @@ final class ClaudePermissionHookServer {
     var onRequestExpired: ((UUID) -> Void)?
 
     private let routes: [String: PermissionHookRoute]
+    /// 只有服务端能证明闸门真的连通了：hook 被厂商拉起、找到了令牌、
+    /// 请求送达并解析成功。hook 进程自己记不了这件事——它连不上的时候
+    /// 恰恰就是最需要如实记录「没连通」的时候。
+    private let liveness: PermissionGateLivenessStore?
     private let queue = DispatchQueue(
         label: "dev.threadhelm.claude-permission-hook",
         qos: .userInitiated
@@ -83,11 +87,15 @@ final class ClaudePermissionHookServer {
     private var pendingRequests: [UUID: PendingRequest] = [:]
     private(set) var state: State = .stopped
 
-    init(routes: [PermissionHookRoute] = [.claude(), .codex(), .zcode()]) {
+    init(
+        routes: [PermissionHookRoute] = [.claude(), .codex(), .zcode()],
+        liveness: PermissionGateLivenessStore? = nil
+    ) {
         self.routes = Dictionary(
             routes.map { ($0.path, $0) },
             uniquingKeysWith: { first, _ in first }
         )
+        self.liveness = liveness
     }
 
     convenience init(expectedAuthenticationToken: String?) {
@@ -254,6 +262,10 @@ final class ClaudePermissionHookServer {
             return
         }
 
+        // 记在解码成功之后：能解析出一个提示，才说明这条链路真的通了，
+        // 而不是端口上碰巧有人在敲。
+        liveness?.recordRequest(agentID: route.agentID)
+
         let pending = PendingRequest(
             prompt: prompt,
             route: route,
@@ -298,6 +310,7 @@ final class ClaudePermissionHookServer {
             else { return }
             pending.timeoutWorkItem?.cancel()
             if let body = pending.route.encode(decision, pending.prompt) {
+                self.liveness?.recordDecision(agentID: pending.route.agentID)
                 self.sendHTTPResponse(
                     status: 200,
                     reason: "OK",
