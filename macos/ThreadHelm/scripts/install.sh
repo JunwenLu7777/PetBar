@@ -191,4 +191,8 @@ fi
 threadhelm_commit_install_transaction
 trap - EXIT INT TERM
 cleanup_legacy_products
+# 配置写好了不等于审批闸门在工作：Codex 要用户先信任那份 hooks.json，
+# 在那之前它会静默跳过。装完就说清楚还差哪一步，别等到某次危险操作
+# 没弹确认框才发现。
+"$APP_BINARY" --print-permission-gate-follow-up 2>/dev/null || true
 echo "$INSTALLED_APP"

@@ -65,6 +65,10 @@ if CommandLine.arguments.contains("--print-agent-discovery") {
     printAgentDiscovery()
 }
 
+if CommandLine.arguments.contains("--print-permission-gate-follow-up") {
+    printPermissionGateFollowUp()
+}
+
 if CommandLine.arguments.contains("--suppress-native-activity-once") {
     suppressNativeActivityOnce()
 }
@@ -128,6 +132,10 @@ if CommandLine.arguments.contains("--self-test-codex-hook") {
 
 if CommandLine.arguments.contains("--self-test-zcode-permission") {
     runZCodePermissionSelfTest()
+}
+
+if CommandLine.arguments.contains("--self-test-permission-gate-liveness") {
+    runPermissionGateLivenessSelfTest()
 }
 
 if CommandLine.arguments.contains("--self-test-dynamic-island") {
