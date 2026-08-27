@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "baselineCommit": "4e220c79ed2ce3506fd1f39e9f61a0cac803161d",
+  "baselineCommit": "8a0792ded390272977e4183ee8596bfbf0633f68",
   "capturedAt": "2026-08-26T11:06:03Z",
   "agents": {
     "codex": {
@@ -34,8 +34,8 @@
     "cursor": {
       "agentId": "cursor",
       "displayName": "Cursor",
-      "version": "3.15.19",
-      "agentCliVersion": "2026.04.15-dccdccd",
+      "version": "3.17.21",
+      "agentCliVersion": "2026.04.14-ee4b43a",
       "revalidateOnVersionChange": true,
       "discovery": {
         "status": "installed",

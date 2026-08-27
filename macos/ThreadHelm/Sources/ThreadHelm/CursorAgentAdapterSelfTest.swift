@@ -12,10 +12,10 @@ import SQLite3
 func runCursorAgentAdapterSelfTest() {
     guard parsedCursorAgentCLIVersion(
         from: ProcessOutputCaptureResult(
-            data: Data("2026.04.15-dccdccd\n".utf8),
+            data: Data("2026.04.14-ee4b43a\n".utf8),
             termination: .timedOut
         )
-    ) == "2026.04.15-dccdccd",
+    ) == "2026.04.14-ee4b43a",
           parsedCursorAgentCLIVersion(
             from: ProcessOutputCaptureResult(
                 data: Data(),
@@ -24,7 +24,7 @@ func runCursorAgentAdapterSelfTest() {
           ) == nil,
           parsedCursorAgentCLIVersion(
             from: ProcessOutputCaptureResult(
-                data: Data("2026.04.15-dccdccd\n".utf8),
+                data: Data("2026.04.14-ee4b43a\n".utf8),
                 termination: .readFailed
             )
           ) == nil

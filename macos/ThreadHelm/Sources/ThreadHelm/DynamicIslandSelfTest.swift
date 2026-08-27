@@ -1042,7 +1042,7 @@ private func assertDynamicIslandTaskWorkspace() {
                 AgentVersionComponent(
                     key: "agentCLI",
                     label: "Agent CLI",
-                    value: "2026.04.15-dccdccd"
+                    value: "2026.04.14-ee4b43a"
                 ),
             ]
         ),
@@ -1071,7 +1071,7 @@ private func assertDynamicIslandTaskWorkspace() {
     guard emptyCopy?.title == "还听不到 Cursor 的执行",
           emptyCopy?.eyebrow == "Cursor · 监听未安装",
           emptyCopy?.body.contains("3.16.0") == true,
-          emptyCopy?.body.contains("3.15.19") == true,
+          emptyCopy?.body.contains("3.17.21") == true,
           emptyCopy?.facts.contains(where: {
               $0.label == "集成状态" && $0.value == "未安装"
           }) == true,

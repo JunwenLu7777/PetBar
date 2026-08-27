@@ -180,10 +180,23 @@ func runAgentIntegrationSelfTest() {
           registry.metadata(for: .zcode)?.capabilities.status(
               for: .inAppPermission
           ) == .supported,
-          // Cursor 仍未接入，是这条边界唯一的反例。
+          // 五家现已全部接入同一条闸门。真正要守的边界从「谁不许标」
+          // 变成了「标了就必须真有接入」——下面逐项确认每家的路由都在。
+          AgentID.builtInOrder.allSatisfy({ agentID in
+              registry.metadata(for: agentID)?.capabilities.status(
+                  for: .inAppPermission
+              ) == .supported
+          }),
+          Set(
+              [
+                  PermissionHookRoute.claude(), .codex(), .zcode(),
+                  .omp(), .cursor(),
+              ].map(\.agentID)
+          ) == Set(AgentID.builtInOrder),
+          // Cursor 也没有问题回答的 hook 事件，不能顺势标上。
           registry.metadata(for: .cursor)?.capabilities.status(
-              for: .inAppPermission
-          ) != .supported,
+              for: .inAppQuestion
+          ) == .unknown,
           // ZCode 没有问题回答与计划审批的 hook 事件，不能顺势标上。
           [AgentCapability.inAppQuestion, .inAppPlanApproval]
               .allSatisfy({ capability in
@@ -254,11 +267,11 @@ private func runAgentVersionTruthSelfTest() {
         agentID: .cursor,
         isInstalled: true,
         components: [
-            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.19"),
+            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.17.21"),
             AgentVersionComponent(
                 key: "agentCLI",
                 label: "Agent CLI",
-                value: "2026.04.15-dccdccd"
+                value: "2026.04.14-ee4b43a"
             ),
         ]
     )
@@ -270,7 +283,7 @@ private func runAgentVersionTruthSelfTest() {
             AgentVersionComponent(
                 key: "agentCLI",
                 label: "Agent CLI",
-                value: "2026.04.15-dccdccd"
+                value: "2026.04.14-ee4b43a"
             ),
         ]
     )
@@ -278,7 +291,7 @@ private func runAgentVersionTruthSelfTest() {
         agentID: .cursor,
         isInstalled: true,
         components: [
-            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.15.19"),
+            AgentVersionComponent(key: "desktop", label: "Desktop", value: "3.17.21"),
         ]
     )
     let zcodePinned = versionValidatedAgentDiscovery(
@@ -329,7 +342,7 @@ private func runAgentVersionTruthSelfTest() {
 
     guard Set(profiles.keys) == Set(AgentID.builtInOrder),
           cursorPinned.compatibility == .validated,
-          cursorPinned.version == "3.15.19",
+          cursorPinned.version == "3.17.21",
           cursorPinned.versionComponents.map(\.key) == ["desktop", "agentCLI"],
           cursorDrifted.compatibility == .unvalidated,
           cursorMissingCLI.compatibility == .unvalidated,

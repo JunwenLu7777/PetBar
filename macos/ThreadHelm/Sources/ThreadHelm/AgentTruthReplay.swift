@@ -9,11 +9,12 @@
 import Foundation
 
 private enum AgentTruthFixtureContract {
-    // 与夹具成对更新：本次把 OMP 的受验证版本提到 17.3.5，也就是
-    // 接入 tool_call 闸门时本机在跑的那个版本。场景本身未重新录制，
-    // 改的是它们标注的 observedAgentVersion。
+    // 与夹具成对更新：本次把 Cursor 的受验证版本提到 Desktop 3.17.21
+    // 与 Agent CLI 2026.04.14-ee4b43a，也就是挖出 preToolUse 契约的那份
+    // 代码所属的版本。场景本身未重新录制，改的是它们标注的
+    // observedAgentVersion。
     static let baselineCommit =
-        "4e220c79ed2ce3506fd1f39e9f61a0cac803161d"
+        "8a0792ded390272977e4183ee8596bfbf0633f68"
 }
 
 struct AgentTruthReplayMetric: Equatable {
