@@ -28,8 +28,8 @@ enum ZCodePermissionHookConstants {
 
     /// ZCode 的 hook 超时默认 60000ms，到点后**放行**而不是拦截。人来点
     /// 按钮远不止一分钟，所以必须显式抬高；实测 240 秒不被钳制。
-    /// 观测 hook 用的 250ms 预算在这里是灾难性的——四分之一秒就被杀，
-    /// 然后 fail-open。
+    /// 观测 hook 那点秒级预算在这里是灾难性的——几秒就被杀，然后
+    /// fail-open。
     static let hookTimeoutMilliseconds = 600_000
 
     /// 比 ZCode 的上限早一点收手。让 ZCode 杀掉 hook 永远是 fail-open；

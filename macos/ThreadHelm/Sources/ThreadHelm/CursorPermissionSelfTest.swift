@@ -26,8 +26,8 @@ func runCursorPermissionSelfTest() -> Never {
       "session_id": "conv-7f3a",
       "hook_event_name": "preToolUse",
       "cursor_version": "3.17.21",
-      "workspace_roots": ["/Users/x/code/app"],
-      "cwd": "/Users/x/code/app",
+      "workspace_roots": ["/workspace/app"],
+      "cwd": "/workspace/app",
       "tool_name": "Shell",
       "tool_use_id": "toolu-11",
       "tool_input": {
@@ -45,7 +45,7 @@ func runCursorPermissionSelfTest() -> Never {
     guard prompt.agentID == .cursor,
           prompt.toolName == "Shell",
           prompt.sessionID == "conv-7f3a",
-          prompt.workingDirectory == "/Users/x/code/app",
+          prompt.workingDirectory == "/workspace/app",
           prompt.message == "清理构建产物",
           prompt.title.contains("Cursor")
     else {

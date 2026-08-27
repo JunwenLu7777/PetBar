@@ -18,14 +18,27 @@ struct OMPAgentAdapter: AgentAdapter {
     private let timeoutStore: OMPToolCallTimeoutStore
 
     var managedIntegrationRelativePaths: [String] {
-        [
-            ".omp/agent/extensions/threadhelm-state-observer",
-            ".omp/agent/\(OMPPermissionHookConstants.tokenFileName)",
-            ".omp/agent/\(OMPManagedSettingsRecord.filename)",
+        managedRelativePaths(for: OMPProfileScope.defaultTarget)
+    }
+
+    /// 每个 profile 都是一套独立的闸门，备份必须覆盖到所有会被写的目录，
+    /// 否则回滚只还原默认那一份。
+    func managedIntegrationRelativePaths(
+        in scope: AgentIntegrationScope
+    ) -> [String] {
+        OMPProfileScope.agentTargets(in: scope).flatMap(managedRelativePaths)
+    }
+
+    private func managedRelativePaths(for target: OMPAgentTarget) -> [String] {
+        let agent = target.agentRelativePath
+        return [
+            target.extensionRelativePath,
+            "\(agent)/\(OMPPermissionHookConstants.tokenFileName)",
+            "\(agent)/\(OMPManagedSettingsRecord.filename)",
             // 抬高 handler 超时要经 `omp config set`，而它会按 schema
             // 重写整份 config.yml、静默丢弃当前版本不认的值。列进受管
             // 路径是为了让安装前的备份覆盖到它。
-            ".omp/agent/config.yml",
+            "\(agent)/config.yml",
         ]
     }
 
@@ -59,9 +72,14 @@ struct OMPAgentAdapter: AgentAdapter {
 
     func integrationStatus(in scope: AgentIntegrationScope) -> AgentIntegrationStatus {
         do {
-            return try OMPExtensionConfiguration.status(
-                in: scope,
-                executablePath: executablePath()
+            return ompAggregatedIntegrationStatus(
+                try OMPProfileScope.agentTargets(in: scope).map { target in
+                    try OMPExtensionConfiguration.status(
+                        in: scope,
+                        target: target,
+                        executablePath: executablePath()
+                    )
+                }
             )
         } catch {
             return agentIntegrationStatusForFailedProbe(error)
@@ -87,40 +105,78 @@ struct OMPAgentAdapter: AgentAdapter {
     func uninstallIntegration(
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationOperationResult {
-        let directory = try ompManagedAgentDirectory(in: scope)
-        // 先撤设置再撤扩展：反过来的话，中途失败会留下一个被我们改过
-        // 却没人认领的超时值。
-        let restoredTimeout = restoreToolCallTimeout(directory: directory)
-        OMPPermissionTokenStore.removeToken(directory: directory)
-        let changed = try OMPExtensionConfiguration.uninstall(in: scope)
-        return (changed || restoredTimeout) ? .uninstalled : .unchanged
+        var changed = false
+        for target in OMPProfileScope.agentTargets(in: scope) {
+            let directory = try ompManagedAgentDirectory(
+                in: scope,
+                target: target
+            )
+            // 先撤设置再撤扩展：反过来的话，中途失败会留下一个被我们改过
+            // 却没人认领的超时值。
+            let restoredTimeout = restoreToolCallTimeout(
+                directory: directory,
+                profile: target.profile
+            )
+            OMPPermissionTokenStore.removeToken(directory: directory)
+            let removedExtension = try OMPExtensionConfiguration.uninstall(
+                in: scope,
+                target: target
+            )
+            changed = changed || restoredTimeout || removedExtension
+        }
+        return changed ? .uninstalled : .unchanged
     }
 
     /// 装扩展、备好令牌、并把 handler 超时抬到人能反应过来的量级。
+    ///
+    /// 每个 profile 都要单独装：装了默认那一套，`--profile` 的会话依旧
+    /// 没有闸门，而且不报错。
     private func prepareGate(in scope: AgentIntegrationScope) throws -> Bool {
-        let directory = try ompManagedAgentDirectory(in: scope)
+        var changed = false
+        for target in OMPProfileScope.agentTargets(in: scope) {
+            changed = try prepareGate(in: scope, target: target) || changed
+        }
+        return changed
+    }
+
+    private func prepareGate(
+        in scope: AgentIntegrationScope,
+        target: OMPAgentTarget
+    ) throws -> Bool {
+        let directory = try ompManagedAgentDirectory(in: scope, target: target)
         // 令牌必须先于扩展落盘：扩展一旦被 OMP 加载就会去读它，读不到
         // 只能按拒绝兜底，把用户挡在自己的工具外面。
+        //
+        // 每个 agent 目录一份令牌：扩展脚本里写的是它自己那份的绝对路径，
+        // 而 profile 目录只有 owner 能进，跨目录共用一份并不更安全，却会
+        // 让「卸载某个 profile」把别人的令牌一起删掉。
         try OMPPermissionTokenStore.ensureToken(directory: directory)
-        let raisedTimeout = raiseToolCallTimeoutIfNeeded(directory: directory)
+        let raisedTimeout = raiseToolCallTimeoutIfNeeded(
+            directory: directory,
+            profile: target.profile
+        )
         let changed = try OMPExtensionConfiguration.install(
             in: scope,
+            target: target,
             executablePath: executablePath()
         )
         return changed || raisedTimeout
     }
 
-    private func raiseToolCallTimeoutIfNeeded(directory: URL) -> Bool {
+    private func raiseToolCallTimeoutIfNeeded(
+        directory: URL,
+        profile: String?
+    ) -> Bool {
         // 已经记过原值就说明这次是重复安装，不能再记一次——否则第二次
         // 会把我们自己写的值当成用户的原值，卸载时还原不回去。
         guard OMPManagedSettingsRecord.previousTimeout(directory: directory)
             == nil
         else { return false }
-        let current = timeoutStore.read()
+        let current = timeoutStore.read(profile: profile)
         guard case .raise(let from, let to) = ompToolCallTimeoutPlan(
             currentValue: current
         ) else { return false }
-        guard timeoutStore.write(to) else { return false }
+        guard timeoutStore.write(to, profile: profile) else { return false }
         try? OMPManagedSettingsRecord.write(
             previousTimeout: from,
             directory: directory
@@ -128,17 +184,20 @@ struct OMPAgentAdapter: AgentAdapter {
         return true
     }
 
-    private func restoreToolCallTimeout(directory: URL) -> Bool {
+    private func restoreToolCallTimeout(
+        directory: URL,
+        profile: String?
+    ) -> Bool {
         guard let previous = OMPManagedSettingsRecord.previousTimeout(
             directory: directory
         ) else { return false }
         switch previous {
         case .some(let value):
-            _ = timeoutStore.write(value)
+            _ = timeoutStore.write(value, profile: profile)
         case .none:
             // 我们改之前用户根本没设过这个键，还原就是把它清掉，
             // 而不是写回默认值——那会留下一条用户没写过的配置。
-            _ = timeoutStore.reset()
+            _ = timeoutStore.reset(profile: profile)
         }
         OMPManagedSettingsRecord.remove(directory: directory)
         return true
@@ -212,8 +271,6 @@ enum OMPExtensionConfigurationError: Error, Equatable {
 }
 
 enum OMPExtensionConfiguration {
-    private static let extensionDirectoryPath =
-        ".omp/agent/extensions/threadhelm-state-observer"
     private static let scriptFilename = "index.ts"
     private static let ownershipFilename = ".threadhelm-owner"
     private static let marker = "threadhelm-managed-state-observer-v1"
@@ -221,10 +278,15 @@ enum OMPExtensionConfiguration {
 
     static func status(
         in scope: AgentIntegrationScope,
+        target: OMPAgentTarget = OMPProfileScope.defaultTarget,
         executablePath: String,
         fileManager: FileManager = .default
     ) throws -> AgentIntegrationStatus {
-        let directoryURL = try extensionDirectoryURL(in: scope, for: .read)
+        let directoryURL = try extensionDirectoryURL(
+            in: scope,
+            target: target,
+            for: .read
+        )
         let scriptURL = directoryURL.appendingPathComponent(scriptFilename)
         guard fileManager.fileExists(atPath: directoryURL.path) else {
             return .notInstalled
@@ -236,7 +298,10 @@ enum OMPExtensionConfiguration {
         else {
             return .needsRepair
         }
-        return script == scriptContent(executablePath: executablePath)
+        return script == scriptContent(
+            executablePath: executablePath,
+            tokenPath: try tokenPath(in: scope, target: target, for: .read)
+        )
             ? .installed
             : .needsRepair
     }
@@ -244,10 +309,11 @@ enum OMPExtensionConfiguration {
     @discardableResult
     static func install(
         in scope: AgentIntegrationScope,
+        target: OMPAgentTarget = OMPProfileScope.defaultTarget,
         executablePath: String,
         fileManager: FileManager = .default
     ) throws -> Bool {
-        let directoryURL = try extensionDirectoryURL(in: scope)
+        let directoryURL = try extensionDirectoryURL(in: scope, target: target)
         if fileManager.fileExists(atPath: directoryURL.path),
            !isOwned(directoryURL: directoryURL)
         {
@@ -255,6 +321,7 @@ enum OMPExtensionConfiguration {
         }
         if try status(
             in: scope,
+            target: target,
             executablePath: executablePath,
             fileManager: fileManager
         ) == .installed {
@@ -275,7 +342,10 @@ enum OMPExtensionConfiguration {
             fileManager: fileManager
         )
         try atomicWrite(
-            Data(scriptContent(executablePath: executablePath).utf8),
+            Data(scriptContent(
+                executablePath: executablePath,
+                tokenPath: try tokenPath(in: scope, target: target)
+            ).utf8),
             to: directoryURL.appendingPathComponent(scriptFilename),
             fileManager: fileManager
         )
@@ -285,9 +355,10 @@ enum OMPExtensionConfiguration {
     @discardableResult
     static func uninstall(
         in scope: AgentIntegrationScope,
+        target: OMPAgentTarget = OMPProfileScope.defaultTarget,
         fileManager: FileManager = .default
     ) throws -> Bool {
-        let directoryURL = try extensionDirectoryURL(in: scope)
+        let directoryURL = try extensionDirectoryURL(in: scope, target: target)
         guard fileManager.fileExists(atPath: directoryURL.path) else {
             return false
         }
@@ -300,16 +371,40 @@ enum OMPExtensionConfiguration {
 
     static func extensionDirectoryURL(
         in scope: AgentIntegrationScope,
+        target: OMPAgentTarget = OMPProfileScope.defaultTarget,
         for access: AgentIntegrationAccess = .write
     ) throws -> URL {
-        try scope.managedURL(relativePath: extensionDirectoryPath, for: access)
+        try scope.managedURL(
+            relativePath: target.extensionRelativePath,
+            for: access
+        )
+    }
+
+    /// 扩展脚本读的是**自己那个 agent 目录**里的令牌。
+    ///
+    /// status 与 install 必须用同一套推导，否则装完立刻会被判成 needsRepair：
+    /// 内容比对里含这条路径。
+    static func tokenPath(
+        in scope: AgentIntegrationScope,
+        target: OMPAgentTarget,
+        for access: AgentIntegrationAccess = .write
+    ) throws -> String {
+        let agentDirectory = try scope.managedURL(
+            relativePath: target.agentRelativePath,
+            for: access
+        )
+        return OMPPermissionTokenStore.tokenURL(directory: agentDirectory).path
     }
 
     static func generatedFilesForSelfTest(
-        executablePath: String = "/tmp/ThreadHelm"
+        executablePath: String = "/tmp/ThreadHelm",
+        tokenPath: String = OMPPermissionTokenStore.tokenURL().path
     ) -> [String: String] {
         [
-            scriptFilename: scriptContent(executablePath: executablePath),
+            scriptFilename: scriptContent(
+                executablePath: executablePath,
+                tokenPath: tokenPath
+            ),
             ownershipFilename: ownershipContent,
         ]
     }
@@ -330,7 +425,10 @@ enum OMPExtensionConfiguration {
             ?? fallback
     }
 
-    private static func scriptContent(executablePath: String) -> String {
+    private static func scriptContent(
+        executablePath: String,
+        tokenPath: String
+    ) -> String {
         let encodedPath = jsonString(executablePath, fallback: "\"/usr/bin/true\"")
         let encodedGateURL = jsonString(
             OMPPermissionHookConstants.url,
@@ -338,10 +436,7 @@ enum OMPExtensionConfiguration {
         )
         // 令牌路径写进脚本，令牌本身不写：轮换时不必重写扩展，
         // 而扩展文件的权限也不必按机密对待。
-        let encodedTokenPath = jsonString(
-            OMPPermissionTokenStore.tokenURL().path,
-            fallback: "\"\""
-        )
+        let encodedTokenPath = jsonString(tokenPath, fallback: "\"\"")
         return """
         // \(marker)
         import type {

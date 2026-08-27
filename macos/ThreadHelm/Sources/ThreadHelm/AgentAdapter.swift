@@ -375,6 +375,11 @@ func agentRuntimeStatusesWithActivity(
 protocol AgentAdapter {
     var metadata: AgentMetadata { get }
     var managedIntegrationRelativePaths: [String] { get }
+    /// 受管路径可能取决于 scope 里的现状：OMP 的 profile 目录要运行时枚举
+    /// 才知道。默认回落到静态列表，只有需要枚举的适配器才实现这条。
+    func managedIntegrationRelativePaths(
+        in scope: AgentIntegrationScope
+    ) -> [String]
     func discover() -> AgentDiscovery
     func integrationStatus(in scope: AgentIntegrationScope) -> AgentIntegrationStatus
     func installIntegration(
@@ -397,6 +402,12 @@ protocol AgentAdapter {
 
 extension AgentAdapter {
     var managedIntegrationRelativePaths: [String] { [] }
+
+    func managedIntegrationRelativePaths(
+        in scope: AgentIntegrationScope
+    ) -> [String] {
+        managedIntegrationRelativePaths
+    }
 
     func discover() -> AgentDiscovery {
         AgentDiscovery(

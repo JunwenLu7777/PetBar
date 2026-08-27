@@ -11,6 +11,7 @@ func runOMPAgentAdapterSelfTest() {
     do {
         try runOMPDelayedVersionDiscoverySelfTest()
         try runOMPIntegrationLifecycleSelfTest()
+        try runOMPProfileScopeSelfTest()
         try runOMPStateOnlyContractSelfTest()
         try runOMPStrictRequirementSelfTest()
         let extensionLoad = try runOMPGeneratedExtensionLoadSelfTest()
@@ -19,6 +20,7 @@ func runOMPAgentAdapterSelfTest() {
         try runOMPLocalSessionContentSelfTest()
         print(
             "omp-agent-adapter-self-test: lifecycle=install+repeat+status+repair+repeat-uninstall+partial+preserve+live-home-guard "
+                + "profiles=enumerate+per-profile-gate+own-token+late-profile-needs-repair+per-profile-timeout "
                 + "navigation=resume-dispatch+no-control-fields+"
                 + "installed-jiti-load=\(extensionLoad.rawValue) "
                 + "events=offline+slow+malformed+duplicate+out-of-order+shutdown-stale "
@@ -106,6 +108,148 @@ private enum OMPAgentAdapterSelfTestError: Error, CustomStringConvertible {
         switch self {
         case .failed(let message): return message
         }
+    }
+}
+
+/// `--profile` 会把整套配置搬到 `~/.omp/profiles/<name>/agent`，所以闸门
+/// 必须按 profile 分别装。这条锁住的正是那次静默失效：只装默认目录时，
+/// profile 会话完全没有闸门，而状态却报 installed。
+private func runOMPProfileScopeSelfTest() throws {
+    let manager = FileManager.default
+    let root = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-omp-profile-self-test-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? manager.removeItem(at: root) }
+
+    func makeDirectory(_ relativePath: String) throws {
+        try manager.createDirectory(
+            at: root.appendingPathComponent(relativePath, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+
+    try makeDirectory(".omp/agent")
+    try makeDirectory(".omp/profiles/alpha/agent")
+    // 大写不合 OMP 的 profile 名规则，`default` 等同于不带 profile，
+    // 二者都不该被当成独立 profile。
+    try makeDirectory(".omp/profiles/Beta/agent")
+    try makeDirectory(".omp/profiles/default/agent")
+    try Data("notes".utf8).write(
+        to: root.appendingPathComponent(".omp/profiles/notes.txt")
+    )
+
+    let scope = AgentIntegrationScope.isolated(at: root)
+    guard OMPProfileScope.profileNames(in: scope) == ["alpha"] else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "profile enumeration: \(OMPProfileScope.profileNames(in: scope))"
+        )
+    }
+
+    // 默认那份用户已经调得够大，只有 profile 需要抬高——本机就是这个样子。
+    let store = InMemoryOMPToolCallTimeoutStore(value: 600_000)
+    let adapter = OMPAgentAdapter(
+        discovery: {
+            AgentDiscovery(
+                isInstalled: true,
+                version: "17.3.5",
+                compatibility: .validated
+            )
+        },
+        executablePath: { "/tmp/ThreadHelm" },
+        resumeSession: { _ in false },
+        timeoutStore: store
+    )
+
+    let defaultExtension = root.appendingPathComponent(
+        ".omp/agent/extensions/threadhelm-state-observer",
+        isDirectory: true
+    )
+    let profileExtension = root.appendingPathComponent(
+        ".omp/profiles/alpha/agent/extensions/threadhelm-state-observer",
+        isDirectory: true
+    )
+
+    guard try adapter.installIntegration(in: scope) == .installed,
+          manager.fileExists(atPath: defaultExtension.path),
+          manager.fileExists(atPath: profileExtension.path),
+          adapter.integrationStatus(in: scope) == .installed
+    else {
+        throw OMPAgentAdapterSelfTestError.failed("per-profile install")
+    }
+
+    // 超时是 profile 作用域的：只有 alpha 被抬高，用户自己设的默认值不动。
+    guard store.value(profile: nil) == 600_000,
+          store.value(profile: "alpha") == 600_000,
+          store.writeCount == 1
+    else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "per-profile timeout writes=\(store.writeCount)"
+        )
+    }
+
+    // 每个 profile 的扩展读自己那份令牌。指向默认目录会让 status 与 install
+    // 用不同路径比对，装完立刻判成 needsRepair。
+    let profileScript = try String(
+        contentsOf: profileExtension.appendingPathComponent("index.ts"),
+        encoding: .utf8
+    )
+    let profileToken = root.appendingPathComponent(
+        ".omp/profiles/alpha/agent/\(OMPPermissionHookConstants.tokenFileName)"
+    ).path
+    guard profileScript.contains(profileToken),
+          manager.fileExists(atPath: profileToken)
+    else {
+        throw OMPAgentAdapterSelfTestError.failed("per-profile token path")
+    }
+
+    // 只丢掉 profile 那一套，默认那套还在——这正是修复前会被报成
+    // installed 的状态。
+    try manager.removeItem(at: profileExtension)
+    guard adapter.integrationStatus(in: scope) == .needsRepair else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "missing profile gate must not report installed"
+        )
+    }
+    guard try adapter.repairIntegration(in: scope) == .repaired,
+          adapter.integrationStatus(in: scope) == .installed
+    else {
+        throw OMPAgentAdapterSelfTestError.failed("profile repair")
+    }
+
+    // 安装之后新建的 profile 同样没有闸门，状态必须诚实地掉下来。
+    try makeDirectory(".omp/profiles/gamma/agent")
+    guard adapter.integrationStatus(in: scope) == .needsRepair else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "profile created after install must not report installed"
+        )
+    }
+
+    guard try adapter.uninstallIntegration(in: scope) == .uninstalled,
+          !manager.fileExists(atPath: defaultExtension.path),
+          !manager.fileExists(atPath: profileExtension.path),
+          adapter.integrationStatus(in: scope) == .notInstalled
+    else {
+        throw OMPAgentAdapterSelfTestError.failed("per-profile uninstall")
+    }
+    // 只有被我们改过的那份要还原，默认那份从来没被改过。
+    guard store.resetCount == 1,
+          store.value(profile: "alpha") == nil,
+          store.value(profile: nil) == 600_000
+    else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "per-profile timeout restore resets=\(store.resetCount)"
+        )
+    }
+
+    // 备份路径必须覆盖到每个 profile，否则回滚只还原默认那一份。
+    let backupPaths = adapter.managedIntegrationRelativePaths(in: scope)
+    guard backupPaths.contains(
+        ".omp/profiles/alpha/agent/config.yml"
+    ), backupPaths.contains(".omp/agent/config.yml") else {
+        throw OMPAgentAdapterSelfTestError.failed(
+            "managed backup paths miss profiles: \(backupPaths)"
+        )
     }
 }
 

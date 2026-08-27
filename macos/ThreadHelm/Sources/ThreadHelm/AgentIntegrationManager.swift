@@ -100,7 +100,10 @@ struct AgentIntegrationManager {
         }
 
         let backupStore = AgentIntegrationBackupStore(scope: scope)
-        let relativePaths = managedRelativePaths(for: targetAgentID)
+        let relativePaths = managedRelativePaths(
+            in: scope,
+            for: targetAgentID
+        )
         let backup: AgentIntegrationBackup
         do {
             backup = try backupStore.create(relativePaths: relativePaths)
@@ -208,12 +211,15 @@ struct AgentIntegrationManager {
         }
     }
 
-    private func managedRelativePaths(for targetAgentID: AgentID? = nil) -> [String] {
+    private func managedRelativePaths(
+        in scope: AgentIntegrationScope,
+        for targetAgentID: AgentID? = nil
+    ) -> [String] {
         var seen: Set<String> = []
         let candidateIDs = targetAgentID.map { [$0] } ?? registry.agentIDs
         return candidateIDs.flatMap { agentID -> [String] in
-            registry.adapter(for: agentID)?.managedIntegrationRelativePaths
-                ?? []
+            registry.adapter(for: agentID)?
+                .managedIntegrationRelativePaths(in: scope) ?? []
         }.filter { seen.insert($0).inserted }
     }
 }

@@ -90,8 +90,8 @@ enum ZCodeHookConfiguration {
     private static let legacyConfigOwnershipContent = Data(
         "threadhelm-managed-zcode-config-v1\n".utf8
     )
-    /// 只观测、不干预的事件。它们走 --agent-hook 快速通道，250ms 预算，
-    /// 超时即放行。
+    /// 只观测、不干预的事件。它们走 --agent-hook 快速通道，hook 自己以
+    /// 亚秒预算为限，到点即放弃上报；注册超时只是兜底。
     static let observationEvents = [
         "SessionStart",
         "UserPromptSubmit",
@@ -102,8 +102,8 @@ enum ZCodeHookConfiguration {
     ]
 
     /// 审批事件走完全不同的形状：另一个旗标、另一套超时预算，而且会
-    /// 一直阻塞到用户裁决。混进观测列表会让它按 250ms 被杀掉，然后
-    /// fail-open——工具照跑，用户什么都看不到。
+    /// 一直阻塞到用户裁决。混进观测列表会让它按观测那点秒级预算被杀掉，
+    /// 然后 fail-open——工具照跑，用户什么都看不到。
     static let permissionEvent = "PermissionRequest"
 
     static let managedEvents = observationEvents + [permissionEvent]
@@ -507,7 +507,8 @@ enum ZCodeHookConfiguration {
             "type": "process",
             "command": executablePath,
             "args": ["--agent-hook", "zcode", eventName],
-            "timeoutMs": 250,
+            "timeoutMs": AgentHookCommandContract
+                .observationHookTimeoutMilliseconds,
             "statusMessage": managedStatusMessage,
         ]
     }

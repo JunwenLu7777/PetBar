@@ -266,7 +266,13 @@ func runOMPPermissionSelfTest() -> Never {
         fail("放行未要求裁决显式为 false")
     }
     // 令牌路径写进脚本，令牌本身不能写进去——扩展文件不是机密文件。
-    let expectedTokenPath = OMPPermissionTokenStore.tokenURL().path
+    // 路径必须落在这次安装的 scope 里：写死真实家目录会让隔离安装出来的
+    // 扩展去读本机令牌，而每个 profile 也各有自己那一份。
+    let expectedTokenPath = OMPPermissionTokenStore.tokenURL(
+        directory: scopeRoot.appendingPathComponent(
+            OMPProfileScope.defaultAgentRelativePath
+        )
+    ).path
     guard script.contains(expectedTokenPath) else {
         let tokenLine = script
             .components(separatedBy: "\n")

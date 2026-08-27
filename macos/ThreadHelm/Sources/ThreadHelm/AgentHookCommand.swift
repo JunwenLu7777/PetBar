@@ -17,6 +17,15 @@ enum AgentHookCommandContract {
     // （Cursor 默认 60 秒且可配，ZCode 默认 60 秒），但那是给审批用的；
     // 观测这条自己收紧到亚秒级，超时即放弃本次上报。
     static let synchronousBudget: TimeInterval = 0.75
+    /// 观测 hook 在厂商配置里注册的超时，必须严格大于 synchronousBudget
+    /// 加上进程启动。到点放弃是 hook 自己的事，厂商这道超时只是兜底；
+    /// 注册值小于自身预算等于让厂商在 hook 自愿退出前把它杀掉，那次上报
+    /// 就永久丢失，而且两边都不会报错。
+    ///
+    /// 本机 2026-08-22 的 8 次 UserPromptSubmit 全部失败，耗时 258–320ms，
+    /// 正好压在当时注册的 250ms 上——温启动只要几毫秒，冷启动却要付
+    /// 二进制换页和运行时初始化，250ms 连启动都盖不住。
+    static let observationHookTimeoutMilliseconds = 2_000
 }
 
 enum AgentHookInput {

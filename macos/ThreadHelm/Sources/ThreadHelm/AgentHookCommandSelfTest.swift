@@ -9,6 +9,8 @@ import Darwin
 import Foundation
 
 func runAgentHookCommandSelfTest() {
+    runObservationHookTimeoutBudgetSelfTest()
+
     let arbitraryOverride = "/tmp/threadhelm-arbitrary-redirect.sock"
     guard agentEventSocketURL(environment: [
         "THREADHELM_AGENT_EVENT_SOCKET": arbitraryOverride,
@@ -187,6 +189,33 @@ func runAgentHookCommandSelfTest() {
 
     runAgentHookInputDeadlineSelfTest()
     runAgentHookDropSelfTest()
+}
+
+/// 注册给厂商的观测超时必须盖住 hook 自己的预算加上进程启动。
+///
+/// 两个数字分处不同文件，谁都可能被单独调小，而调小之后不报错也不留痕：
+/// 厂商在 hook 自愿退出前把它杀掉，那次上报静默消失。这里把关系钉死。
+private func runObservationHookTimeoutBudgetSelfTest() {
+    let registered = AgentHookCommandContract
+        .observationHookTimeoutMilliseconds
+    let ownBudget = Int(
+        (AgentHookCommandContract.synchronousBudget * 1_000).rounded(.up)
+    )
+    // 冷启动实测要付二进制换页和运行时初始化，本机曾把 250ms 全部吃满。
+    // 留出至少一倍自身预算的启动余量，别再让注册值贴着 hook 的上限。
+    guard registered >= ownBudget * 2 else {
+        failAgentHookCommandSelfTest(
+            "observation hook timeout \(registered)ms leaves no startup "
+                + "margin over its own \(ownBudget)ms budget"
+        )
+    }
+    // 观测这条不该占用审批级预算——真拖到那个量级就该当审批 hook 设计。
+    guard registered <= 10_000 else {
+        failAgentHookCommandSelfTest(
+            "observation hook timeout \(registered)ms is an approval-sized "
+                + "budget"
+        )
+    }
 }
 
 private func runAgentHookInputDeadlineSelfTest() {

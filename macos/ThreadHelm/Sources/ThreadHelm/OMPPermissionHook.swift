@@ -265,11 +265,12 @@ enum OMPPermissionProtocol {
 }
 
 /// 受管的 OMP agent 目录。走 scope 而不是直接拼 home，隔离自测才能把
-/// 写入关在临时目录里。
+/// 写入关在临时目录里。目标默认是不带 profile 的那一份。
 func ompManagedAgentDirectory(
-    in scope: AgentIntegrationScope
+    in scope: AgentIntegrationScope,
+    target: OMPAgentTarget = OMPProfileScope.defaultTarget
 ) throws -> URL {
-    try scope.managedURL(relativePath: ".omp/agent")
+    try scope.managedURL(relativePath: target.agentRelativePath)
 }
 
 /// 读写 handler 超时都经 `omp config`，不直接改 config.yml。
@@ -278,12 +279,25 @@ func ompManagedAgentDirectory(
 /// YAML 既要处理注释、锚点与流式/块式差异，又要跟它的锁抢——让 OMP 改
 /// 自己的配置更稳妥。实测在真实配置上只会把流式序列展开成块式，语义无损。
 enum OMPConfigCommand {
+    /// 指定要读写哪个 profile 的配置。
+    ///
+    /// 用 `--profile` 而不是自己去拼 `~/.omp/profiles/<name>/config.yml`：
+    /// 让 OMP 走它自己的 schema 与写锁，理由和不手写 YAML 是同一条。
+    private static func profileArguments(_ profile: String?) -> [String] {
+        guard let profile else { return [] }
+        return ["--profile", profile]
+    }
+
     static func read(
+        profile: String? = nil,
         key: String = OMPPermissionHookConstants.settingsKey,
         run: (URL, [String]) -> (status: Int32, output: String)? = runOMPProcess
     ) -> Int? {
         guard let executable = locateOMPExecutable(),
-              let result = run(executable, ["config", "get", key]),
+              let result = run(
+                  executable,
+                  profileArguments(profile) + ["config", "get", key]
+              ),
               result.status == 0
         else { return nil }
         return parseTimeoutOutput(result.output)
@@ -292,22 +306,31 @@ enum OMPConfigCommand {
     @discardableResult
     static func write(
         _ value: Int,
+        profile: String? = nil,
         key: String = OMPPermissionHookConstants.settingsKey,
         run: (URL, [String]) -> (status: Int32, output: String)? = runOMPProcess
     ) -> Bool {
         guard let executable = locateOMPExecutable(),
-              let result = run(executable, ["config", "set", key, "\(value)"])
+              let result = run(
+                  executable,
+                  profileArguments(profile)
+                      + ["config", "set", key, "\(value)"]
+              )
         else { return false }
         return result.status == 0
     }
 
     @discardableResult
     static func reset(
+        profile: String? = nil,
         key: String = OMPPermissionHookConstants.settingsKey,
         run: (URL, [String]) -> (status: Int32, output: String)? = runOMPProcess
     ) -> Bool {
         guard let executable = locateOMPExecutable(),
-              let result = run(executable, ["config", "reset", key])
+              let result = run(
+                  executable,
+                  profileArguments(profile) + ["config", "reset", key]
+              )
         else { return false }
         return result.status == 0
     }
@@ -380,10 +403,12 @@ private func runOMPProcess(
 /// `omp config set` 改的是用户真实配置，AgentIntegrationScope 那套隔离
 /// 只管得住文件写入，管不住子进程。自测必须能换成内存实现，否则跑一次
 /// 自测就会改掉本机 OMP 的设置。
+/// 每个 profile 是一份独立配置，所以读写都要指明改的是哪一份。
+/// profile 为 nil 表示默认那份（不带 `--profile` 的会话）。
 protocol OMPToolCallTimeoutStore {
-    func read() -> Int?
-    func write(_ value: Int) -> Bool
-    func reset() -> Bool
+    func read(profile: String?) -> Int?
+    func write(_ value: Int, profile: String?) -> Bool
+    func reset(profile: String?) -> Bool
 }
 
 struct OMPConfigCommandTimeoutStore: OMPToolCallTimeoutStore {
@@ -397,43 +422,65 @@ struct OMPConfigCommandTimeoutStore: OMPToolCallTimeoutStore {
         self.isSelfTest = isSelfTest
     }
 
-    func read() -> Int? { OMPConfigCommand.read() }
+    func read(profile: String?) -> Int? {
+        OMPConfigCommand.read(profile: profile)
+    }
 
     // 自测里漏注入内存实现太容易了——这条路径真的发生过，一次自测就
     // 改掉了本机 OMP 的设置。护栏放在最靠近副作用的地方：自测进程一律
     // 不许写。漏注入会让断言失败，而不是悄悄改用户配置。
-    func write(_ value: Int) -> Bool {
+    func write(_ value: Int, profile: String?) -> Bool {
         guard !isSelfTest else { return false }
-        return OMPConfigCommand.write(value)
+        return OMPConfigCommand.write(value, profile: profile)
     }
 
-    func reset() -> Bool {
+    func reset(profile: String?) -> Bool {
         guard !isSelfTest else { return false }
-        return OMPConfigCommand.reset()
+        return OMPConfigCommand.reset(profile: profile)
     }
 }
 
 /// 只在内存里记账的实现，供隔离自测使用。
 final class InMemoryOMPToolCallTimeoutStore: OMPToolCallTimeoutStore {
-    private(set) var value: Int?
+    /// 按 profile 分别记账。共用一格会让「默认装了、profile 没装」这种
+    /// 混合状态在自测里看不出来，而那正是要防的回归。
+    private(set) var valuesByProfile: [String: Int] = [:]
     private(set) var writeCount = 0
     private(set) var resetCount = 0
 
+    /// nil profile 在字典里没法当键，用一个不可能与真实 profile 名重合的
+    /// 桶：OMP 的 profile 名不允许出现 `/`。
+    private static let defaultProfileKey = "/default"
+
     init(value: Int? = nil) {
-        self.value = value
+        if let value {
+            valuesByProfile[Self.defaultProfileKey] = value
+        }
     }
 
-    func read() -> Int? { value }
+    var value: Int? { valuesByProfile[Self.defaultProfileKey] }
 
-    func write(_ newValue: Int) -> Bool {
-        value = newValue
+    func value(profile: String?) -> Int? {
+        valuesByProfile[Self.key(profile)]
+    }
+
+    func read(profile: String?) -> Int? {
+        valuesByProfile[Self.key(profile)]
+    }
+
+    func write(_ newValue: Int, profile: String?) -> Bool {
+        valuesByProfile[Self.key(profile)] = newValue
         writeCount += 1
         return true
     }
 
-    func reset() -> Bool {
-        value = nil
+    func reset(profile: String?) -> Bool {
+        valuesByProfile.removeValue(forKey: Self.key(profile))
         resetCount += 1
         return true
+    }
+
+    private static func key(_ profile: String?) -> String {
+        profile ?? defaultProfileKey
     }
 }

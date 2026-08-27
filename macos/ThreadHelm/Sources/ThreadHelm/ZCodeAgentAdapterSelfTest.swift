@@ -718,7 +718,8 @@ private func runZCodeSemanticMergeSelfTest(at root: URL) throws {
           owned["command"] as? String == "/tmp/threadhelm-zcode-adapter",
           owned["args"] as? [String]
             == ["--agent-hook", "zcode", "SessionStart"],
-          owned["timeoutMs"] as? Int == 250
+          owned["timeoutMs"] as? Int
+            == AgentHookCommandContract.observationHookTimeoutMilliseconds
     else {
         throw ZCodeSelfTestError.failure(
             "official hooks.events schema/order/managed process hook"
@@ -1074,7 +1075,8 @@ private func zcodeSelfTestOwnedHook(
         "type": "process",
         "command": executablePath,
         "args": ["--agent-hook", "zcode", eventName],
-        "timeoutMs": 250,
+        "timeoutMs": AgentHookCommandContract
+            .observationHookTimeoutMilliseconds,
         "statusMessage": "ThreadHelm state observer",
     ]
 }
