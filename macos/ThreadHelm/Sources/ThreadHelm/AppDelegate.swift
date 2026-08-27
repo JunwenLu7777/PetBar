@@ -60,8 +60,9 @@ struct AgentAutoIntegrationBackoffKey: Hashable {
 enum AgentIntegrationAccountingOutcome: Equatable {
     /// 真正收敛：清失败计数。
     case succeeded
-    /// 版本门禁跳过。不写盘，但要退避，否则每个周期都会重试同一个未验证版本。
-    case skippedUnvalidated
+    /// 没写盘也没失败——现在只剩一个来源：该 Agent 本机不在，没有宿主可写。
+    /// 仍然要退避，否则每个周期都会为同一个缺席的 Agent 重试一次。
+    case skippedHostAbsent
     /// 抛错，或写入报告成功但重新探测未收敛。
     case failed
 }
@@ -75,9 +76,10 @@ func agentIntegrationAccountingOutcome(
 ) -> AgentIntegrationAccountingOutcome {
     if threw { return .failed }
     if result == .unchanged {
-        // `.unchanged` 有两个来源：版本门禁跳过，以及配置其实已就位的幂等
-        // no-op。后者是成功语义，记成失败会让真正需要的自动集成被退避压制。
-        return statusAfter == .installed ? .succeeded : .skippedUnvalidated
+        // `.unchanged` 有两个来源：宿主不在所以没写，以及配置其实已就位的
+        // 幂等 no-op。后者是成功语义，记成失败会让真正需要的自动集成被
+        // 退避压制。
+        return statusAfter == .installed ? .succeeded : .skippedHostAbsent
     }
     if result == .installed || result == .repaired {
         return statusAfter == .installed ? .succeeded : .failed
@@ -92,6 +94,10 @@ struct AgentAutoIntegrationCandidate: Equatable {
 
 /// 自动集成的候选选取。双门禁、候选过滤与"一轮只处理一个"都在这里，
 /// 便于自测在不驱动 AppKit 与磁盘的前提下断言。
+///
+/// 版本判定不参与候选过滤：安装本身是可逆的（受管条目带所有权标记、
+/// 装前必备份、卸载只摘自己那几条），而不装就永远拿不到任何证据。
+/// 手动安装在 00a538f 已经解耦，自动这一路再挡着就只剩不一致。
 func agentAutoIntegrationCandidate(
     statuses: [AgentRuntimeStatus],
     isEnabled: Bool,
@@ -101,7 +107,6 @@ func agentAutoIntegrationCandidate(
     guard isEnabled, hasConfirmed else { return nil }
     for status in statuses {
         guard status.discovery.isInstalled,
-              status.discovery.compatibility == .validated,
               status.integrationStatus == .notInstalled
         else {
             continue
@@ -187,6 +192,33 @@ final class AgentAutoIntegrationBackoffGate {
     }
 }
 
+/// 各 Agent 本机版本签名的跨线程只读缓存。
+final class AgentVersionSignatureCache {
+    private let lock = NSLock()
+    private var signatures: [AgentID: String] = [:]
+
+    func update(from statuses: [AgentRuntimeStatus]) {
+        var updated: [AgentID: String] = [:]
+        for status in statuses {
+            guard let signature = agentVersionSignature(
+                status.discovery.versionComponents
+            ) else { continue }
+            updated[status.metadata.id] = signature
+        }
+        lock.lock()
+        // 只覆盖这轮取到版本的那几家。某一轮探测失败不该把上一轮的签名
+        // 抹掉——那会让刚记下的证据凭空变成「版本不明」。
+        signatures.merge(updated) { _, latest in latest }
+        lock.unlock()
+    }
+
+    func signature(for agentID: AgentID) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return signatures[agentID]
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let quotaClient = CodexQuotaClient()
     private let claudeQuotaClient = ClaudeQuotaClient()
@@ -195,6 +227,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let dashboardStore = ActivityDashboardStore()
     private let agentRegistry = AgentRegistry.builtIn
     private let permissionGateLiveness = PermissionGateLivenessStore()
+    /// 审批请求在 hook 服务自己的队列上落地，而 dashboardStore 是主线程独占的。
+    /// 版本签名要在那条路上取，所以单独缓一份带锁的，不去跨线程读快照。
+    private let agentVersionSignatures = AgentVersionSignatureCache()
     private let agentLiveEventStore = AgentLiveEventStore()
     private let agentOpenMeasurementStore = AgentOpenMeasurementStore()
     private let agentAttentionInterruptionGate =
@@ -614,6 +649,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         )
+        // 缓存与 store 都归 AppDelegate 持有，闭包直接强引用缓存即可：
+        // 不经过 self，构不成循环。
+        let versionSignatures = agentVersionSignatures
+        permissionGateLiveness.setVersionSignatureProvider { agentID in
+            versionSignatures.signature(for: agentID)
+        }
         let server = ClaudePermissionHookServer(
             liveness: permissionGateLiveness
         )
@@ -624,16 +665,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             let cachedCodexDesktopRunning = self.cachedCodexDesktopRunning
             let liveCodexDesktopRunning = isCodexDesktopRunning()
-            // 按提问方取版本判据。用 Claude 的兼容性去决定 Codex 的请求
-            // 弹不弹，会让一家的版本漂移连带关掉另一家的闸门。
-            let agentCompatibility = self.dashboardStore.snapshot.agentStatuses
-                .first { $0.metadata.id == prompt.agentID }?
-                .discovery.compatibility ?? .unknown
+            // 取的是**声明**的能力，不是按本机版本折叠过的那份：折叠只说明
+            // 这个版本没跑过真值夹具，不说明 ThreadHelm 答不上这条请求。
+            let permissionCapability = self.agentRegistry
+                .metadata(for: prompt.agentID)?
+                .capabilities.status(for: .inAppPermission) ?? .unknown
             let shouldPresent = shouldPresentPermissionPanel(
                 agentID: prompt.agentID,
                 cachedCodexDesktopRunning: cachedCodexDesktopRunning,
                 liveCodexDesktopRunning: liveCodexDesktopRunning,
-                agentCompatibility: agentCompatibility
+                permissionCapability: permissionCapability
             )
             if liveCodexDesktopRunning != cachedCodexDesktopRunning {
                 self.updateCodexDesktopRunningState(liveCodexDesktopRunning)
@@ -1173,7 +1214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 agentID: agentID,
                 version: version
             )
-        case .skippedUnvalidated, .failed:
+        case .skippedHostAbsent, .failed:
             autoIntegrationBackoffGate.recordFailure(
                 agentID: agentID,
                 version: version
@@ -1262,10 +1303,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let registry = agentRegistry
         let previousStatuses = dashboardStore.snapshot.agentStatuses
+        let livenessRecords = permissionGateLiveness.snapshot()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let probed = probedAgentRuntimeStatuses(
                 registry: registry,
-                preserving: previousStatuses
+                preserving: previousStatuses,
+                gateLivenessRecords: livenessRecords
             )
             let integrationReport = AgentIntegrationManager(registry: registry)
                 .status(
@@ -1291,6 +1334,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     completion?()
                     return
                 }
+                // 先更新签名缓存再写快照：证据要绑在版本上，而审批随时
+                // 可能到达。
+                self.agentVersionSignatures.update(from: withIntegration)
                 self.dashboardStore.update { snapshot in
                     snapshot.agentStatuses = agentRuntimeStatusesWithActivity(
                         withIntegration,

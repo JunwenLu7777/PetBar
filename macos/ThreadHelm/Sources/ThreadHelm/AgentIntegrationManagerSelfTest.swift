@@ -216,9 +216,9 @@ func runAgentIntegrationManagerSelfTest() {
         try runIntegrationManagerInstallGateSelfTest(
             root: root.appendingPathComponent("version-gate", isDirectory: true)
         )
-        try runLegacyClaudeHookVersionGateSelfTest(
+        try runLegacyClaudeHookInstallGateSelfTest(
             root: root.appendingPathComponent(
-                "legacy-claude-version-gate",
+                "legacy-claude-install-gate",
                 isDirectory: true
             )
         )
@@ -679,7 +679,14 @@ private func runIntegrationManagerInstallGateSelfTest(root: URL) throws {
     }
 }
 
-private func runLegacyClaudeHookVersionGateSelfTest(root: URL) throws {
+/// 老的 `--install-claude-hook` 入口在版本漂移时该怎么办。
+///
+/// 断言方向在这里翻过来了。原来它要求「漂移就不写配置」，可那意味着
+/// Claude 每发一版，安装脚本就静默跳过 hook，闸门整个消失，而用户只会
+/// 觉得确认框不弹了——而且没有任何可执行的补救办法，因为他管不了上游
+/// 发版节奏。安装是可逆的（受管条目带所有权标记、装前必备份、卸载只摘
+/// 自己那几条），所以现在只看装没装。
+private func runLegacyClaudeHookInstallGateSelfTest(root: URL) throws {
     let fileManager = FileManager.default
     try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
     let fakeClaudeURL = root.appendingPathComponent("claude")
@@ -715,14 +722,17 @@ private func runLegacyClaudeHookVersionGateSelfTest(root: URL) throws {
         data: output.fileHandleForReading.readDataToEndOfFile(),
         encoding: .utf8
     ) ?? ""
+    let settingsURL = configDirectory.appendingPathComponent("settings.json")
+    let settings = (try? Data(contentsOf: settingsURL))
+        .flatMap { String(data: $0, encoding: .utf8) } ?? ""
     guard process.terminationStatus == 0,
-          message.contains("版本未验证"),
-          !fileManager.fileExists(
-              atPath: configDirectory.appendingPathComponent("settings.json").path
-          )
+          message.contains("已安装"),
+          !message.contains("版本未验证"),
+          settings.contains(ClaudeHookConstants.url)
     else {
         throw IntegrationManagerSelfTestError.assertion(
-            "legacy Claude install wrote configuration for a drifted version"
+            "legacy Claude install must ignore version drift"
+                + "（exit=\(process.terminationStatus) 输出=\(message)）"
         )
     }
 }

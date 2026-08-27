@@ -491,30 +491,43 @@ func runCodexHookSelfTest() -> Never {
         agentID: .codex,
         cachedCodexDesktopRunning: false,
         liveCodexDesktopRunning: false,
-        agentCompatibility: .validated
+        permissionCapability: .supported
     ) else {
         fail("Codex 审批在 Desktop 未运行时被挡住")
     }
-    // 版本未验证仍然不弹：没在这个版本上验过，就不该替它做裁决。
+    // 版本未在基线上验过**也要弹**。这条断言原来是反的：要求
+    // compatibility == .validated，于是上游一发版，请求照常打到面板、
+    // 面板却一言不发地把裁决交回去。对 ZCode 更糟——它的兜底是主动
+    // 拒绝，于是每次工具调用都被自动拒掉。手里攥着一条真实请求，不该
+    // 拿版本号去否定它。
+    guard shouldPresentPermissionPanel(
+        agentID: .codex,
+        cachedCodexDesktopRunning: true,
+        liveCodexDesktopRunning: true,
+        permissionCapability: .unknown
+    ) else {
+        fail("版本漂移不应关掉 Codex 审批")
+    }
+    // 真的没实现这家的闸门时才不弹：那种请求面板答不上来。
     guard !shouldPresentPermissionPanel(
         agentID: .codex,
         cachedCodexDesktopRunning: true,
         liveCodexDesktopRunning: true,
-        agentCompatibility: .unvalidated
+        permissionCapability: .unsupported
     ) else {
-        fail("版本未验证时不应接管 Codex 审批")
+        fail("未支持应用内审批的 Agent 不应接管")
     }
     // Claude 一侧的既有行为不能被这次改动带偏。
     guard !shouldPresentPermissionPanel(
         agentID: .claudeCode,
         cachedCodexDesktopRunning: false,
         liveCodexDesktopRunning: false,
-        agentCompatibility: .validated
+        permissionCapability: .supported
     ), shouldPresentPermissionPanel(
         agentID: .claudeCode,
         cachedCodexDesktopRunning: true,
         liveCodexDesktopRunning: true,
-        agentCompatibility: .validated
+        permissionCapability: .supported
     ) else {
         fail("Claude 的呈现闸门行为被改动带偏")
     }

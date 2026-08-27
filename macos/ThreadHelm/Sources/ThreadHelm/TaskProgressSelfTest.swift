@@ -223,15 +223,15 @@ private func runAutoIntegrationAccountingSelfTest() {
         ),
         .succeeded
     )
-    // 版本门禁跳过：不写盘，但要退避，否则每个周期都重试同一个未验证版本。
+    // 宿主不在：不写盘，但要退避，否则每个周期都会为同一个缺席的 Agent 重试。
     check(
-        "version gate skip",
+        "host absent skip",
         agentIntegrationAccountingOutcome(
             result: .unchanged,
             statusAfter: .notInstalled,
             threw: false
         ),
-        .skippedUnvalidated
+        .skippedHostAbsent
     )
     check(
         "missing result",
@@ -312,11 +312,9 @@ private func runAutoIntegrationCandidateSelfTest() {
         fail("must not run before the one-time confirmation")
     }
 
-    // 候选过滤：未安装、未验证、已集成都不该被选中。
+    // 候选过滤：未安装、已集成、用户停用过的都不该被选中。
     for (label, rejected) in [
         ("not installed", status(.cursor, installed: false, compatibility: .validated, integrationStatus: .notInstalled)),
-        ("unvalidated", status(.cursor, installed: true, compatibility: .unvalidated, integrationStatus: .notInstalled)),
-        ("unknown compatibility", status(.cursor, installed: true, compatibility: .unknown, integrationStatus: .notInstalled)),
         ("already installed", status(.cursor, installed: true, compatibility: .validated, integrationStatus: .installed)),
         ("needs repair", status(.cursor, installed: true, compatibility: .validated, integrationStatus: .needsRepair)),
         ("disabled by user", status(.cursor, installed: true, compatibility: .validated, integrationStatus: .disabled)),
@@ -327,6 +325,28 @@ private func runAutoIntegrationCandidateSelfTest() {
             statuses: [rejected], isEnabled: true, hasConfirmed: true, canAttempt: always
         ) == nil else {
             fail("must not select \(label)")
+        }
+    }
+
+    // 版本漂移照样是候选。原来这里挡着，于是上游一发版自动集成就整条
+    // 静默停摆——而手动安装在 00a538f 已经解耦，两条路各说各话。
+    for compatibility in [
+        AgentCompatibility.unvalidated,
+        .unknown,
+    ] {
+        let drifted = status(
+            .cursor,
+            installed: true,
+            compatibility: compatibility,
+            integrationStatus: .notInstalled
+        )
+        guard agentAutoIntegrationCandidate(
+            statuses: [drifted],
+            isEnabled: true,
+            hasConfirmed: true,
+            canAttempt: always
+        )?.agentID == .cursor else {
+            fail("must still select \(compatibility.rawValue)")
         }
     }
 

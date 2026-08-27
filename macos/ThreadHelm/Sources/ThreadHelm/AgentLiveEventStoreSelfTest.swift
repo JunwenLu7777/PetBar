@@ -335,6 +335,11 @@ func runAgentLiveEventStoreSelfTest() {
     let driftedClaudeItem = unvalidatedProjection.taskCollection.items.first {
         $0.source == .claudeCode
     }
+    // 版本漂移不再吞掉提醒。原来这里断言 attentionReason 被清零、
+    // attentionItems 为空，可同一张卡片写着「等你确认」而"需你"计数是 0，
+    // 本身就自相矛盾；而上游发版是常态，把常态做成降级等于在最需要提醒的
+    // 时候闭嘴。是否打扰用户由 AgentAttentionPolicy 按证据质量判，那才是
+    // 对的轴。
     guard driftedCodexItem?.kind == .waitingForInput,
           driftedCodexItem?.statusText == "等你确认",
           driftedCodexItem?.canOpen == true,
@@ -347,12 +352,15 @@ func runAgentLiveEventStoreSelfTest() {
               $0.kind == .waitingForInput
           }).count == 2,
           unvalidatedProjection.snapshots.allSatisfy({
-              $0.attentionReason == .none && $0.actionability != .viewOnly
+              $0.actionability != .viewOnly
           }),
-          unvalidatedProjection.attentionItems.isEmpty
+          unvalidatedProjection.snapshots.contains(where: {
+              $0.attentionReason != .none
+          }),
+          !unvalidatedProjection.attentionItems.isEmpty
     else {
         failAgentLiveEventStoreSelfTest(
-            "unvalidated versions must preserve waiting state without alerts"
+            "unvalidated versions must keep waiting state and its alerts"
         )
     }
 
@@ -941,11 +949,15 @@ func runAgentLiveEventStoreSelfTest() {
             )
         }
     )
+    // Cursor 这条例外保留：读本机工作区是在**推断**这张卡片属于哪个目录、
+    // 哪个会话，格式一变就可能把别的项目的路径挂到这条会话上，那是错的
+    // 信息而不是缺的信息。摘要不再被替换（钩子事件本身给的文案照用），
+    // 但本机私有内容仍然一个字都不读。
     let boundedCursor = unvalidatedCursorProjection.taskCollection.items.first
     guard !readUnvalidatedCursorDirectory,
           !readUnvalidatedCursorContent,
           boundedCursor?.title == "Cursor 会话",
-          boundedCursor?.activityText == "正在执行",
+          boundedCursor?.activityText == "正在思考",
           boundedCursor?.workingDirectory == nil,
           boundedCursor?.canOpen == true,
           unvalidatedCursorProjection.taskCollection.items.count == 1

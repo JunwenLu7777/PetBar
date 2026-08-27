@@ -222,20 +222,16 @@ func agentDashboardProjection(
         permissionQueue: permissionQueue,
         registry: registry
     )
-    let polledSnapshots = polled.snapshots.map {
-        validationBoundedSnapshot(
-            $0,
-            compatibility: agentCompatibilities[$0.identity.agentID]
-        )
-    }
+    // 版本漂移不再删内容、也不再吞掉提醒。原来这里会把摘要换成
+    // 「正在执行」并把 attentionReason 清零，可是同一张卡片的
+    // projection.publicMessages 照样原样渲染——真要防的内容根本没挡住，
+    // 挡掉的只是那一行摘要和"需你 N"的计数，于是卡片写着「等你确认」
+    // 而计数是 0。上游发版是常态，把常态做成降级只会让面板在最需要
+    // 提醒的时候闭嘴。解析出错的表现是没有内容，不是编出内容。
+    let polledSnapshots = polled.snapshots
     let liveSnapshots = liveReduction.snapshots.filter {
         hookObservedAgentIDs.contains($0.identity.agentID)
             && isDisplayableLiveSnapshot($0)
-    }.map {
-        validationBoundedSnapshot(
-            $0,
-            compatibility: agentCompatibilities[$0.identity.agentID]
-        )
     }
     var snapshotsByKey = Dictionary(
         uniqueKeysWithValues: polledSnapshots.map { ($0.identity.key, $0) }
@@ -256,11 +252,6 @@ func agentDashboardProjection(
     let attentionItems = agentAttentionItems(from: snapshots)
     let fallbackItems = polledCollection.items.filter {
         !overlaidLiveKeys.contains($0.identityKey)
-    }.map {
-        validationBoundedTaskProgressItem(
-            $0,
-            compatibility: agentCompatibilities[$0.source]
-        )
     }
     let eventsByIdentity = Dictionary(
         grouping: liveReduction.events,
@@ -268,32 +259,30 @@ func agentDashboardProjection(
     )
     let liveItems = liveSnapshots.filter {
         overlaidLiveKeys.contains($0.identity.key)
-    }.map { snapshot in
+    }.map { snapshot -> TaskProgressItem in
         let compatibility = agentCompatibilities[snapshot.identity.agentID]
         let events = eventsByIdentity[snapshot.identity.key] ?? []
-        let item: TaskProgressItem
+        // Cursor 这条例外留着。它不是少显示一行摘要的事：读本机工作区
+        // 是在**推断**这张卡片属于哪个目录、哪个会话，格式一变就可能把
+        // 别的项目的路径挂到这条会话上——那是错的信息，不是缺的信息。
+        // 版本是我们对这份本机存储格式唯一的信号。
         if snapshot.identity.agentID == .cursor,
            compatibility != .validated
         {
-            item = taskProgressItem(
+            return taskProgressItem(
                 from: snapshot,
                 events: events,
                 cursorWorkingDirectory: { _ in nil },
                 cursorSessionContent: { _ in nil },
                 ompSessionContent: ompSessionContent
             )
-        } else {
-            item = taskProgressItem(
-                from: snapshot,
-                events: events,
-                cursorWorkingDirectory: cursorWorkingDirectory,
-                cursorSessionContent: cursorSessionContent,
-                ompSessionContent: ompSessionContent
-            )
         }
-        return validationBoundedTaskProgressItem(
-            item,
-            compatibility: compatibility
+        return taskProgressItem(
+            from: snapshot,
+            events: events,
+            cursorWorkingDirectory: cursorWorkingDirectory,
+            cursorSessionContent: cursorSessionContent,
+            ompSessionContent: ompSessionContent
         )
     }
     return AgentDashboardProjection(
@@ -311,83 +300,6 @@ private func isDisplayableLiveSnapshot(_ snapshot: AgentSessionSnapshot) -> Bool
         && nativeID != "unidentified"
         && nativeID != "unknown-session"
         && !nativeID.hasPrefix("unknown-")
-}
-
-private func validationBoundedSnapshot(
-    _ snapshot: AgentSessionSnapshot,
-    compatibility: AgentCompatibility?
-) -> AgentSessionSnapshot {
-    guard compatibility == .validated else {
-        return AgentSessionSnapshot(
-            identity: snapshot.identity,
-            adapterVersion: snapshot.adapterVersion,
-            executionState: snapshot.executionState,
-            attentionReason: .none,
-            actionability: snapshot.actionability,
-            evidenceQuality: snapshot.evidenceQuality,
-            freshness: snapshot.freshness,
-            title: snapshot.title,
-            activitySummary: validationBoundedActivitySummary(
-                for: snapshot.executionState
-            ),
-            workingDirectory: snapshot.workingDirectory,
-            latestEventID: snapshot.latestEventID,
-            updatedAt: snapshot.updatedAt
-        )
-    }
-    return snapshot
-}
-
-private func validationBoundedTaskProgressItem(
-    _ item: TaskProgressItem,
-    compatibility: AgentCompatibility?
-) -> TaskProgressItem {
-    guard compatibility == .validated else {
-        return TaskProgressItem(
-            title: item.title,
-            kind: item.kind,
-            startedAt: item.startedAt,
-            updatedAt: item.updatedAt,
-            source: item.source,
-            activityText: validationBoundedTaskActivityText(for: item.kind),
-            statusOverride: item.statusOverride,
-            threadID: item.threadID,
-            sessionID: item.sessionID,
-            workingDirectory: item.workingDirectory,
-            processID: item.processID,
-            processStartIdentity: item.processStartIdentity,
-            projection: item.projection,
-            allowsAgentOpen: item.canOpen
-        )
-    }
-    return item
-}
-
-private func validationBoundedActivitySummary(
-    for state: ExecutionState
-) -> String? {
-    switch state {
-    case .discovering: return "正在发现会话"
-    case .idle: return "会话空闲"
-    case .running: return "正在执行"
-    case .completed: return "任务已结束"
-    case .failed: return "任务失败"
-    case .stale: return "状态已过期"
-    case .offline: return "会话已离线"
-    }
-}
-
-private func validationBoundedTaskActivityText(
-    for kind: TaskProgressKind
-) -> String? {
-    switch kind {
-    case .reading: return "正在读取状态"
-    case .running: return "正在执行"
-    case .completed: return "任务已结束"
-    case .failed: return "任务失败"
-    case .idle: return "会话空闲"
-    case .waitingForInput: return nil
-    }
 }
 
 struct AgentLiveReductionUpdate {

@@ -130,6 +130,19 @@ func agentVersionDrift(
         : .drifted
 }
 
+/// 把本机版本分量压成一个可比较、可落盘的签名。
+///
+/// 探测证据必须连同「是在哪个版本上取得的」一起记，否则升级之后旧证据会
+/// 替新版本背书——那还是版本猜测，只是换了个方向。分量排序后拼接是为了
+/// 让采集顺序不同的同一版本得到同一个签名。
+func agentVersionSignature(_ components: [AgentVersionComponent]) -> String? {
+    guard !components.isEmpty else { return nil }
+    return components
+        .map { "\($0.key)=\($0.value)" }
+        .sorted()
+        .joined(separator: ";")
+}
+
 func versionValidatedAgentDiscovery(
     agentID: AgentID,
     isInstalled: Bool,
@@ -332,7 +345,8 @@ func agentRuntimeStatusPlaceholders(
 
 func probedAgentRuntimeStatuses(
     registry: AgentRegistry = .builtIn,
-    preserving previousStatuses: [AgentRuntimeStatus] = []
+    preserving previousStatuses: [AgentRuntimeStatus] = [],
+    gateLivenessRecords: [AgentID: PermissionGateLivenessRecord] = [:]
 ) -> [AgentRuntimeStatus] {
     let previousByID = Dictionary(
         uniqueKeysWithValues: previousStatuses.map { ($0.metadata.id, $0) }
@@ -340,7 +354,13 @@ func probedAgentRuntimeStatuses(
     return registry.agentIDs.compactMap { agentID in
         guard let adapter = registry.adapter(for: agentID) else { return nil }
         let previous = previousByID[agentID]
-        let discovery = adapter.discover()
+        // 实测证据优先于版本比对：闸门真的把请求送到过面板，比版本号
+        // 对不对得上更能说明这套集成还在工作。
+        let discovery = probeAdjustedDiscovery(
+            adapter.discover(),
+            agentID: agentID,
+            record: gateLivenessRecords[agentID]
+        )
         let metadata = validationBoundedAgentMetadata(
             adapter.metadata,
             discovery: discovery
@@ -402,7 +422,10 @@ func agentRuntimeStatusesWithGateLiveness(
                 for: .inAppPermission
             ),
             integrationStatus: status.integrationStatus,
-            record: records[status.metadata.id]
+            record: records[status.metadata.id],
+            currentVersionSignature: agentVersionSignature(
+                status.discovery.versionComponents
+            )
         )
         return updated
     }
@@ -1431,8 +1454,13 @@ func printAgentDiscovery() -> Never {
         permitsLiveConfigurationChanges: true
     )
     for adapter in builtInAgentAdapters() {
-        let discovery = adapter.discover()
-        let profile = profiles[adapter.metadata.id]
+        let agentID = adapter.metadata.id
+        let discovery = probeAdjustedDiscovery(
+            adapter.discover(),
+            agentID: agentID,
+            record: livenessRecords[agentID]
+        )
+        let profile = profiles[agentID]
         let bounded = validationBoundedAgentMetadata(
             adapter.metadata,
             discovery: discovery
@@ -1442,13 +1470,18 @@ func printAgentDiscovery() -> Never {
         let liveness = permissionGateLiveness(
             capability: permission,
             integrationStatus: integration,
-            record: livenessRecords[adapter.metadata.id]
+            record: livenessRecords[agentID],
+            currentVersionSignature: agentVersionSignature(
+                discovery.versionComponents
+            )
         )
         let gate: String
         switch liveness {
         case .notApplicable: gate = "n/a"
         case .neverObserved: gate = "unverified"
-        case .verified: gate = "verified"
+        case .verified: gate = "live"
+        case .semanticsVerified: gate = "verified"
+        case .ineffective: gate = "ineffective"
         }
         print(
             "\(adapter.metadata.id.rawValue)"
@@ -1474,7 +1507,12 @@ func printPermissionGateFollowUp() -> Never {
     )
     var pending: [String] = []
     for adapter in builtInAgentAdapters() {
-        let discovery = adapter.discover()
+        let agentID = adapter.metadata.id
+        let discovery = probeAdjustedDiscovery(
+            adapter.discover(),
+            agentID: agentID,
+            record: livenessRecords[agentID]
+        )
         let bounded = validationBoundedAgentMetadata(
             adapter.metadata,
             discovery: discovery
@@ -1482,24 +1520,117 @@ func printPermissionGateFollowUp() -> Never {
         let liveness = permissionGateLiveness(
             capability: bounded.capabilities.status(for: .inAppPermission),
             integrationStatus: adapter.integrationStatus(in: scope),
-            record: livenessRecords[adapter.metadata.id]
-        )
-        guard liveness == .neverObserved else { continue }
-        if adapter.metadata.id == .codex {
-            pending.append(
-                "  \(bounded.shortName)：闸门尚未验证。"
-                    + "Codex 启动时若提示 “Hooks need review”，请选 Trust；"
-                    + "未信任时 Codex 会静默跳过 hook。"
+            record: livenessRecords[agentID],
+            currentVersionSignature: agentVersionSignature(
+                discovery.versionComponents
             )
-        } else {
+        )
+        switch liveness {
+        case .notApplicable, .semanticsVerified:
+            continue
+        case .neverObserved:
+            if agentID == .codex {
+                pending.append(
+                    "  \(bounded.shortName)：闸门尚未验证。"
+                        + "Codex 启动时若提示 “Hooks need review”，请选 Trust；"
+                        + "未信任时 Codex 会静默跳过 hook。"
+                )
+            } else {
+                pending.append(
+                    "  \(bounded.shortName)：闸门尚未验证——还没收到过审批请求。"
+                )
+            }
+        case .verified:
+            // 连通已经证实，还差最后一层：拒绝到底拦不拦得住。这一层
+            // 只有用户看得见，所以只能请他确认一次，每个版本一次。
             pending.append(
-                "  \(bounded.shortName)：闸门尚未验证——还没收到过审批请求。"
+                "  \(bounded.shortName)：闸门已连通，但拒绝是否真的拦住尚未亲测。"
+                    + "下次在 ThreadHelm 里点「拒绝」后，若那次操作确实没有执行，"
+                    + "运行：\n"
+                    + "    \(permissionGateConfirmationCommand)"
+                    + " \(agentID.rawValue) blocked\n"
+                    + "    若照样执行了，把 blocked 换成 ignored。"
+            )
+        case .ineffective:
+            pending.append(
+                "  \(bounded.shortName)：你报告过拒绝没能拦住操作。"
+                    + "在上游修好之前，请用该 Agent 自己的权限设置兜底。"
             )
         }
     }
     if !pending.isEmpty {
         print("审批闸门待确认：")
         pending.forEach { print($0) }
+    }
+    exit(0)
+}
+
+/// 提示语里给出的完整命令。写死路径是因为这行是给用户复制粘贴的，
+/// 而面板由 launchd 拉起时的 argv[0] 未必是他终端里能敲的东西。
+let permissionGateConfirmationCommand =
+    "~/Applications/ThreadHelm.app/Contents/MacOS/ThreadHelm"
+        + " --confirm-permission-gate"
+
+/// 记录用户对「拒绝到底拦没拦住」的当面确认。
+///
+/// 这是唯一能把闸门标成语义已验证的入口。面板自己不能替这一步作证：
+/// 它只知道自己发出了 deny，厂商有没有照办在进程之外。
+func runPermissionGateConfirmation(
+    arguments: [String] = CommandLine.arguments
+) -> Never {
+    guard let flagIndex = arguments.firstIndex(of: "--confirm-permission-gate")
+    else {
+        exit(2)
+    }
+    let operands = arguments.dropFirst(flagIndex + 1).prefix(2).map { $0 }
+    guard operands.count == 2 else {
+        fputs(
+            "用法：--confirm-permission-gate <agent> <blocked|ignored>\n"
+                + "  agent：codex | claudeCode | cursor | zcode | omp\n",
+            stderr
+        )
+        exit(2)
+    }
+    let agentID = AgentID(rawValue: operands[0])
+    guard agentID.rawValue == operands[0],
+          let adapter = AgentRegistry.builtIn.adapter(for: agentID)
+    else {
+        fputs("未知 Agent：\(operands[0])\n", stderr)
+        exit(2)
+    }
+    let verdict = operands[1].lowercased()
+    guard verdict == "blocked" || verdict == "ignored" else {
+        fputs("裁决只能是 blocked 或 ignored\n", stderr)
+        exit(2)
+    }
+    let discovery = adapter.discover()
+    guard discovery.isInstalled else {
+        fputs("\(adapter.metadata.shortName) 本机未安装，无从确认\n", stderr)
+        exit(1)
+    }
+    // 证据绑在确认时的本机版本上。下次升级后这条确认自动失效，用户会
+    // 再被请求确认一次——这正是我们想要的，而不是让旧结论一直生效。
+    let signature = agentVersionSignature(discovery.versionComponents)
+    let store = PermissionGateLivenessStore()
+    if verdict == "blocked" {
+        store.recordSemanticsVerified(
+            agentID: agentID,
+            versionSignature: signature
+        )
+        print(
+            "已记录：\(adapter.metadata.shortName) 的拒绝确实拦住了操作"
+                + "（版本 \(discovery.version ?? "未知")）。"
+        )
+    } else {
+        store.recordSemanticsRefuted(
+            agentID: agentID,
+            versionSignature: signature
+        )
+        print(
+            "已记录：\(adapter.metadata.shortName) 的拒绝没能拦住操作"
+                + "（版本 \(discovery.version ?? "未知")）。"
+                + "ThreadHelm 会把该 Agent 的闸门标为未生效。"
+        )
     }
     exit(0)
 }

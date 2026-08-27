@@ -187,6 +187,10 @@ if [[ -x "$BIN" ]]; then
   echo "五 Agent 本机集成状态："
   "$BIN" --agent-integrations status --live || FAILED=1
 
+  # 配置装好了不等于闸门在工作，而这一步对用户完全静默：只有等到某次
+  # 危险操作没弹确认框才会发现。没有待办时这条命令不输出任何东西。
+  "$BIN" --print-permission-gate-follow-up || FAILED=1
+
   echo ""
   echo "Codex 额度读取："
   "$BIN" --print-quota || FAILED=1

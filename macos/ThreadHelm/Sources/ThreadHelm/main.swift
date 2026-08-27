@@ -59,14 +59,19 @@ if CommandLine.arguments.contains("--check-accessibility") {
     printAccessibilityStatus()
 }
 
-// 版本判定决定受管集成与审批闸门开不开。它在常驻面板的受限 PATH 下
-// 与在终端里结果可能不同，所以要能在真实环境里当场问一句。
+// 版本判定决定能力标注，实测证据决定闸门结论。两者在常驻面板的受限
+// PATH 下与在终端里结果可能不同，所以要能在真实环境里当场问一句。
 if CommandLine.arguments.contains("--print-agent-discovery") {
     printAgentDiscovery()
 }
 
 if CommandLine.arguments.contains("--print-permission-gate-follow-up") {
     printPermissionGateFollowUp()
+}
+
+// 「拒绝到底拦住了吗」只有用户看得见：面板只知道自己发出了 deny。
+if CommandLine.arguments.contains("--confirm-permission-gate") {
+    runPermissionGateConfirmation()
 }
 
 if CommandLine.arguments.contains("--suppress-native-activity-once") {
@@ -183,11 +188,12 @@ if let flag = CommandLine.arguments.firstIndex(
 
 if CommandLine.arguments.contains("--install-claude-hook") {
     do {
+        // 只看装没装。曾经这里还要求版本与基线逐字相同，于是 Claude 一发版
+        // 安装脚本就静默跳过 hook，闸门整个消失，而用户只会觉得"确认框
+        // 不弹了"。安装是可逆的，版本对不上顶多让能力标注保持未验证。
         let discovery = ClaudeCodeAgentAdapter().discover()
-        guard discovery.compatibility == .validated else {
-            print(discovery.isInstalled
-                ? "Claude Code 版本未验证，已跳过 ThreadHelm Claude Hook"
-                : "未找到 Claude CLI，已跳过 ThreadHelm Claude Hook")
+        guard discovery.isInstalled else {
+            print("未找到 Claude CLI，已跳过 ThreadHelm Claude Hook")
             exit(0)
         }
         let changed = try ClaudeHookConfiguration.install(

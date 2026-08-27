@@ -211,19 +211,23 @@ func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
+    // 判据是「ThreadHelm 实现了这家的闸门吗」。unknown 现在的常见来源是
+    // 版本漂移把能力折叠了一层——那不代表面板答不上这条请求，只代表这个
+    // 版本没跑过真值夹具，所以照弹。只有明确 unsupported 才不接。
     let claudePermissionVisibilityCases = [
-        (cached: true, live: true, compatibility: AgentCompatibility.validated, expected: true),
-        (cached: false, live: true, compatibility: AgentCompatibility.validated, expected: true),
-        (cached: true, live: false, compatibility: AgentCompatibility.validated, expected: false),
-        (cached: false, live: false, compatibility: AgentCompatibility.validated, expected: false),
-        (cached: true, live: true, compatibility: AgentCompatibility.unvalidated, expected: false),
-        (cached: true, live: true, compatibility: AgentCompatibility.unknown, expected: false),
+        (cached: true, live: true, capability: AgentCapabilityStatus.supported, expected: true),
+        (cached: false, live: true, capability: AgentCapabilityStatus.supported, expected: true),
+        (cached: true, live: false, capability: AgentCapabilityStatus.supported, expected: false),
+        (cached: false, live: false, capability: AgentCapabilityStatus.supported, expected: false),
+        (cached: true, live: true, capability: AgentCapabilityStatus.unknown, expected: true),
+        (cached: true, live: true, capability: AgentCapabilityStatus.unsupported, expected: false),
+        (cached: false, live: false, capability: AgentCapabilityStatus.unknown, expected: false),
     ]
     for (index, test) in claudePermissionVisibilityCases.enumerated() {
         let actual = shouldPresentClaudePermissionPanel(
             cachedCodexDesktopRunning: test.cached,
             liveCodexDesktopRunning: test.live,
-            claudeCompatibility: test.compatibility
+            claudePermissionCapability: test.capability
         )
         guard actual == test.expected else {
             fputs("Claude permission visibility case \(index + 1) failed\n", stderr)

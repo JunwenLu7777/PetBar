@@ -15,23 +15,31 @@ import Foundation
 func shouldPresentClaudePermissionPanel(
     cachedCodexDesktopRunning: Bool,
     liveCodexDesktopRunning: Bool,
-    claudeCompatibility: AgentCompatibility
+    claudePermissionCapability: AgentCapabilityStatus
 ) -> Bool {
     shouldPresentPermissionPanel(
         agentID: .claudeCode,
         cachedCodexDesktopRunning: cachedCodexDesktopRunning,
         liveCodexDesktopRunning: liveCodexDesktopRunning,
-        agentCompatibility: claudeCompatibility
+        permissionCapability: claudePermissionCapability
     )
 }
 
+/// 判据是「ThreadHelm 实现了这家的闸门吗」，不是「本机版本对不对得上」。
+///
+/// 曾经这里要求 compatibility == .validated。后果是：上游一发版，请求照常
+/// 打到面板，面板却一言不发地把裁决交回去——对 Cursor/Codex 是功能凭空
+/// 消失，对 ZCode 更糟：它的兜底是**主动拒绝**，于是每一次工具调用都被
+/// 自动拒掉，而理由写的是「请在 ThreadHelm 中确认闸门在线」，用户按这句
+/// 话什么也做不了。手里已经攥着一条真实请求，还要拿版本号去否定它，是
+/// 把最强的证据让位给最弱的推断。
 func shouldPresentPermissionPanel(
     agentID: AgentID,
     cachedCodexDesktopRunning: Bool,
     liveCodexDesktopRunning: Bool,
-    agentCompatibility: AgentCompatibility
+    permissionCapability: AgentCapabilityStatus
 ) -> Bool {
-    guard agentCompatibility == .validated else { return false }
+    guard permissionCapability != .unsupported else { return false }
     // 请求来自 Codex 自己时，「用户正在用 Codex」已经由请求本身证明，
     // 再要求 Codex Desktop 在跑就会把纯 CLI 用户挡在门外——闸门静默
     // 交还原生 UI，看起来就像功能没生效。
