@@ -127,11 +127,18 @@ struct AgentIntegrationManager {
                 activeAgentID = agentID
                 let before = adapter.integrationStatus(in: scope)
                 let result: AgentIntegrationOperationResult
-                let requiresValidatedVersion = operation != .uninstall
+                // 版本漂移不再阻止安装。要求 compatibility == .validated 会
+                // 造成循环依赖：探测需要 hook 真的在跑，跑需要先装上，装上
+                // 又要先有探测结论。而 Agent 的发版节奏由别人决定——四家都
+                // 漂移过，稳定态就是谁都装不上。
+                //
+                // 放开的前提是安装本身可逆：受管条目带所有权标记、装前有备份、
+                // 卸载只摘自己那几条。装上之后契约若真不对，探测会发现并把
+                // 能力降级，此时状态诚实地报 needsRepair——而不装就永远拿不到
+                // 任何证据。未安装仍然一律不动。
+                let requiresInstalledAgent = operation != .uninstall
                     && !adapter.managedIntegrationRelativePaths.isEmpty
-                if requiresValidatedVersion,
-                   adapter.discover().compatibility != .validated
-                {
+                if requiresInstalledAgent, !adapter.discover().isInstalled {
                     result = .unchanged
                 } else {
                     switch operation {

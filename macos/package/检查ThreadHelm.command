@@ -184,7 +184,7 @@ fi
 
 if [[ -x "$BIN" ]]; then
   echo ""
-  echo "五 Agent 本机集成状态（Codex 应为 notManaged）："
+  echo "五 Agent 本机集成状态："
   "$BIN" --agent-integrations status --live || FAILED=1
 
   echo ""

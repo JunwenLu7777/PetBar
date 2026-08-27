@@ -213,7 +213,7 @@ func runAgentIntegrationManagerSelfTest() {
         try runIntegrationManagerRollbackSelfTest(
             root: root.appendingPathComponent("rollback", isDirectory: true)
         )
-        try runIntegrationManagerVersionGateSelfTest(
+        try runIntegrationManagerInstallGateSelfTest(
             root: root.appendingPathComponent("version-gate", isDirectory: true)
         )
         try runLegacyClaudeHookVersionGateSelfTest(
@@ -286,23 +286,60 @@ private func runSingleAgentTargetedSelfTest(root: URL) throws {
     )
     let driftedScope = AgentIntegrationScope.isolated(at: root.appendingPathComponent("drifted", isDirectory: true))
     try fileManager.createDirectory(at: driftedScope.rootDirectory, withIntermediateDirectories: true)
+    // 版本漂移必须照常安装。要求 validated 会形成循环依赖——探测要 hook 在跑，
+    // 跑要先装上——而四家 Agent 都漂移过，稳定态就是谁都装不上。装上之后契约
+    // 若不对，探测会降级并诚实报 needsRepair。
     let unvalidatedReport = try driftedManager.perform(
         AgentIntegrationOperation.install,
         targetAgentID: AgentID.cursor,
         in: driftedScope
     )
-    guard unvalidatedReport.agents.first?.result == .unchanged else {
+    guard unvalidatedReport.agents.first?.result == .installed else {
         throw IntegrationManagerSelfTestError.assertion(
-            "single-agent unvalidated target install must return unchanged"
+            "drifted target install must proceed, not silently skip"
         )
     }
 
-    guard !fileManager.fileExists(
+    guard fileManager.fileExists(
         atPath: driftedScope.rootDirectory
             .appendingPathComponent(".cursor/hooks.json").path
     ) else {
         throw IntegrationManagerSelfTestError.assertion(
-            "unvalidated target must not create vendor configuration"
+            "drifted target must still write its managed configuration"
+        )
+    }
+
+    // 未安装的 Agent 仍然一律不动：没有宿主可挂，写配置就是往用户机器上
+    // 塞垃圾。这是放开版本闸之后剩下的唯一前置条件。
+    let absentManager = AgentIntegrationManager(
+        registry: makeIntegrationManagerRegistry(
+            compatibility: .unknown,
+            isInstalled: false
+        )
+    )
+    let absentScope = AgentIntegrationScope.isolated(
+        at: root.appendingPathComponent("absent", isDirectory: true)
+    )
+    try fileManager.createDirectory(
+        at: absentScope.rootDirectory,
+        withIntermediateDirectories: true
+    )
+    let absentReport = try absentManager.perform(
+        AgentIntegrationOperation.install,
+        targetAgentID: AgentID.cursor,
+        in: absentScope
+    )
+    guard absentReport.agents.first?.result == .unchanged else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "absent agent install must return unchanged"
+        )
+    }
+    guard !fileManager.fileExists(
+        atPath: absentScope.rootDirectory
+            .appendingPathComponent(".cursor/hooks.json").path
+    ) else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "absent agent must not create vendor configuration"
         )
     }
 
@@ -528,12 +565,13 @@ private func makeIntegrationManagerFixtures(
 }
 
 private func makeIntegrationManagerRegistry(
-    compatibility: AgentCompatibility = .validated
+    compatibility: AgentCompatibility = .validated,
+    isInstalled: Bool = true
 ) -> AgentRegistry {
     let installed = {
         AgentDiscovery(
-            isInstalled: true,
-            version: "self-test",
+            isInstalled: isInstalled,
+            version: isInstalled ? "self-test" : nil,
             compatibility: compatibility
         )
     }
@@ -563,7 +601,7 @@ private func makeIntegrationManagerRegistry(
     ])
 }
 
-private func runIntegrationManagerVersionGateSelfTest(root: URL) throws {
+private func runIntegrationManagerInstallGateSelfTest(root: URL) throws {
     let fileManager = FileManager.default
     try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
     let fixtures = try makeIntegrationManagerFixtures(at: root)
@@ -583,32 +621,51 @@ private func runIntegrationManagerVersionGateSelfTest(root: URL) throws {
         )
     }
 
-    for operation in [
-        AgentIntegrationOperation.install,
-        AgentIntegrationOperation.repair,
-    ] {
-        let report = try driftedManager.perform(operation, in: scope)
-        guard report.operation == operation,
-              report.backupID != nil,
-              report.agents.count == 5,
-              report.agents.allSatisfy({
-                  $0.result == .unchanged
-                      && $0.statusBefore == .notInstalled
-                      && $0.statusAfter == .notInstalled
-              }),
-              try fixtures.matchesOriginalBytes(),
-              !fileManager.fileExists(atPath: fixtures.ompManagedDirectory.path)
-        else {
-            throw IntegrationManagerSelfTestError.assertion(
-                "\(operation.rawValue) changed drifted-version configuration"
-            )
-        }
+    // 漂移版本照常安装。旧行为是在这里静默返回 unchanged，结果由于四家的
+    // 发版节奏都不受我们控制，稳定态就是谁都装不上、功能默认关闭。
+    let driftedInstall = try driftedManager.perform(.install, in: scope)
+    guard driftedInstall.backupID != nil,
+          driftedInstall.agents.count == 5,
+          driftedInstall.agents.allSatisfy({ $0.statusAfter == .installed }),
+          fileManager.fileExists(atPath: fixtures.ompManagedDirectory.path)
+    else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "drifted-version install must proceed and write managed entries"
+        )
+    }
+    // 装完再 repair 应当已是幂等的——受管条目就位后没有可修的东西。
+    let driftedRepair = try driftedManager.perform(.repair, in: scope)
+    guard driftedRepair.agents.allSatisfy({ $0.statusAfter == .installed }) else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "repair after drifted install must keep entries installed"
+        )
     }
 
-    let validatedManager = AgentIntegrationManager(
-        registry: makeIntegrationManagerRegistry()
+    // 放开版本闸之后，唯一剩下的前置条件是宿主存在：Agent 没装就不该写它的
+    // 配置，否则是往用户机器上塞一份永远不会被读取的文件。
+    let absentScope = AgentIntegrationScope.isolated(
+        at: root.appendingPathComponent("absent-host", isDirectory: true)
     )
-    _ = try validatedManager.perform(.install, in: scope)
+    try fileManager.createDirectory(
+        at: absentScope.rootDirectory,
+        withIntermediateDirectories: true
+    )
+    let absentReport = try AgentIntegrationManager(
+        registry: makeIntegrationManagerRegistry(
+            compatibility: .unknown,
+            isInstalled: false
+        )
+    ).perform(.install, in: absentScope)
+    guard absentReport.agents.allSatisfy({ $0.result == .unchanged }),
+          !fileManager.fileExists(
+              atPath: absentScope.rootDirectory
+                  .appendingPathComponent(".cursor/hooks.json").path
+          )
+    else {
+        throw IntegrationManagerSelfTestError.assertion(
+            "absent agents must not receive managed configuration"
+        )
+    }
     let uninstalled = try driftedManager.perform(.uninstall, in: scope)
     guard uninstalled.agents.allSatisfy({ record in
         record.result == .uninstalled && record.statusAfter == .notInstalled
