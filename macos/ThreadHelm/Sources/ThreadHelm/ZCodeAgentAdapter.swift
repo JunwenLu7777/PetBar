@@ -191,7 +191,7 @@ enum ZCodeHookConfiguration {
         guard isZCodeAvailable() else { return false }
         // 令牌必须先于配置落盘：hook 进程一旦被 ZCode 拉起就会立刻去读它，
         // 读不到就只能按拒绝兜底，把用户挡在自己的工具外面。
-        try ZCodePermissionTokenStore.ensureToken(
+        try AgentPermissionTokenStore.zcode.ensureToken(
             directory: configURL.deletingLastPathComponent()
         )
         let manager = FileManager.default
@@ -317,7 +317,7 @@ enum ZCodeHookConfiguration {
     @discardableResult
     static func uninstall(at configURL: URL) throws -> Bool {
         let manager = FileManager.default
-        ZCodePermissionTokenStore.removeToken(
+        AgentPermissionTokenStore.zcode.removeToken(
             directory: configURL.deletingLastPathComponent()
         )
         let ownershipURL = configOwnershipURL(for: configURL)

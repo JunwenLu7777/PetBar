@@ -65,7 +65,7 @@ enum CodexPermissionProtocol {
 
         let toolInput = payload["tool_input"] as? [String: Any] ?? [:]
         // Codex 让模型自己写一句面向人的说明，比工具名有用得多。
-        let description = boundedString(
+        let description = boundedHookPayloadString(
             toolInput["description"],
             maximum: maximumDescriptionCharacters
         )
@@ -74,10 +74,14 @@ enum CodexPermissionProtocol {
             requestID: UUID(),
             interactionKind: .toolApproval,
             toolName: toolName,
-            sessionID: boundedString(payload["session_id"], maximum: 200),
-            workingDirectory: absoluteWorkingDirectory(payload["cwd"]),
+            sessionID: boundedHookPayloadString(
+                payload["session_id"],
+                maximum: 200
+            ),
+            workingDirectory: absoluteHookWorkingDirectory(payload["cwd"]),
             title: "Codex 等你确认",
-            message: description ?? "Codex 请求使用 \(safeToolDisplayName(toolName))。",
+            message: description
+                ?? "Codex 请求使用 \(hookToolDisplayName(toolName))。",
             planText: nil,
             questions: [],
             originalToolInput: toolInput,
@@ -101,7 +105,7 @@ enum CodexPermissionProtocol {
         case .deny(let message):
             wireDecision = [
                 "behavior": "deny",
-                "message": boundedDecisionMessage(
+                "message": boundedHookDecisionMessage(
                     message,
                     fallback: "用户拒绝了这次操作"
                 ),
@@ -109,7 +113,7 @@ enum CodexPermissionProtocol {
         case .planFeedback(let feedback):
             wireDecision = [
                 "behavior": "deny",
-                "message": boundedDecisionMessage(
+                "message": boundedHookDecisionMessage(
                     feedback,
                     fallback: "请修改计划后再次确认"
                 ),
@@ -129,44 +133,6 @@ enum CodexPermissionProtocol {
             ],
         ]
         return try? JSONSerialization.data(withJSONObject: response, options: [])
-    }
-
-    private static func safeToolDisplayName(_ toolName: String) -> String {
-        let approvedNames: [String: String] = [
-            "Bash": "终端命令",
-            "Edit": "文件编辑",
-            "Write": "文件写入",
-            "Read": "文件读取",
-            "WebFetch": "网页读取",
-            "WebSearch": "网页搜索",
-        ]
-        if let displayName = approvedNames[toolName] {
-            return displayName
-        }
-        let safe = toolName.filter {
-            $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-"
-        }
-        return safe.isEmpty ? "受限工具" : safe
-    }
-
-    private static func absoluteWorkingDirectory(_ value: Any?) -> String? {
-        guard let path = value as? String, path.hasPrefix("/") else { return nil }
-        return String(path.prefix(4_096))
-    }
-
-    private static func boundedString(_ value: Any?, maximum: Int) -> String? {
-        guard let string = value as? String else { return nil }
-        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return String(trimmed.prefix(maximum))
-    }
-
-    private static func boundedDecisionMessage(
-        _ value: String,
-        fallback: String
-    ) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return String((trimmed.isEmpty ? fallback : trimmed).prefix(2_000))
     }
 }
 

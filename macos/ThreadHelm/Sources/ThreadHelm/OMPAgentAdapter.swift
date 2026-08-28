@@ -117,7 +117,7 @@ struct OMPAgentAdapter: AgentAdapter {
                 directory: directory,
                 profile: target.profile
             )
-            OMPPermissionTokenStore.removeToken(directory: directory)
+            AgentPermissionTokenStore.omp.removeToken(directory: directory)
             let removedExtension = try OMPExtensionConfiguration.uninstall(
                 in: scope,
                 target: target
@@ -150,7 +150,7 @@ struct OMPAgentAdapter: AgentAdapter {
         // 每个 agent 目录一份令牌：扩展脚本里写的是它自己那份的绝对路径，
         // 而 profile 目录只有 owner 能进，跨目录共用一份并不更安全，却会
         // 让「卸载某个 profile」把别人的令牌一起删掉。
-        try OMPPermissionTokenStore.ensureToken(directory: directory)
+        try AgentPermissionTokenStore.omp.ensureToken(directory: directory)
         let raisedTimeout = raiseToolCallTimeoutIfNeeded(
             directory: directory,
             profile: target.profile
@@ -393,12 +393,13 @@ enum OMPExtensionConfiguration {
             relativePath: target.agentRelativePath,
             for: access
         )
-        return OMPPermissionTokenStore.tokenURL(directory: agentDirectory).path
+        return AgentPermissionTokenStore.omp
+            .tokenURL(directory: agentDirectory).path
     }
 
     static func generatedFilesForSelfTest(
         executablePath: String = "/tmp/ThreadHelm",
-        tokenPath: String = OMPPermissionTokenStore.tokenURL().path
+        tokenPath: String = AgentPermissionTokenStore.omp.tokenURL().path
     ) -> [String: String] {
         [
             scriptFilename: scriptContent(

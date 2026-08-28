@@ -307,13 +307,13 @@ func runCursorPermissionSelfTest() -> Never {
 
     // 令牌
     let tokenDirectory = root.appendingPathComponent(".cursor")
-    guard let token = CursorPermissionTokenStore.token(
+    guard let token = AgentPermissionTokenStore.cursor.token(
         directory: tokenDirectory
     ), !token.isEmpty else {
         fail("安装后应写出令牌")
     }
     var tokenStat = stat()
-    let tokenPath = CursorPermissionTokenStore.tokenURL(
+    let tokenPath = AgentPermissionTokenStore.cursor.tokenURL(
         directory: tokenDirectory
     ).path
     guard lstat(tokenPath, &tokenStat) == 0,
@@ -325,7 +325,7 @@ func runCursorPermissionSelfTest() -> Never {
 
     // 卸载要连令牌一起清掉。
     guard (try? adapter.uninstallIntegration(in: scope)) == .uninstalled,
-          CursorPermissionTokenStore.token(directory: tokenDirectory) == nil
+          AgentPermissionTokenStore.cursor.token(directory: tokenDirectory) == nil
     else {
         fail("卸载未清除令牌")
     }

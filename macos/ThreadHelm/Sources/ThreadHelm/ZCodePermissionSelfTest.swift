@@ -283,31 +283,31 @@ func runZCodePermissionSelfTest() -> Never {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("threadhelm-zcode-token-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
-    guard ZCodePermissionTokenStore.token(directory: root) == nil else {
+    guard AgentPermissionTokenStore.zcode.token(directory: root) == nil else {
         fail("空目录不应有令牌")
     }
-    guard let created = try? ZCodePermissionTokenStore.ensureToken(
+    guard let created = try? AgentPermissionTokenStore.zcode.ensureToken(
         directory: root
     ), !created.isEmpty else {
         fail("首次应写出令牌")
     }
     // 幂等：重复安装不能轮换令牌，否则正在等待裁决的 hook 会突然 403。
-    guard (try? ZCodePermissionTokenStore.ensureToken(directory: root))
+    guard (try? AgentPermissionTokenStore.zcode.ensureToken(directory: root))
         == created,
-        ZCodePermissionTokenStore.token(directory: root) == created
+        AgentPermissionTokenStore.zcode.token(directory: root) == created
     else {
         fail("重复安装不应轮换令牌")
     }
     var tokenStat = stat()
-    let tokenPath = ZCodePermissionTokenStore.tokenURL(directory: root).path
+    let tokenPath = AgentPermissionTokenStore.zcode.tokenURL(directory: root).path
     guard lstat(tokenPath, &tokenStat) == 0,
           (tokenStat.st_mode & S_IRWXG) == 0,
           (tokenStat.st_mode & S_IRWXO) == 0
     else {
         fail("令牌文件权限未收紧到 owner-only")
     }
-    ZCodePermissionTokenStore.removeToken(directory: root)
-    guard ZCodePermissionTokenStore.token(directory: root) == nil else {
+    AgentPermissionTokenStore.zcode.removeToken(directory: root)
+    guard AgentPermissionTokenStore.zcode.token(directory: root) == nil else {
         fail("卸载后应清除令牌")
     }
 

@@ -12,19 +12,6 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-func shouldPresentClaudePermissionPanel(
-    cachedCodexDesktopRunning: Bool,
-    liveCodexDesktopRunning: Bool,
-    claudePermissionCapability: AgentCapabilityStatus
-) -> Bool {
-    shouldPresentPermissionPanel(
-        agentID: .claudeCode,
-        cachedCodexDesktopRunning: cachedCodexDesktopRunning,
-        liveCodexDesktopRunning: liveCodexDesktopRunning,
-        permissionCapability: claudePermissionCapability
-    )
-}
-
 /// 判据是「ThreadHelm 实现了这家的闸门吗」，不是「本机版本对不对得上」。
 ///
 /// 曾经这里要求 compatibility == .validated。后果是：上游一发版，请求照常

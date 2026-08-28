@@ -40,7 +40,7 @@ struct PermissionHookRoute {
     /// ZCode 的 hook 负载与裁决格式与 Claude 逐字段同形，编解码直接复用。
     /// 差别只在于谁在问、令牌从哪来。
     static func zcode(
-        token: @escaping () -> String? = { ZCodePermissionTokenStore.token() }
+        token: @escaping () -> String? = { AgentPermissionTokenStore.zcode.token() }
     ) -> PermissionHookRoute {
         PermissionHookRoute(
             agentID: .zcode,
@@ -60,7 +60,7 @@ struct PermissionHookRoute {
     /// tool_input / tool_use_id / cwd / session_id），入向复用同一个解析器；
     /// 出向换成 Cursor 的 permission 三态。
     static func cursor(
-        token: @escaping () -> String? = { CursorPermissionTokenStore.token() }
+        token: @escaping () -> String? = { AgentPermissionTokenStore.cursor.token() }
     ) -> PermissionHookRoute {
         PermissionHookRoute(
             agentID: .cursor,
@@ -81,7 +81,7 @@ struct PermissionHookRoute {
     /// OMP 的扩展自己把 tool_call 事件整形成 Claude 那套字段名再发过来，
     /// 所以入向复用同一个解析器；出向必须换成 OMP 的 {block, reason}。
     static func omp(
-        token: @escaping () -> String? = { OMPPermissionTokenStore.token() }
+        token: @escaping () -> String? = { AgentPermissionTokenStore.omp.token() }
     ) -> PermissionHookRoute {
         PermissionHookRoute(
             agentID: .omp,
@@ -141,12 +141,6 @@ final class ClaudePermissionHookServer {
             uniquingKeysWith: { first, _ in first }
         )
         self.liveness = liveness
-    }
-
-    convenience init(expectedAuthenticationToken: String?) {
-        self.init(routes: [
-            .claude(token: { expectedAuthenticationToken }),
-        ])
     }
 
     static func isAuthenticated(

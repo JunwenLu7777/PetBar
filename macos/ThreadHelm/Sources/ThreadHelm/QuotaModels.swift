@@ -407,16 +407,32 @@ func supplementalExecutableSearchDirectories(
     ]
 }
 
+/// 把一份 PATH 拆成目录列表。空段丢掉。
+func pathEnvironmentDirectories(_ value: String?) -> [String] {
+    (value ?? "")
+        .split(separator: ":", omittingEmptySubsequences: true)
+        .map(String.init)
+}
+
+/// 在一份 PATH 目录列表后面补上常见的用户级 bin 目录。已经在里面的不重复
+/// 追加，顺序保持「原有优先、补充在后」——补充目录只是兜底，不能盖掉用户
+/// 自己排在前面的那份 CLI。
+func supplementedPathDirectories(
+    base: [String],
+    homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+) -> [String] {
+    base + supplementalExecutableSearchDirectories(
+        homeDirectory: homeDirectory
+    ).filter { !base.contains($0) }
+}
+
 private func executablePaths(
     named executableName: String,
     pathEnvironment: String?
 ) -> [String] {
-    let configured = (pathEnvironment ?? "")
-        .split(separator: ":", omittingEmptySubsequences: true)
-        .map(String.init)
-    let supplemental = supplementalExecutableSearchDirectories()
-        .filter { !configured.contains($0) }
-    let directories = configured + supplemental
+    let directories = supplementedPathDirectories(
+        base: pathEnvironmentDirectories(pathEnvironment)
+    )
     guard !directories.isEmpty else { return [] }
     return directories.map {
         URL(fileURLWithPath: $0, isDirectory: true)

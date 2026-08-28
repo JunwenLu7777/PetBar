@@ -49,6 +49,49 @@ enum PermissionGateLiveness: Equatable {
     case notApplicable
 }
 
+/// 当前版本上的语义证据：用户亲测「拒绝拦住了」还是报告「没拦住」。
+enum PermissionGateSemanticsEvidence: Equatable {
+    /// 用户报告拒绝没能拦住操作。
+    case refuted(at: Date)
+    /// 用户确认拒绝确实拦住了操作。
+    case verified(at: Date)
+    /// 当前版本上没有语义证据。
+    case noEvidence
+}
+
+/// 把记录里的语义证据收口到当前版本，并做证伪与证实之间的取舍。
+///
+/// 这条取舍规则只能有一处实现：版本不匹配的证据一律不算（说不清属于哪个
+/// 版本的证据不能替当前版本说话），两边都有时以更晚的一次为准，同一时刻
+/// 算证伪——闸门失效是那两种结论里更该讲出来的一句。分散在两处实现过，
+/// 结果是同一份记录在探测结论和界面文案上给出不同答案。
+func permissionGateSemanticsEvidence(
+    record: PermissionGateLivenessRecord?,
+    currentVersionSignature: String?
+) -> PermissionGateSemanticsEvidence {
+    guard let record, let signature = currentVersionSignature else {
+        return .noEvidence
+    }
+    let refutedAt = record.semanticsRefutedVersion == signature
+        ? record.semanticsRefutedAt
+        : nil
+    let verifiedAt = record.semanticsVerifiedVersion == signature
+        ? record.semanticsVerifiedAt
+        : nil
+    switch (refutedAt, verifiedAt) {
+    case (let refuted?, let verified?):
+        return refuted >= verified
+            ? .refuted(at: refuted)
+            : .verified(at: verified)
+    case (let refuted?, nil):
+        return .refuted(at: refuted)
+    case (nil, let verified?):
+        return .verified(at: verified)
+    case (nil, nil):
+        return .noEvidence
+    }
+}
+
 /// 从在线记录里读出探测结论。
 ///
 /// 这里刻意是**单向**的：有证据就升级判定，没有证据只回到 `.notProbed`
@@ -63,22 +106,16 @@ func agentProbeOutcome(
     guard let record, let currentVersionSignature else { return .notProbed }
     // 版本一换，旧证据就不再为新版本背书。签名缺失同样按过期处理：
     // 说不清证据属于哪个版本，就不能让它替当前版本说话。
-    if record.semanticsRefutedVersion == currentVersionSignature,
-       record.semanticsRefutedAt != nil
-    {
-        // 被证伪的时间比被证实的更晚才算翻案；否则说明用户后来又确认过一次。
-        let refutedAt = record.semanticsRefutedAt ?? .distantPast
-        let verifiedAt = record.semanticsVerifiedVersion == currentVersionSignature
-            ? (record.semanticsVerifiedAt ?? .distantPast)
-            : .distantPast
-        if refutedAt >= verifiedAt {
-            return .channelBroken(reason: "用户报告拒绝未能拦住操作")
-        }
-    }
-    if record.semanticsVerifiedVersion == currentVersionSignature,
-       record.semanticsVerifiedAt != nil
-    {
+    switch permissionGateSemanticsEvidence(
+        record: record,
+        currentVersionSignature: currentVersionSignature
+    ) {
+    case .refuted:
+        return .channelBroken(reason: "用户报告拒绝未能拦住操作")
+    case .verified:
         return .semanticsVerified
+    case .noEvidence:
+        break
     }
     if record.observedVersion == currentVersionSignature,
        record.lastRequestAt != nil
@@ -378,25 +415,16 @@ func permissionGateLiveness(
     // 它自成证据——用户能确认「拒绝拦住了」，前提就是确实发生过一次审批，
     // 所以这里不再另外要求一条请求记录。尤其是「报告没拦住」：那是最该
     // 讲出来的一句话，绝不能因为记录里缺了别的字段就被吞掉。
-    if let signature = currentVersionSignature, let record {
-        let refutedAt = record.semanticsRefutedVersion == signature
-            ? record.semanticsRefutedAt
-            : nil
-        let verifiedAt = record.semanticsVerifiedVersion == signature
-            ? record.semanticsVerifiedAt
-            : nil
-        switch (refutedAt, verifiedAt) {
-        case (let refuted?, let verified?):
-            return refuted >= verified
-                ? .ineffective(reportedAt: refuted)
-                : .semanticsVerified(confirmedAt: verified)
-        case (let refuted?, nil):
-            return .ineffective(reportedAt: refuted)
-        case (nil, let verified?):
-            return .semanticsVerified(confirmedAt: verified)
-        case (nil, nil):
-            break
-        }
+    switch permissionGateSemanticsEvidence(
+        record: record,
+        currentVersionSignature: currentVersionSignature
+    ) {
+    case .refuted(let reportedAt):
+        return .ineffective(reportedAt: reportedAt)
+    case .verified(let confirmedAt):
+        return .semanticsVerified(confirmedAt: confirmedAt)
+    case .noEvidence:
+        break
     }
 
     if capability != .supported, record?.lastRequestAt == nil {

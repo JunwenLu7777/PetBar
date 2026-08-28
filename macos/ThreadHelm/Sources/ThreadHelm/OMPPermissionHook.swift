@@ -49,61 +49,6 @@ func ompAgentDirectoryURL(
         .appendingPathComponent("agent", isDirectory: true)
 }
 
-enum OMPPermissionTokenStore {
-    static func tokenURL(
-        directory: URL = ompAgentDirectoryURL()
-    ) -> URL {
-        directory.appendingPathComponent(
-            OMPPermissionHookConstants.tokenFileName
-        )
-    }
-
-    /// 只接受 owner-only 的普通文件。放宽这条等于让任何本机进程都能改
-    /// 令牌，从而向闸门伪造裁决请求。
-    static func token(
-        directory: URL = ompAgentDirectoryURL()
-    ) -> String? {
-        let url = tokenURL(directory: directory)
-        var statBuffer = stat()
-        guard lstat(url.path, &statBuffer) == 0,
-              statBuffer.st_uid == geteuid(),
-              (statBuffer.st_mode & S_IFMT) == S_IFREG,
-              (statBuffer.st_mode & S_IRWXG) == 0,
-              (statBuffer.st_mode & S_IRWXO) == 0,
-              let data = try? Data(contentsOf: url),
-              data.count <= 512,
-              let token = String(data: data, encoding: .utf8)?
-                  .trimmingCharacters(in: .whitespacesAndNewlines),
-              !token.isEmpty
-        else { return nil }
-        return token
-    }
-
-    @discardableResult
-    static func ensureToken(
-        directory: URL = ompAgentDirectoryURL()
-    ) throws -> String {
-        if let existing = token(directory: directory) { return existing }
-        let fresh = AgentPermissionTokenFactory.make()
-        let url = tokenURL(directory: directory)
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        try Data(fresh.utf8).write(to: url, options: .atomic)
-        guard chmod(url.path, S_IRUSR | S_IWUSR) == 0 else {
-            throw OMPPermissionSettingsError.writeFailed(
-                "无法收紧令牌文件权限"
-            )
-        }
-        return fresh
-    }
-
-    static func removeToken(directory: URL = ompAgentDirectoryURL()) {
-        try? FileManager.default.removeItem(at: tokenURL(directory: directory))
-    }
-}
-
 enum OMPPermissionSettingsError: Error, Equatable {
     case writeFailed(String)
 }
@@ -225,7 +170,7 @@ enum OMPPermissionProtocol {
         case .deny(let message):
             payload = [
                 "block": true,
-                "reason": boundedReason(
+                "reason": boundedHookDecisionMessage(
                     message,
                     fallback: "用户拒绝了这次操作"
                 ),
@@ -233,7 +178,7 @@ enum OMPPermissionProtocol {
         case .planFeedback(let feedback):
             payload = [
                 "block": true,
-                "reason": boundedReason(
+                "reason": boundedHookDecisionMessage(
                     feedback,
                     fallback: "请修改计划后再次确认"
                 ),
@@ -253,14 +198,6 @@ enum OMPPermissionProtocol {
             withJSONObject: payload,
             options: [.sortedKeys]
         )
-    }
-
-    private static func boundedReason(
-        _ value: String,
-        fallback: String
-    ) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return String((trimmed.isEmpty ? fallback : trimmed).prefix(2_000))
     }
 }
 

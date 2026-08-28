@@ -129,28 +129,28 @@ func runOMPPermissionSelfTest() -> Never {
 
     // MARK: 令牌
 
-    guard OMPPermissionTokenStore.token(directory: root) == nil else {
+    guard AgentPermissionTokenStore.omp.token(directory: root) == nil else {
         fail("空目录不应有令牌")
     }
-    guard let created = try? OMPPermissionTokenStore.ensureToken(
+    guard let created = try? AgentPermissionTokenStore.omp.ensureToken(
         directory: root
     ), !created.isEmpty else {
         fail("首次应写出令牌")
     }
-    guard (try? OMPPermissionTokenStore.ensureToken(directory: root)) == created
+    guard (try? AgentPermissionTokenStore.omp.ensureToken(directory: root)) == created
     else {
         fail("重复安装不应轮换令牌")
     }
     var tokenStat = stat()
-    let tokenPath = OMPPermissionTokenStore.tokenURL(directory: root).path
+    let tokenPath = AgentPermissionTokenStore.omp.tokenURL(directory: root).path
     guard lstat(tokenPath, &tokenStat) == 0,
           (tokenStat.st_mode & S_IRWXG) == 0,
           (tokenStat.st_mode & S_IRWXO) == 0
     else {
         fail("令牌文件权限未收紧到 owner-only")
     }
-    OMPPermissionTokenStore.removeToken(directory: root)
-    guard OMPPermissionTokenStore.token(directory: root) == nil else {
+    AgentPermissionTokenStore.omp.removeToken(directory: root)
+    guard AgentPermissionTokenStore.omp.token(directory: root) == nil else {
         fail("卸载后应清除令牌")
     }
 
@@ -268,7 +268,7 @@ func runOMPPermissionSelfTest() -> Never {
     // 令牌路径写进脚本，令牌本身不能写进去——扩展文件不是机密文件。
     // 路径必须落在这次安装的 scope 里：写死真实家目录会让隔离安装出来的
     // 扩展去读本机令牌，而每个 profile 也各有自己那一份。
-    let expectedTokenPath = OMPPermissionTokenStore.tokenURL(
+    let expectedTokenPath = AgentPermissionTokenStore.omp.tokenURL(
         directory: scopeRoot.appendingPathComponent(
             OMPProfileScope.defaultAgentRelativePath
         )

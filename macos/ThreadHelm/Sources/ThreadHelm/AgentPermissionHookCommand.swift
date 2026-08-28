@@ -29,6 +29,83 @@ enum AgentPermissionTokenFactory {
     }
 }
 
+/// 令牌文件的读写。三家（ZCode / Cursor / OMP）各自的差别只有默认目录和
+/// 收紧权限失败时抛哪个错误，安全检查却是逐行相同的：owner-only 的 lstat、
+/// 512 字节上限、写入后 chmod 600。这段代码复制三份最怕的就是漏洞只在
+/// 其中一份里被补上，所以检查只留一份，差异用参数带进来。
+struct AgentPermissionTokenStore {
+    /// 令牌落在哪个目录。与受管集成写入的位置一致——那条路径由
+    /// AgentIntegrationScope 决定，固定挂在 home 下，不看环境变量。
+    let defaultDirectory: () -> URL
+    let fileName: String
+    /// 收紧权限失败时抛谁的错误。各家的错误类型会被安装流程分类展示，
+    /// 不能合并成一种。
+    let writeFailure: (String) -> Error
+
+    static let zcode = AgentPermissionTokenStore(
+        defaultDirectory: { zcodeConfigurationDirectoryURL() },
+        fileName: ZCodePermissionHookConstants.tokenFileName,
+        writeFailure: { ZCodeHookConfigurationError.writeFailed($0) }
+    )
+
+    static let cursor = AgentPermissionTokenStore(
+        defaultDirectory: { cursorConfigurationDirectoryURL() },
+        fileName: CursorPermissionHookConstants.tokenFileName,
+        writeFailure: { CursorHookConfigurationError.writeFailed($0) }
+    )
+
+    static let omp = AgentPermissionTokenStore(
+        defaultDirectory: { ompAgentDirectoryURL() },
+        fileName: OMPPermissionHookConstants.tokenFileName,
+        writeFailure: { OMPPermissionSettingsError.writeFailed($0) }
+    )
+
+    func tokenURL(directory: URL? = nil) -> URL {
+        (directory ?? defaultDirectory())
+            .appendingPathComponent(fileName)
+    }
+
+    /// 只接受 owner-only 的普通文件。放宽这条等于让任何本机进程都能改
+    /// 令牌，从而向闸门伪造裁决请求。
+    func token(directory: URL? = nil) -> String? {
+        let url = tokenURL(directory: directory)
+        var statBuffer = stat()
+        guard lstat(url.path, &statBuffer) == 0,
+              statBuffer.st_uid == geteuid(),
+              (statBuffer.st_mode & S_IFMT) == S_IFREG,
+              (statBuffer.st_mode & S_IRWXG) == 0,
+              (statBuffer.st_mode & S_IRWXO) == 0,
+              let data = try? Data(contentsOf: url),
+              data.count <= 512,
+              let token = String(data: data, encoding: .utf8)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty
+        else { return nil }
+        return token
+    }
+
+    @discardableResult
+    func ensureToken(directory: URL? = nil) throws -> String {
+        let target = directory ?? defaultDirectory()
+        if let existing = token(directory: target) { return existing }
+        let fresh = AgentPermissionTokenFactory.make()
+        let url = tokenURL(directory: target)
+        try FileManager.default.createDirectory(
+            at: target,
+            withIntermediateDirectories: true
+        )
+        try Data(fresh.utf8).write(to: url, options: .atomic)
+        guard chmod(url.path, S_IRUSR | S_IWUSR) == 0 else {
+            throw writeFailure("无法收紧令牌文件权限")
+        }
+        return fresh
+    }
+
+    func removeToken(directory: URL? = nil) {
+        try? FileManager.default.removeItem(at: tokenURL(directory: directory))
+    }
+}
+
 /// 闸门无法给出裁决时该写什么。
 enum AgentPermissionHookFallback: Equatable {
     /// 交还厂商自己的批准界面。仅当厂商确实有这么一个界面时才安全。
@@ -103,7 +180,7 @@ struct AgentPermissionHookTransport {
             agentID: .zcode,
             flag: ZCodePermissionHookConstants.flag,
             url: ZCodePermissionHookConstants.url,
-            resolveToken: { ZCodePermissionTokenStore.token() },
+            resolveToken: { AgentPermissionTokenStore.zcode.token() },
             fallback: .denyWithReason(
                 "ThreadHelm 未能确认这次操作，已按拒绝处理。"
                     + "请在 ThreadHelm 中确认闸门在线后重试。"
@@ -117,7 +194,7 @@ struct AgentPermissionHookTransport {
             agentID: .cursor,
             flag: CursorPermissionHookConstants.flag,
             url: CursorPermissionHookConstants.url,
-            resolveToken: { CursorPermissionTokenStore.token() },
+            resolveToken: { AgentPermissionTokenStore.cursor.token() },
             // Cursor 支持 ask：闸门够不着时把决定权交回它自己的权限流程，
             // 既不替用户放行，也不把他锁在工具外面。
             fallback: .handBackToVendor(

@@ -9,7 +9,8 @@
 //  tool_use_id / transcript_path / permission_suggestions），裁决也是
 //  hookSpecificOutput.decision.behavior 那一套，并且同样支持
 //  updatedPermissions 与 updatedInput。所以编解码直接复用 Claude 的，
-//  这里只提供常量、令牌与转发所需的差异部分。
+//  这里只提供常量与转发所需的差异部分；令牌读写走共用的
+//  AgentPermissionTokenStore.zcode。
 //
 //  基线：ZCode 3.9.1 / 内置 CLI 0.16.5，契约取自应用内 zcode.cjs 的
 //  运行时 schema 与 hook 负载构造代码。
@@ -45,61 +46,4 @@ func zcodeConfigurationDirectoryURL(
     homeDirectory
         .appendingPathComponent(".zcode", isDirectory: true)
         .appendingPathComponent("cli", isDirectory: true)
-}
-
-enum ZCodePermissionTokenStore {
-    static func tokenURL(
-        directory: URL = zcodeConfigurationDirectoryURL()
-    ) -> URL {
-        directory.appendingPathComponent(
-            ZCodePermissionHookConstants.tokenFileName
-        )
-    }
-
-    /// 只接受 owner-only 的普通文件。放宽这条等于让任何本机进程都能改
-    /// 令牌，从而向闸门伪造裁决请求。
-    static func token(
-        directory: URL = zcodeConfigurationDirectoryURL()
-    ) -> String? {
-        let url = tokenURL(directory: directory)
-        var statBuffer = stat()
-        guard lstat(url.path, &statBuffer) == 0,
-              statBuffer.st_uid == geteuid(),
-              (statBuffer.st_mode & S_IFMT) == S_IFREG,
-              (statBuffer.st_mode & S_IRWXG) == 0,
-              (statBuffer.st_mode & S_IRWXO) == 0,
-              let data = try? Data(contentsOf: url),
-              data.count <= 512,
-              let token = String(data: data, encoding: .utf8)?
-                  .trimmingCharacters(in: .whitespacesAndNewlines),
-              !token.isEmpty
-        else { return nil }
-        return token
-    }
-
-    @discardableResult
-    static func ensureToken(
-        directory: URL = zcodeConfigurationDirectoryURL()
-    ) throws -> String {
-        if let existing = token(directory: directory) { return existing }
-        let fresh = AgentPermissionTokenFactory.make()
-        let url = tokenURL(directory: directory)
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        try Data(fresh.utf8).write(to: url, options: .atomic)
-        guard chmod(url.path, S_IRUSR | S_IWUSR) == 0 else {
-            throw ZCodeHookConfigurationError.writeFailed(
-                "无法收紧令牌文件权限"
-            )
-        }
-        return fresh
-    }
-
-    static func removeToken(
-        directory: URL = zcodeConfigurationDirectoryURL()
-    ) {
-        try? FileManager.default.removeItem(at: tokenURL(directory: directory))
-    }
 }

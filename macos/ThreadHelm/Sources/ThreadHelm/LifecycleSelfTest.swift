@@ -224,10 +224,11 @@ func runLifecycleSelfTest() -> Never {
         (cached: false, live: false, capability: AgentCapabilityStatus.unknown, expected: false),
     ]
     for (index, test) in claudePermissionVisibilityCases.enumerated() {
-        let actual = shouldPresentClaudePermissionPanel(
+        let actual = shouldPresentPermissionPanel(
+            agentID: .claudeCode,
             cachedCodexDesktopRunning: test.cached,
             liveCodexDesktopRunning: test.live,
-            claudePermissionCapability: test.capability
+            permissionCapability: test.capability
         )
         guard actual == test.expected else {
             fputs("Claude permission visibility case \(index + 1) failed\n", stderr)

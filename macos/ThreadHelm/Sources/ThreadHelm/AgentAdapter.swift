@@ -1203,16 +1203,15 @@ private func agentVersionProbeEnvironment(
     base: [String: String] = ProcessInfo.processInfo.environment,
     homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
 ) -> [String: String] {
-    let interpreterDirectories = supplementalExecutableSearchDirectories(
+    var environment = base
+    let existing = pathEnvironmentDirectories(base["PATH"])
+    let supplemented = supplementedPathDirectories(
+        base: existing,
         homeDirectory: homeDirectory
     )
-    var environment = base
-    let existing = (base["PATH"] ?? "")
-        .split(separator: ":", omittingEmptySubsequences: true)
-        .map(String.init)
-    let missing = interpreterDirectories.filter { !existing.contains($0) }
-    guard !missing.isEmpty else { return environment }
-    environment["PATH"] = (existing + missing).joined(separator: ":")
+    // 一个都不缺就原样交回：没必要把用户的 PATH 重写成我们归一化后的样子。
+    guard supplemented.count > existing.count else { return environment }
+    environment["PATH"] = supplemented.joined(separator: ":")
     return environment
 }
 
@@ -1444,39 +1443,74 @@ func builtInAgentMetadata() -> [AgentMetadata] {
     ]
 }
 
-/// 打印每个 Agent 的本机发现结果与版本判定。放在 CLI 里是因为常驻面板
-/// 由 launchd 拉起、PATH 与终端不同，只有在同样的环境里问才有意义。
-func printAgentDiscovery() -> Never {
-    let profiles = builtInAgentValidationProfiles()
-    let livenessRecords = PermissionGateLivenessStore().snapshot()
-    let scope = AgentIntegrationScope(
+/// 一个 Agent 在本机的闸门评估结果。
+struct AgentGateEvaluation {
+    let agentID: AgentID
+    /// 经版本判定收口后的元数据：shortName 与 capabilities 都要取这一份，
+    /// 不能用适配器上那份未收口的声明。
+    let metadata: AgentMetadata
+    let discovery: AgentDiscovery
+    let integrationStatus: AgentIntegrationStatus
+    let permissionCapability: AgentCapabilityStatus
+    let liveness: PermissionGateLiveness
+}
+
+/// 按同一条链评估每个 Agent 的闸门：实测证据修正发现结果 → 版本判定收口
+/// 能力 → 版本签名 → 闸门结论。
+///
+/// 两条 CLI 只在**怎么讲**上不同，判定必须完全一致。这条链复制两份的代价
+/// 是 --print-agent-discovery 和 --print-permission-gate-follow-up 会对同
+/// 一台机器给出不同结论，而用户正是拿后者当「还差什么」的清单在照做。
+func evaluatedAgentGates(
+    adapters: [any AgentAdapter] = builtInAgentAdapters(),
+    livenessRecords: [AgentID: PermissionGateLivenessRecord] =
+        PermissionGateLivenessStore().snapshot(),
+    scope: AgentIntegrationScope = AgentIntegrationScope(
         rootDirectory: FileManager.default.homeDirectoryForCurrentUser,
         permitsLiveConfigurationChanges: true
     )
-    for adapter in builtInAgentAdapters() {
+) -> [AgentGateEvaluation] {
+    adapters.map { adapter in
         let agentID = adapter.metadata.id
+        let record = livenessRecords[agentID]
         let discovery = probeAdjustedDiscovery(
             adapter.discover(),
             agentID: agentID,
-            record: livenessRecords[agentID]
+            record: record
         )
-        let profile = profiles[agentID]
         let bounded = validationBoundedAgentMetadata(
             adapter.metadata,
             discovery: discovery
         )
         let permission = bounded.capabilities.status(for: .inAppPermission)
         let integration = adapter.integrationStatus(in: scope)
-        let liveness = permissionGateLiveness(
-            capability: permission,
+        return AgentGateEvaluation(
+            agentID: agentID,
+            metadata: bounded,
+            discovery: discovery,
             integrationStatus: integration,
-            record: livenessRecords[agentID],
-            currentVersionSignature: agentVersionSignature(
-                discovery.versionComponents
+            permissionCapability: permission,
+            liveness: permissionGateLiveness(
+                capability: permission,
+                integrationStatus: integration,
+                record: record,
+                currentVersionSignature: agentVersionSignature(
+                    discovery.versionComponents
+                )
             )
         )
+    }
+}
+
+/// 打印每个 Agent 的本机发现结果与版本判定。放在 CLI 里是因为常驻面板
+/// 由 launchd 拉起、PATH 与终端不同，只有在同样的环境里问才有意义。
+func printAgentDiscovery() -> Never {
+    let profiles = builtInAgentValidationProfiles()
+    for evaluation in evaluatedAgentGates() {
+        let discovery = evaluation.discovery
+        let profile = profiles[evaluation.agentID]
         let gate: String
-        switch liveness {
+        switch evaluation.liveness {
         case .notApplicable: gate = "n/a"
         case .neverObserved: gate = "unverified"
         case .verified: gate = "live"
@@ -1484,13 +1518,13 @@ func printAgentDiscovery() -> Never {
         case .ineffective: gate = "ineffective"
         }
         print(
-            "\(adapter.metadata.id.rawValue)"
+            "\(evaluation.agentID.rawValue)"
                 + " installed=\(discovery.isInstalled)"
                 + " version=\(discovery.version ?? "nil")"
                 + " pinned=\(profile?.testedVersion ?? "nil")"
                 + " compatibility=\(discovery.compatibility.rawValue)"
-                + " integration=\(integration.rawValue)"
-                + " inAppPermission=\(permission.rawValue)"
+                + " integration=\(evaluation.integrationStatus.rawValue)"
+                + " inAppPermission=\(evaluation.permissionCapability.rawValue)"
                 + " gate=\(gate)"
         )
     }
@@ -1500,51 +1534,30 @@ func printAgentDiscovery() -> Never {
 /// 安装后打印一行「还差什么」。装好配置不等于闸门在工作，而这一步
 /// 目前对用户完全静默——只有等到某次危险操作没弹确认框才会发现。
 func printPermissionGateFollowUp() -> Never {
-    let livenessRecords = PermissionGateLivenessStore().snapshot()
-    let scope = AgentIntegrationScope(
-        rootDirectory: FileManager.default.homeDirectoryForCurrentUser,
-        permitsLiveConfigurationChanges: true
-    )
     var pending: [String] = []
-    for adapter in builtInAgentAdapters() {
-        let agentID = adapter.metadata.id
-        let discovery = probeAdjustedDiscovery(
-            adapter.discover(),
-            agentID: agentID,
-            record: livenessRecords[agentID]
-        )
-        let bounded = validationBoundedAgentMetadata(
-            adapter.metadata,
-            discovery: discovery
-        )
-        let liveness = permissionGateLiveness(
-            capability: bounded.capabilities.status(for: .inAppPermission),
-            integrationStatus: adapter.integrationStatus(in: scope),
-            record: livenessRecords[agentID],
-            currentVersionSignature: agentVersionSignature(
-                discovery.versionComponents
-            )
-        )
-        switch liveness {
+    for evaluation in evaluatedAgentGates() {
+        let agentID = evaluation.agentID
+        let shortName = evaluation.metadata.shortName
+        switch evaluation.liveness {
         case .notApplicable, .semanticsVerified:
             continue
         case .neverObserved:
             if agentID == .codex {
                 pending.append(
-                    "  \(bounded.shortName)：闸门尚未验证。"
+                    "  \(shortName)：闸门尚未验证。"
                         + "Codex 启动时若提示 “Hooks need review”，请选 Trust；"
                         + "未信任时 Codex 会静默跳过 hook。"
                 )
             } else {
                 pending.append(
-                    "  \(bounded.shortName)：闸门尚未验证——还没收到过审批请求。"
+                    "  \(shortName)：闸门尚未验证——还没收到过审批请求。"
                 )
             }
         case .verified:
             // 连通已经证实，还差最后一层：拒绝到底拦不拦得住。这一层
             // 只有用户看得见，所以只能请他确认一次，每个版本一次。
             pending.append(
-                "  \(bounded.shortName)：闸门已连通，但拒绝是否真的拦住尚未亲测。"
+                "  \(shortName)：闸门已连通，但拒绝是否真的拦住尚未亲测。"
                     + "下次在 ThreadHelm 里点「拒绝」后，若那次操作确实没有执行，"
                     + "运行：\n"
                     + "    \(permissionGateConfirmationCommand)"
@@ -1553,7 +1566,7 @@ func printPermissionGateFollowUp() -> Never {
             )
         case .ineffective:
             pending.append(
-                "  \(bounded.shortName)：你报告过拒绝没能拦住操作。"
+                "  \(shortName)：你报告过拒绝没能拦住操作。"
                     + "在上游修好之前，请用该 Agent 自己的权限设置兜底。"
             )
         }

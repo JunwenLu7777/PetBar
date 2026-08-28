@@ -138,8 +138,11 @@ enum ClaudePermissionProtocol {
             interactionKind = .toolApproval
         }
 
-        let sessionID = boundedString(payload["session_id"], maximum: 200)
-        let workingDirectory = absoluteWorkingDirectory(
+        let sessionID = boundedHookPayloadString(
+            payload["session_id"],
+            maximum: 200
+        )
+        let workingDirectory = absoluteHookWorkingDirectory(
             payload["cwd"] ?? payload["working_directory"]
         )
         let suggestions = permissionSuggestions(from: payload["permission_suggestions"])
@@ -152,7 +155,7 @@ enum ClaudePermissionProtocol {
 
         let planText: String?
         if interactionKind == .exitPlanMode {
-            planText = boundedString(
+            planText = boundedHookPayloadString(
                 toolInput["plan"] ?? toolInput["content"],
                 maximum: maximumPlanCharacters
             )
@@ -160,7 +163,7 @@ enum ClaudePermissionProtocol {
             planText = nil
         }
 
-        let description = boundedString(
+        let description = boundedHookPayloadString(
             toolInput["description"],
             maximum: maximumDescriptionCharacters
         )
@@ -207,7 +210,10 @@ enum ClaudePermissionProtocol {
         case .deny(let message):
             wireDecision = [
                 "behavior": "deny",
-                "message": boundedDecisionMessage(message, fallback: "用户拒绝了这次操作"),
+                "message": boundedHookDecisionMessage(
+                    message,
+                    fallback: "用户拒绝了这次操作"
+                ),
             ]
         case .submitAnswers(let answers):
             var updatedInput = prompt.originalToolInput
@@ -219,7 +225,10 @@ enum ClaudePermissionProtocol {
         case .planFeedback(let feedback):
             wireDecision = [
                 "behavior": "deny",
-                "message": boundedDecisionMessage(feedback, fallback: "请修改计划后再次确认"),
+                "message": boundedHookDecisionMessage(
+                    feedback,
+                    fallback: "请修改计划后再次确认"
+                ),
             ]
         case .nativeFallback:
             return nil
@@ -284,7 +293,7 @@ enum ClaudePermissionProtocol {
                 }
                 return ClaudeQuestionOption(
                     label: label,
-                    detail: boundedString(
+                    detail: boundedHookPayloadString(
                         rawOption["description"],
                         maximum: maximumDescriptionCharacters
                     )
@@ -293,7 +302,7 @@ enum ClaudePermissionProtocol {
 
             return ClaudeQuestion(
                 answerKey: questionText,
-                header: boundedString(rawQuestion["header"], maximum: 80),
+                header: boundedHookPayloadString(rawQuestion["header"], maximum: 80),
                 options: options,
                 allowsMultipleSelection: rawQuestion["multiSelect"] as? Bool ?? false
             )
@@ -316,7 +325,7 @@ enum ClaudePermissionProtocol {
     ) -> String {
         let type = suggestion["type"] as? String
         if type == "setMode",
-           let mode = boundedString(suggestion["mode"], maximum: 80)
+           let mode = boundedHookPayloadString(suggestion["mode"], maximum: 80)
         {
             return "切换为 \(mode) 模式"
         }
@@ -324,8 +333,8 @@ enum ClaudePermissionProtocol {
             if let rules = suggestion["rules"] as? [[String: Any]],
                let first = rules.first
             {
-                let toolName = boundedString(first["toolName"], maximum: 80)
-                let rule = boundedString(first["ruleContent"], maximum: 120)
+                let toolName = boundedHookPayloadString(first["toolName"], maximum: 80)
+                let rule = boundedHookPayloadString(first["ruleContent"], maximum: 120)
                 if let toolName, let rule {
                     return "始终允许 \(toolName)：\(rule)"
                 }
@@ -357,48 +366,59 @@ enum ClaudePermissionProtocol {
                 "批准后 \(name) 会离开计划模式并继续执行。"
             )
         case .toolApproval:
-            let fallback = "\(name) 请求使用 \(safeToolDisplayName(toolName))。"
+            let fallback = "\(name) 请求使用 \(hookToolDisplayName(toolName))。"
             return (
                 "\(name) 等你确认",
                 description ?? fallback
             )
         }
     }
+}
 
-    private static func safeToolDisplayName(_ toolName: String) -> String {
-        let approvedNames: [String: String] = [
-            "Bash": "终端命令",
-            "Edit": "文件编辑",
-            "Write": "文件写入",
-            "Read": "文件读取",
-            "WebFetch": "网页读取",
-            "WebSearch": "网页搜索",
-        ]
-        if let displayName = approvedNames[toolName] {
-            return displayName
-        }
-        let safe = toolName.filter {
-            $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-"
-        }
-        return safe.isEmpty ? "受限工具" : safe
-    }
+// MARK: - 五家共用的负载与文案净化
 
-    private static func absoluteWorkingDirectory(_ value: Any?) -> String? {
-        guard let path = value as? String, path.hasPrefix("/") else { return nil }
-        return String(path.prefix(4_096))
+/// 工具名的展示文案。白名单外的名字只留字母、数字、下划线与连字符：
+/// 这行字会进确认框，厂商传来的工具名不能当成可信文本直接渲染。
+///
+/// 五家的负载里工具名都来自同一批工具，这张表也就只该有一份——Claude 与
+/// Codex 曾各存一份逐字相同的副本，加一个工具就要记得改两处。
+func hookToolDisplayName(_ toolName: String) -> String {
+    let approvedNames: [String: String] = [
+        "Bash": "终端命令",
+        "Edit": "文件编辑",
+        "Write": "文件写入",
+        "Read": "文件读取",
+        "WebFetch": "网页读取",
+        "WebSearch": "网页搜索",
+    ]
+    if let displayName = approvedNames[toolName] {
+        return displayName
     }
+    let safe = toolName.filter {
+        $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-"
+    }
+    return safe.isEmpty ? "受限工具" : safe
+}
 
-    private static func boundedString(_ value: Any?, maximum: Int) -> String? {
-        guard let string = value as? String else { return nil }
-        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return String(trimmed.prefix(maximum))
-    }
+/// 只接受绝对路径的工作目录，并按 4096 字节截断。
+func absoluteHookWorkingDirectory(_ value: Any?) -> String? {
+    guard let path = value as? String, path.hasPrefix("/") else { return nil }
+    return String(path.prefix(4_096))
+}
 
-    private static func boundedDecisionMessage(_ value: String, fallback: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return String((trimmed.isEmpty ? fallback : trimmed).prefix(2_000))
-    }
+/// 负载里的字符串字段：去空白、空值当缺失、按上限截断。
+func boundedHookPayloadString(_ value: Any?, maximum: Int) -> String? {
+    guard let string = value as? String else { return nil }
+    let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    return String(trimmed.prefix(maximum))
+}
+
+/// 裁决理由：空白理由换成兜底文案，长度截到 2000 字符。这段会原样交给
+/// 模型，四家（Claude / Codex / Cursor / OMP）用的是同一条规则。
+func boundedHookDecisionMessage(_ value: String, fallback: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return String((trimmed.isEmpty ? fallback : trimmed).prefix(2_000))
 }
 
 enum ClaudeHookConfigurationError: LocalizedError {

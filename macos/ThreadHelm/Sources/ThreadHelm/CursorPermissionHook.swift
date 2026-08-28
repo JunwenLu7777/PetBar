@@ -56,63 +56,6 @@ func cursorConfigurationDirectoryURL(
     homeDirectory.appendingPathComponent(".cursor", isDirectory: true)
 }
 
-enum CursorPermissionTokenStore {
-    static func tokenURL(
-        directory: URL = cursorConfigurationDirectoryURL()
-    ) -> URL {
-        directory.appendingPathComponent(
-            CursorPermissionHookConstants.tokenFileName
-        )
-    }
-
-    /// 只接受 owner-only 的普通文件。放宽这条等于让任何本机进程都能改
-    /// 令牌，从而向闸门伪造裁决请求。
-    static func token(
-        directory: URL = cursorConfigurationDirectoryURL()
-    ) -> String? {
-        let url = tokenURL(directory: directory)
-        var statBuffer = stat()
-        guard lstat(url.path, &statBuffer) == 0,
-              statBuffer.st_uid == geteuid(),
-              (statBuffer.st_mode & S_IFMT) == S_IFREG,
-              (statBuffer.st_mode & S_IRWXG) == 0,
-              (statBuffer.st_mode & S_IRWXO) == 0,
-              let data = try? Data(contentsOf: url),
-              data.count <= 512,
-              let token = String(data: data, encoding: .utf8)?
-                  .trimmingCharacters(in: .whitespacesAndNewlines),
-              !token.isEmpty
-        else { return nil }
-        return token
-    }
-
-    @discardableResult
-    static func ensureToken(
-        directory: URL = cursorConfigurationDirectoryURL()
-    ) throws -> String {
-        if let existing = token(directory: directory) { return existing }
-        let fresh = AgentPermissionTokenFactory.make()
-        let url = tokenURL(directory: directory)
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        try Data(fresh.utf8).write(to: url, options: .atomic)
-        guard chmod(url.path, S_IRUSR | S_IWUSR) == 0 else {
-            throw CursorHookConfigurationError.writeFailed(
-                "无法收紧令牌文件权限"
-            )
-        }
-        return fresh
-    }
-
-    static func removeToken(
-        directory: URL = cursorConfigurationDirectoryURL()
-    ) {
-        try? FileManager.default.removeItem(at: tokenURL(directory: directory))
-    }
-}
-
 /// 把用户裁决翻成 Cursor 的 preToolUse 返回值。
 ///
 /// Cursor 的 permission 是三态 allow/deny/ask，还接受 updated_input 与
@@ -129,13 +72,19 @@ enum CursorPermissionProtocol {
             // Cursor 没有长期授权回执，建议只能落成「这次放行」。
             payload = ["permission": "allow"]
         case .deny(let message):
-            let reason = boundedReason(message, fallback: "用户拒绝了这次操作")
+            let reason = boundedHookDecisionMessage(
+                message,
+                fallback: "用户拒绝了这次操作"
+            )
             payload = [
                 "permission": "deny",
                 "agent_message": reason,
             ]
         case .planFeedback(let feedback):
-            let reason = boundedReason(feedback, fallback: "请修改计划后再次确认")
+            let reason = boundedHookDecisionMessage(
+                feedback,
+                fallback: "请修改计划后再次确认"
+            )
             payload = [
                 "permission": "deny",
                 "agent_message": reason,
@@ -156,14 +105,6 @@ enum CursorPermissionProtocol {
             withJSONObject: payload,
             options: [.sortedKeys]
         )
-    }
-
-    private static func boundedReason(
-        _ value: String,
-        fallback: String
-    ) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return String((trimmed.isEmpty ? fallback : trimmed).prefix(2_000))
     }
 }
 

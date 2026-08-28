@@ -102,7 +102,7 @@ struct CursorAgentAdapter: AgentAdapter {
         let url = try cursorHooksURL(in: scope)
         // 令牌必须先于配置落盘：Cursor 一旦加载 hook 就会去读它，读不到
         // 只能按兜底处理，把用户挡在自己的工具外面。
-        try CursorPermissionTokenStore.ensureToken(
+        try AgentPermissionTokenStore.cursor.ensureToken(
             directory: url.deletingLastPathComponent()
         )
         let result = try CursorHookConfiguration.install(
@@ -120,7 +120,7 @@ struct CursorAgentAdapter: AgentAdapter {
     ) throws -> AgentIntegrationOperationResult {
         guard discover().isInstalled else { return .unchanged }
         let url = try cursorHooksURL(in: scope)
-        try CursorPermissionTokenStore.ensureToken(
+        try AgentPermissionTokenStore.cursor.ensureToken(
             directory: url.deletingLastPathComponent()
         )
         let result = try CursorHookConfiguration.install(
@@ -137,7 +137,7 @@ struct CursorAgentAdapter: AgentAdapter {
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationOperationResult {
         let url = try cursorHooksURL(in: scope)
-        CursorPermissionTokenStore.removeToken(
+        AgentPermissionTokenStore.cursor.removeToken(
             directory: url.deletingLastPathComponent()
         )
         let changed = try CursorHookConfiguration.uninstall(at: url)
