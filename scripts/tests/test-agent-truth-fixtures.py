@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_ROOT = ROOT / "macos/ThreadHelm/Tests/Fixtures/Agents"
 SCENARIO_ROOT = FIXTURE_ROOT / "scenarios"
 AGENTS = ("codex", "claudeCode", "cursor", "zcode", "omp")
-BASELINE_COMMIT = "f7cb4843eea3aa5aae9ee6045092c007f7cd9452"
+BASELINE_COMMIT = "8a0792ded390272977e4183ee8596bfbf0633f68"
 PREVIEW_STATES = (
     "capsule-confirmation",
     "capsule-running",

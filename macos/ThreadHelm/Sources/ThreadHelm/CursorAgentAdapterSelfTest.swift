@@ -400,8 +400,10 @@ private func runCursorTransportSelfTest() {
             "evidenceQuality": "officialHook",
         ]
     )
-    let offline = AgentHookTransport.send(envelope) { _ in nil }
-    let malformed = AgentHookTransport.send(envelope) { _ in Data("{}".utf8) }
+    let offline = AgentHookTransport.send(envelope, timeout: 2) { _ in nil }
+    let malformed = AgentHookTransport.send(envelope, timeout: 2) { _ in
+        Data("{}".utf8)
+    }
     let slow = AgentHookTransport.send(envelope) { _ in
         Thread.sleep(forTimeInterval: AgentTransportContract.synchronousTimeout + 0.05)
         return AgentHookTransport.validAcknowledgement

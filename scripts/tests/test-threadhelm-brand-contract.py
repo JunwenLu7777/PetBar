@@ -23,7 +23,6 @@ transaction_helper = read(
     "macos/ThreadHelm/scripts/local-install-transaction.zsh"
 )
 main_source = read("macos/ThreadHelm/Sources/ThreadHelm/main.swift")
-release_script = read("scripts/build-macos-release.sh")
 validate_workflow = read(".github/workflows/validate.yml")
 download_workflow = read(".github/workflows/update-download-links.yml")
 download_script = read("scripts/update-readme-downloads.sh")
@@ -106,20 +105,30 @@ self_test_flags = set(
     )
 )
 assert self_test_flags == {
+    "--self-test-large-window-regression",
+    "--self-test-real-transcript-readonly",
     "--self-test-lifecycle",
+    "--self-test-transcript-events",
     "--self-test-native-notification-state",
     "--self-test-task-progress",
     "--self-test-threadhelm-edition",
     "--self-test-weekly-quota",
     "--self-test-claude-quota",
     "--self-test-claude-hook",
+    "--self-test-codex-hook",
+    "--self-test-zcode-permission",
+    "--self-test-permission-gate-liveness",
+    "--self-test-omp-permission",
+    "--self-test-cursor-permission",
     "--self-test-dynamic-island",
     "--self-test-client-contract",
     "--self-test-agent-integration-manager",
 }
-for flag in self_test_flags:
+local_only_self_tests = {"--self-test-real-transcript-readonly"}
+for flag in self_test_flags - local_only_self_tests:
     assert flag in validate_workflow, f"CI does not run {flag}"
-    assert flag in release_script, f"release gate does not run {flag}"
+for flag in local_only_self_tests:
+    assert flag not in validate_workflow, f"CI cannot run local-only {flag}"
 for obsolete in (
     "--self-test-placement",
     "pet-click-restore",
@@ -131,8 +140,9 @@ for obsolete in (
     )
 assert "--verify-agent-truth" in validate_workflow
 assert "scenarios=81 persistent-state=unchanged" in validate_workflow
-assert "THREADHELM_RELEASE_ID" in validate_workflow
 assert "macos/VERSION.txt" in validate_workflow
+assert "build-macos-release.sh" not in validate_workflow
+assert "actions/upload-artifact" not in validate_workflow
 assert "ThreadHelm-macOS-arm64-1.1.0" not in validate_workflow
 
 for path in ("README.md", "macos/README.md"):

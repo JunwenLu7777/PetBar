@@ -607,7 +607,7 @@ enum OMPLocalSession {
         var workingDirectory: String?
         var publicMessages: [AgentActivityEntry] = []
 
-        for (index, line) in text.split(whereSeparator: \Character.isNewline).enumerated() {
+        for (index, line) in text.split(whereSeparator: { $0.isNewline }).enumerated() {
             guard let data = String(line).data(using: .utf8),
                   let decoded = decodeRecord(
                     data,

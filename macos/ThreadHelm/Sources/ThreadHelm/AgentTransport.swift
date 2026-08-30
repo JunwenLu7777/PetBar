@@ -244,6 +244,7 @@ enum AgentHookTransport {
 
     static func send(
         _ envelope: AgentTransportEnvelope,
+        timeout: TimeInterval = AgentTransportContract.synchronousTimeout,
         receiver: @escaping (Data) -> Data?
     ) -> AgentTransportAttempt {
         let encoding: AgentTransportEncoding
@@ -263,7 +264,7 @@ enum AgentHookTransport {
             box.store(receiver(encoding.data))
             semaphore.signal()
         }
-        guard semaphore.wait(timeout: .now() + AgentTransportContract.synchronousTimeout)
+        guard semaphore.wait(timeout: .now() + timeout)
             == .success
         else {
             return AgentTransportAttempt(

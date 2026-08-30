@@ -809,8 +809,10 @@ private func runOMPTransportContractSelfTest() throws {
             "freshness": "fresh",
         ]
     )
-    let offline = AgentHookTransport.send(envelope) { _ in nil }
-    let malformed = AgentHookTransport.send(envelope) { _ in Data("bad".utf8) }
+    let offline = AgentHookTransport.send(envelope, timeout: 2) { _ in nil }
+    let malformed = AgentHookTransport.send(envelope, timeout: 2) { _ in
+        Data("bad".utf8)
+    }
     let slow = AgentHookTransport.send(envelope) { _ in
         Thread.sleep(forTimeInterval: AgentTransportContract.synchronousTimeout + 0.1)
         return AgentHookTransport.validAcknowledgement

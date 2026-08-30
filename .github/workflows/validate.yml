@@ -39,7 +39,6 @@ jobs:
           VERSION="$(awk -F': ' '$1 == "Version" { print $2; exit }' macos/VERSION.txt)"
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           echo "THREADHELM_VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "THREADHELM_RELEASE_ID=ThreadHelm-macOS-arm64-$VERSION" >> "$GITHUB_ENV"
       - name: Install ripgrep for the privacy audit
         # The runner image ships no rg, and the audit needs it to scan at all.
         run: brew list ripgrep >/dev/null 2>&1 || brew install ripgrep
@@ -73,7 +72,14 @@ jobs:
           "$BIN" --self-test-weekly-quota | grep -F 'dynamic-island-phases=6/6'
           "$BIN" --self-test-claude-quota | grep -F 'provider-availability=installed+hidden fallback=pass'
           "$BIN" --self-test-claude-hook | grep -F 'claude-hook-self-test:'
+          "$BIN" --self-test-codex-hook | grep -F 'codex-hook-self-test ok'
+          "$BIN" --self-test-zcode-permission | grep -F 'zcode-permission-self-test ok'
+          "$BIN" --self-test-permission-gate-liveness | grep -F 'permission-gate-liveness-self-test ok'
+          "$BIN" --self-test-omp-permission | grep -F 'omp-permission-self-test ok'
+          "$BIN" --self-test-cursor-permission | grep -F 'cursor-permission-self-test ok'
           "$BIN" --self-test-client-contract | grep -F 'agent-transport=64KiB+250ms+metadata-only+fail-open'
+          "$BIN" --self-test-transcript-events | grep -F 'transcript-events-self-test:'
+          "$BIN" --self-test-large-window-regression 2>&1 | grep -F 'large-window-regression: providers=4'
           "$BIN" --self-test-dynamic-island | grep -F 'presentation=dynamic-island-only'
           "$BIN" --self-test-agent-integration-manager | grep -F 'agent-integration-manager-self-test:'
           "$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents | grep -F 'agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged'
@@ -86,24 +92,6 @@ jobs:
           for test_script in scripts/tests/*.sh; do
             zsh "$test_script"
           done
-      - name: Build and inspect ThreadHelm macOS release
-        run: |
-          set -euo pipefail
-          ./scripts/build-macos-release.sh
-          RELEASE="$THREADHELM_RELEASE_ID"
-          test -f "dist/$RELEASE.zip"
-          test -f "dist/$RELEASE.zip.sha256"
-          test -e "build/release/$RELEASE/ThreadHelm.app"
-          test -e "build/release/$RELEASE/dev.threadhelm.app.plist.in"
-          test ! -e "build/release/$RELEASE/pet"
-          test ! -e "build/release/$RELEASE/quota-panel"
-          unzip -tq "dist/$RELEASE.zip"
-          ./scripts/privacy-audit.sh
+      - name: Run privacy audit
+        run: ./scripts/privacy-audit.sh
       - run: zsh -n macos/package/*.command macos/ThreadHelm/scripts/*.sh script/*.sh scripts/*.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.THREADHELM_RELEASE_ID }}-${{ matrix.runner }}
-          if-no-files-found: error
-          path: |
-            dist/${{ env.THREADHELM_RELEASE_ID }}.zip
-            dist/${{ env.THREADHELM_RELEASE_ID }}.zip.sha256

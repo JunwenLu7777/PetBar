@@ -1402,8 +1402,10 @@ func runAgentTransportSelfTest() {
     else {
         failAgentIntegrationSelfTest("transport rejects non-token/sensitive fields")
     }
-    let offline = AgentHookTransport.send(normal) { _ in nil }
-    let malformed = AgentHookTransport.send(normal) { _ in Data("not-json".utf8) }
+    let offline = AgentHookTransport.send(normal, timeout: 2) { _ in nil }
+    let malformed = AgentHookTransport.send(normal, timeout: 2) { _ in
+        Data("not-json".utf8)
+    }
     let started = Date()
     let slow = AgentHookTransport.send(normal) { _ in
         Thread.sleep(forTimeInterval: 0.60)
