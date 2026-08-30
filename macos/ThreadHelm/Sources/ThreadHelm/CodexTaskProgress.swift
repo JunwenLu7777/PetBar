@@ -461,6 +461,7 @@ final class CodexTaskProgressReader {
     private var cachedUnreadStateModificationDate: Date?
     private var hasCachedUnreadState = false
     private var nextRolloutScanAt = Date.distantPast
+    private var rolloutDiscoveryUnavailable = false
 
     init(
         indexRootDirectory: URL = TranscriptIndexStore.defaultRootDirectory,
@@ -1360,6 +1361,11 @@ final class CodexTaskProgressReader {
             return [RolloutCandidate(url: url, modificationDate: modified)]
         }
 
+        // A denied removable-volume prompt makes enumeration fail. Retrying on
+        // every five-second refresh only prompts the user again; wait for an app
+        // restart before trying the unavailable transcript root another time.
+        guard !rolloutDiscoveryUnavailable else { return [] }
+
         if now < nextRolloutScanAt, !cachedRollouts.isEmpty {
             return cachedRollouts.filter { fileManager.fileExists(atPath: $0.url.path) }
         }
@@ -1372,11 +1378,22 @@ final class CodexTaskProgressReader {
             .appendingPathComponent("sessions", isDirectory: true)
             .standardizedFileURL
             .resolvingSymlinksInPath()
+        guard fileManager.isReadableFile(atPath: sessionsURL.path) else {
+            rolloutDiscoveryUnavailable = true
+            cachedRollouts = []
+            return []
+        }
+        var discoveryFailed = false
         guard let enumerator = fileManager.enumerator(
             at: sessionsURL,
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            options: [.skipsHiddenFiles, .skipsPackageDescendants],
+            errorHandler: { _, _ in
+                discoveryFailed = true
+                return false
+            }
         ) else {
+            rolloutDiscoveryUnavailable = true
             cachedRollouts = []
             return []
         }
@@ -1406,6 +1423,11 @@ final class CodexTaskProgressReader {
                 continue
             }
             candidates.append(RolloutCandidate(url: url, modificationDate: modified))
+        }
+        guard !discoveryFailed else {
+            rolloutDiscoveryUnavailable = true
+            cachedRollouts = []
+            return []
         }
 
         cachedRollouts = Array(candidates.sorted {

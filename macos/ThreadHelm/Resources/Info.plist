@@ -28,6 +28,8 @@
   <true/>
   <key>NSAppleEventsUsageDescription</key>
   <string>用于精确定位并恢复您点击的 Claude Code 终端会话。</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>ThreadHelm 只读访问外置磁盘上的本地 Agent 会话与任务仓库，用于显示任务、返回原会话以及 Git 和检查状态。</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
 </dict>

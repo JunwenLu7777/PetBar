@@ -23,6 +23,7 @@ func runTaskProgressSelfTest() -> Never {
     runCodexClaudeAtomicReplaceCacheSelfTest()
     runCodexTailMetadataBackfillSelfTest(now: now, started: started)
     runCodexCompletedItemFormatSelfTest()
+    runCodexUnavailableRolloutRootSelfTest()
     runTaskProgressSelfTestPhase2(now: now, started: started)
     runTaskRepositoryContextSelfTest()
     runTaskProgressRefreshGateSelfTest()
@@ -34,7 +35,7 @@ func runTaskProgressSelfTest() -> Never {
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
     runDiscoveryCacheAndAutoIntegrationBackoffSelfTest()
-    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; provider-atomic-replace=codex+claude; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; repository-context=git+worktree+checks+commit-status+unknown+cache+isolated-env+fixed-host+slash-remote; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; applescript-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
+    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; codex-root-denial=no-retry+restart-recovery; provider-atomic-replace=codex+claude; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; repository-context=git+worktree+checks+commit-status+unknown+cache+isolated-env+fixed-host+slash-remote; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; applescript-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
     exit(0)
 }
 
@@ -1119,6 +1120,122 @@ private func runCodexTailMetadataBackfillSelfTest(now: Date, started: String) {
           item?.activityText == "正在验证大型会话"
     else {
         fputs("Codex tail metadata cwd backfill failed\n", stderr)
+        exit(1)
+    }
+}
+
+private func runCodexUnavailableRolloutRootSelfTest() {
+    let manager = FileManager.default
+    let temporaryRoot = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-codex-unavailable-root-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let codexHome = temporaryRoot.appendingPathComponent(
+        "codex-home",
+        isDirectory: true
+    )
+    let sessionsRoot = codexHome.appendingPathComponent(
+        "sessions",
+        isDirectory: true
+    )
+    let rolloutRoot = temporaryRoot.appendingPathComponent(
+        "external-codex-sessions",
+        isDirectory: true
+    )
+    let sessionID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    let rolloutURL = rolloutRoot.appendingPathComponent(
+        "rollout-2033-05-18T00-00-00-\(sessionID).jsonl"
+    )
+    let codexHomeKey = "CODEX_HOME"
+    let rolloutOverrideKey = "THREADHELM_TASK_ROLLOUT_FILE"
+    let stateOverrideKey = "THREADHELM_CODEX_STATE_FILE"
+    let previousCodexHome = getenv(codexHomeKey).map { String(cString: $0) }
+    let previousRolloutOverride = getenv(rolloutOverrideKey).map {
+        String(cString: $0)
+    }
+    let previousStateOverride = getenv(stateOverrideKey).map {
+        String(cString: $0)
+    }
+    defer {
+        for (key, value) in [
+            (codexHomeKey, previousCodexHome),
+            (rolloutOverrideKey, previousRolloutOverride),
+            (stateOverrideKey, previousStateOverride),
+        ] {
+            if let value {
+                setenv(key, value, 1)
+            } else {
+                unsetenv(key)
+            }
+        }
+        try? manager.removeItem(at: temporaryRoot)
+    }
+
+    do {
+        try manager.createDirectory(
+            at: codexHome,
+            withIntermediateDirectories: true
+        )
+        try manager.createSymbolicLink(
+            at: sessionsRoot,
+            withDestinationURL: rolloutRoot
+        )
+    } catch {
+        fputs("Codex unavailable rollout root fixture setup failed\n", stderr)
+        exit(1)
+    }
+    setenv(codexHomeKey, codexHome.path, 1)
+    unsetenv(rolloutOverrideKey)
+    unsetenv(stateOverrideKey)
+
+    var currentTime = Date(timeIntervalSince1970: 2_000_000_000)
+    let indexRoot = temporaryRoot.appendingPathComponent(
+        "transcript-index",
+        isDirectory: true
+    )
+    let reader = CodexTaskProgressReader(
+        indexRootDirectory: indexRoot,
+        now: { currentTime }
+    )
+    guard reader.readCollection().items.isEmpty else {
+        fputs("missing Codex rollout root must fail closed\n", stderr)
+        exit(1)
+    }
+
+    let records = [
+        #"{"type":"session_meta","payload":{"cwd":"/tmp/threadhelm-unavailable-root","thread_source":"root"}}"#,
+        #"{"type":"event_msg","payload":{"type":"task_started"}}"#,
+        #"{"type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"restart recovery"}}"#,
+    ]
+    do {
+        try manager.createDirectory(
+            at: rolloutRoot,
+            withIntermediateDirectories: true
+        )
+        try Data((records.joined(separator: "\n") + "\n").utf8)
+            .write(to: rolloutURL)
+        try manager.setAttributes(
+            [.modificationDate: currentTime],
+            ofItemAtPath: rolloutURL.path
+        )
+    } catch {
+        fputs("Codex unavailable rollout recovery fixture failed\n", stderr)
+        exit(1)
+    }
+
+    currentTime = currentTime.addingTimeInterval(10)
+    guard reader.readCollection().items.isEmpty else {
+        fputs("unavailable Codex rollout root retried in the same process\n", stderr)
+        exit(1)
+    }
+    let restarted = CodexTaskProgressReader(
+        indexRootDirectory: indexRoot,
+        now: { currentTime }
+    ).readCollection().items.first
+    guard restarted?.workingDirectory == "/tmp/threadhelm-unavailable-root",
+          restarted?.activityText == "restart recovery"
+    else {
+        fputs("Codex rollout root did not recover after reader restart\n", stderr)
         exit(1)
     }
 }
