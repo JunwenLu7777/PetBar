@@ -52,6 +52,59 @@ func taskProgressStartAndDurationText(
     return "\(started) · \(duration)"
 }
 
+func taskRepositoryRootText(_ evidence: TaskRepositoryEvidence?) -> String {
+    guard let root = evidence?.gitStatus?.repositoryRoot else {
+        return "仓库 · 未验证"
+    }
+    return "仓库 · \(root)"
+}
+
+func taskGitStatusText(_ evidence: TaskRepositoryEvidence?) -> String {
+    guard let status = evidence?.gitStatus else { return "Git · 未验证" }
+    let branch: String
+    if status.isDetached {
+        branch = "detached@\(status.headShortSHA ?? "未验证")"
+    } else {
+        branch = status.branch ?? "分支未验证"
+    }
+    let checkout = status.checkoutKind == .linkedWorktree
+        ? "linked worktree"
+        : "普通 checkout"
+    let worktreeState = status.isDirty ? "有改动" : "干净"
+    let upstream: String
+    if let name = status.upstreamName {
+        if let ahead = status.aheadCount, let behind = status.behindCount {
+            upstream = "\(name) ↑\(ahead) ↓\(behind)"
+        } else {
+            upstream = "\(name) · ahead/behind 未验证"
+        }
+    } else {
+        upstream = "upstream 未设置"
+    }
+    let commit = status.headShortSHA.map { "提交 \($0)" }
+        ?? "提交 未验证"
+    let parts = [branch, checkout, worktreeState, upstream, commit]
+    return "Git · \(parts.joined(separator: " · "))"
+}
+
+func taskCheckStatusText(_ evidence: TaskRepositoryEvidence?) -> String {
+    guard let status = evidence?.checkStatus, status.state != .unknown else {
+        return "验证 · 本地测试未验证 · HEAD checks 未验证"
+    }
+    var parts: [String] = []
+    if status.failureCount > 0 {
+        parts.append("\(status.failureCount) 项失败")
+    }
+    if status.pendingCount > 0 {
+        parts.append("\(status.pendingCount) 项运行中")
+    }
+    if status.inconclusiveCount > 0 {
+        parts.append("\(status.inconclusiveCount) 项无结论")
+    }
+    parts.append("\(status.successCount)/\(status.totalCount) 通过")
+    return "验证 · 本地测试未验证 · HEAD checks \(parts.joined(separator: " · "))"
+}
+
 func dynamicIslandTint(for kind: TaskProgressKind) -> NSColor {
     switch kind {
     case .running:
@@ -235,6 +288,18 @@ final class DynamicIslandTaskViewController:
         size: 12,
         weight: .regular
     )
+    private let repositoryRootField = DynamicIslandTaskLabel(
+        size: 12,
+        weight: .regular
+    )
+    private let gitStatusField = DynamicIslandTaskLabel(
+        size: 12,
+        weight: .regular
+    )
+    private let checkStatusField = DynamicIslandTaskLabel(
+        size: 12,
+        weight: .regular
+    )
     private let openResultField = DynamicIslandTaskLabel(
         size: 12,
         weight: .regular
@@ -282,6 +347,7 @@ final class DynamicIslandTaskViewController:
     private var stateFilter = TaskStateFilter.all
     private var agentStatuses: [AgentRuntimeStatus] = []
     private var taskOpenEvidence: [String: TaskOpenEvidence] = [:]
+    private var taskRepositoryEvidence: [String: TaskRepositoryEvidence] = [:]
     private var visibleSections: [TaskQueueSection] = []
     private var queueRows: [DynamicIslandTaskQueueRow] = []
     private var visibleItems: [TaskProgressItem] = []
@@ -347,6 +413,9 @@ final class DynamicIslandTaskViewController:
         detailContentView.addSubview(startedField)
         detailContentView.addSubview(elapsedField)
         detailContentView.addSubview(workingDirectoryField)
+        detailContentView.addSubview(repositoryRootField)
+        detailContentView.addSubview(gitStatusField)
+        detailContentView.addSubview(checkStatusField)
         detailContentView.addSubview(openResultField)
         detailContentView.addSubview(detailHeaderDivider)
         detailContentView.addSubview(eventsTitleField)
@@ -408,6 +477,9 @@ final class DynamicIslandTaskViewController:
         eventsTitleField.textColor = DynamicIslandPalette.secondaryText
         providerField.textColor = DynamicIslandPalette.secondaryText
         workingDirectoryField.textColor = DynamicIslandPalette.secondaryText
+        repositoryRootField.textColor = DynamicIslandPalette.secondaryText
+        gitStatusField.textColor = DynamicIslandPalette.secondaryText
+        checkStatusField.textColor = DynamicIslandPalette.secondaryText
         openResultField.textColor = DynamicIslandPalette.secondaryText
         identityField.textColor = DynamicIslandPalette.secondaryText
         openButton.target = self
@@ -521,7 +593,8 @@ final class DynamicIslandTaskViewController:
         sourceFilter: TaskSourceFilter,
         preferredTaskKey: String?,
         agentStatuses: [AgentRuntimeStatus]? = nil,
-        taskOpenEvidence: [String: TaskOpenEvidence]? = nil
+        taskOpenEvidence: [String: TaskOpenEvidence]? = nil,
+        taskRepositoryEvidence: [String: TaskRepositoryEvidence]? = nil
     ) {
         _ = view
         self.collection = collection
@@ -531,6 +604,9 @@ final class DynamicIslandTaskViewController:
         }
         if let taskOpenEvidence {
             self.taskOpenEvidence = taskOpenEvidence
+        }
+        if let taskRepositoryEvidence {
+            self.taskRepositoryEvidence = taskRepositoryEvidence
         }
         updateCounts()
         // An explicit navigation target must beat the controller's incidental
@@ -778,6 +854,9 @@ final class DynamicIslandTaskViewController:
             startedField.stringValue = ""
             elapsedField.stringValue = ""
             workingDirectoryField.stringValue = "工作目录不可用"
+            repositoryRootField.stringValue = taskRepositoryRootText(nil)
+            gitStatusField.stringValue = taskGitStatusText(nil)
+            checkStatusField.stringValue = taskCheckStatusText(nil)
             openResultField.stringValue = "返回结果 · 尚未尝试"
             identityField.stringValue = ""
             openButton.setVisualStyle(.bare)
@@ -805,8 +884,15 @@ final class DynamicIslandTaskViewController:
             now: dynamicIslandCurrentDate()
         )
         elapsedField.stringValue = "持续 \(durationText)"
-        workingDirectoryField.stringValue = copyPathForSelfTest()
-            ?? "工作目录不可用"
+        workingDirectoryField.stringValue = copyPathForSelfTest().map {
+            "工作目录 · \($0)"
+        } ?? "工作目录 · 未验证"
+        let repositoryEvidence = repositoryEvidence(for: item)
+        repositoryRootField.stringValue = taskRepositoryRootText(
+            repositoryEvidence
+        )
+        gitStatusField.stringValue = taskGitStatusText(repositoryEvidence)
+        checkStatusField.stringValue = taskCheckStatusText(repositoryEvidence)
         openResultField.stringValue = openResultText(for: item)
         identityField.stringValue = secondaryIdentityText(for: item) ?? ""
         openButton.setDisplayTitle(item.openButtonTitle)
@@ -861,6 +947,9 @@ final class DynamicIslandTaskViewController:
             startedField,
             elapsedField,
             workingDirectoryField,
+            repositoryRootField,
+            gitStatusField,
+            checkStatusField,
             openResultField,
             detailHeaderDivider,
             eventsTitleField,
@@ -942,21 +1031,39 @@ final class DynamicIslandTaskViewController:
             width: fieldWidth - 250,
             height: 20
         )
-        openResultField.frame = NSRect(
+        repositoryRootField.frame = NSRect(
             x: inset,
             y: contentHeight - 114,
             width: fieldWidth,
             height: 20
         )
+        gitStatusField.frame = NSRect(
+            x: inset,
+            y: contentHeight - 136,
+            width: fieldWidth,
+            height: 20
+        )
+        checkStatusField.frame = NSRect(
+            x: inset,
+            y: contentHeight - 158,
+            width: fieldWidth,
+            height: 20
+        )
+        openResultField.frame = NSRect(
+            x: inset,
+            y: contentHeight - 180,
+            width: fieldWidth,
+            height: 20
+        )
         detailHeaderDivider.frame = NSRect(
             x: inset,
-            y: contentHeight - 132,
+            y: contentHeight - 198,
             width: fieldWidth,
             height: 1
         )
         eventsTitleField.frame = NSRect(
             x: inset,
-            y: contentHeight - 158,
+            y: contentHeight - 224,
             width: fieldWidth,
             height: 18
         )
@@ -964,7 +1071,7 @@ final class DynamicIslandTaskViewController:
             x: inset,
             y: 64,
             width: fieldWidth,
-            height: max(96, contentHeight - 234)
+            height: max(96, contentHeight - 310)
         )
         eventsScrollView.frame = eventsCard.bounds.insetBy(dx: 10, dy: 10)
         layoutEventsTable()
@@ -1148,6 +1255,9 @@ final class DynamicIslandTaskViewController:
                 startedField.stringValue,
                 elapsedField.stringValue,
                 workingDirectoryField.stringValue,
+                repositoryRootField.stringValue,
+                gitStatusField.stringValue,
+                checkStatusField.stringValue,
                 openResultField.stringValue,
                 "最近事件",
             ].joined(separator: "，")
@@ -1184,6 +1294,18 @@ final class DynamicIslandTaskViewController:
         }
         return "返回结果 · \(evidence.result.feedbackDescription) · "
             + eventTimeFormatter.string(from: evidence.recordedAt)
+    }
+
+    private func repositoryEvidence(
+        for item: TaskProgressItem
+    ) -> TaskRepositoryEvidence? {
+        guard let directory = item.workingDirectory.flatMap(
+            normalizedAbsolutePath
+        ),
+              let evidence = taskRepositoryEvidence[item.identityKey],
+              evidence.workingDirectory == directory
+        else { return nil }
+        return evidence
     }
 
     private var eventTimeFormatter: DateFormatter {
@@ -1294,6 +1416,15 @@ final class DynamicIslandTaskViewController:
     func openResultTextForSelfTest() -> String {
         _ = view
         return openResultField.stringValue
+    }
+
+    func repositoryContextTextsForSelfTest() -> [String] {
+        _ = view
+        return [
+            repositoryRootField.stringValue,
+            gitStatusField.stringValue,
+            checkStatusField.stringValue,
+        ]
     }
 
     func showHoverForSelfTest(item: TaskProgressItem) {

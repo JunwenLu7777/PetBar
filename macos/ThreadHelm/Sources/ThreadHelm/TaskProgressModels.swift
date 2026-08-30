@@ -518,3 +518,586 @@ func appendingTaskActivityEvent(
     }.map(\.element)
     return indexed
 }
+
+// MARK: - Read-only repository and check evidence
+
+enum TaskGitCheckoutKind: Equatable {
+    case checkout
+    case linkedWorktree
+}
+
+struct TaskGitStatus: Equatable {
+    let repositoryRoot: String
+    let branch: String?
+    let isDetached: Bool
+    let checkoutKind: TaskGitCheckoutKind
+    let isDirty: Bool
+    let upstreamName: String?
+    let aheadCount: Int?
+    let behindCount: Int?
+    let headSHA: String?
+    /// Safe `owner/repository` slug only. The original remote URL is never kept.
+    let githubRepository: String?
+
+    var headShortSHA: String? {
+        headSHA.map { String($0.prefix(12)) }
+    }
+}
+
+enum TaskCheckState: Equatable {
+    case unknown
+    case pending
+    case passed
+    case failed
+    case inconclusive
+}
+
+struct TaskCheckStatus: Equatable {
+    let state: TaskCheckState
+    let totalCount: Int
+    let successCount: Int
+    let failureCount: Int
+    let pendingCount: Int
+    let inconclusiveCount: Int
+
+    static let unknown = TaskCheckStatus(
+        state: .unknown,
+        totalCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        pendingCount: 0,
+        inconclusiveCount: 0
+    )
+}
+
+/// Per-task, in-memory-only snapshot. It is deliberately not Codable: repository
+/// paths, branches, commit IDs and check state must not drift into persisted metrics.
+struct TaskRepositoryEvidence: Equatable {
+    let workingDirectory: String
+    let gitStatus: TaskGitStatus?
+    let checkStatus: TaskCheckStatus
+    let gitObservedAt: Date
+    let checksObservedAt: Date
+}
+
+let taskGitStatusCacheLifetime: TimeInterval = 10
+let taskCheckStatusCacheLifetime: TimeInterval = 60
+let taskRepositoryProbeLimit = 8
+
+private struct TaskStatusCommandResult {
+    let data: Data
+    let exitStatus: Int32
+}
+
+private func runTaskStatusCommand(
+    executableURL: URL,
+    arguments: [String],
+    timeout: TimeInterval,
+    maximumOutputBytes: Int
+) -> TaskStatusCommandResult? {
+    let process = Process()
+    let output = Pipe()
+    process.executableURL = executableURL
+    process.arguments = arguments
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    var environment = ProcessInfo.processInfo.environment
+    environment["LC_ALL"] = "C"
+    environment["LANG"] = "C"
+    environment["NO_COLOR"] = "1"
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    environment["GIT_PAGER"] = "cat"
+    environment["PAGER"] = "cat"
+    environment["GH_PROMPT_DISABLED"] = "1"
+    environment["GH_NO_UPDATE_NOTIFIER"] = "1"
+    process.environment = environment
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+    let capture = captureProcessOutput(
+        process: process,
+        output: output.fileHandleForReading,
+        timeout: timeout,
+        maximumOutputBytes: maximumOutputBytes
+    )
+    guard capture.termination == .exited else { return nil }
+    return TaskStatusCommandResult(
+        data: capture.data,
+        exitStatus: process.terminationStatus
+    )
+}
+
+private func taskStatusCommandText(
+    executableURL: URL,
+    arguments: [String],
+    timeout: TimeInterval = 2,
+    maximumOutputBytes: Int = 64 * 1_024
+) -> String? {
+    guard let result = runTaskStatusCommand(
+        executableURL: executableURL,
+        arguments: arguments,
+        timeout: timeout,
+        maximumOutputBytes: maximumOutputBytes
+    ), result.exitStatus == 0,
+       let text = String(data: result.data, encoding: .utf8)
+    else { return nil }
+    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+func parsedTaskGitStatus(
+    repositoryRoot: String,
+    porcelainV2: String,
+    checkoutKind: TaskGitCheckoutKind,
+    githubRepository: String? = nil
+) -> TaskGitStatus? {
+    guard let normalizedRoot = normalizedAbsolutePath(repositoryRoot) else {
+        return nil
+    }
+    var headOID: String?
+    var sawHeadOID = false
+    var branchMarker: String?
+    var upstreamName: String?
+    var aheadCount: Int?
+    var behindCount: Int?
+    var isDirty = false
+
+    for rawLine in porcelainV2.split(
+        omittingEmptySubsequences: true,
+        whereSeparator: { $0.isNewline }
+    ) {
+        let line = String(rawLine)
+        if line.hasPrefix("# branch.oid ") {
+            sawHeadOID = true
+            let value = String(line.dropFirst("# branch.oid ".count))
+            if value != "(initial)" {
+                guard value.range(
+                    of: #"^(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{64})$"#,
+                    options: .regularExpression
+                ) != nil else { return nil }
+                headOID = value.lowercased()
+            }
+        } else if line.hasPrefix("# branch.head ") {
+            let value = String(line.dropFirst("# branch.head ".count))
+            guard !value.isEmpty, value.count <= 256 else { return nil }
+            branchMarker = value
+        } else if line.hasPrefix("# branch.upstream ") {
+            let value = String(line.dropFirst("# branch.upstream ".count))
+            guard !value.isEmpty, value.count <= 256 else { return nil }
+            upstreamName = value
+        } else if line.hasPrefix("# branch.ab ") {
+            let values = line.dropFirst("# branch.ab ".count).split(separator: " ")
+            guard values.count == 2,
+                  values[0].first == "+",
+                  values[1].first == "-",
+                  let parsedAhead = Int(values[0].dropFirst()),
+                  let parsedBehind = Int(values[1].dropFirst()),
+                  parsedAhead >= 0,
+                  parsedBehind >= 0
+            else { return nil }
+            aheadCount = parsedAhead
+            behindCount = parsedBehind
+        } else if !line.hasPrefix("# ") {
+            isDirty = true
+        }
+    }
+
+    guard sawHeadOID, let branchMarker else { return nil }
+    let isDetached = branchMarker == "(detached)"
+    let branch: String?
+    if isDetached || branchMarker == "(unknown)" || branchMarker.isEmpty {
+        branch = nil
+    } else {
+        branch = branchMarker
+    }
+    return TaskGitStatus(
+        repositoryRoot: normalizedRoot,
+        branch: branch,
+        isDetached: isDetached,
+        checkoutKind: checkoutKind,
+        isDirty: isDirty,
+        upstreamName: upstreamName,
+        aheadCount: aheadCount,
+        behindCount: behindCount,
+        headSHA: headOID,
+        githubRepository: githubRepository
+    )
+}
+
+func taskGitCheckoutKind(
+    repositoryRoot: String,
+    gitDirectory: String,
+    commonGitDirectory: String
+) -> TaskGitCheckoutKind? {
+    guard let normalizedRoot = normalizedAbsolutePath(repositoryRoot) else {
+        return nil
+    }
+    func resolved(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("/") {
+            return URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        }
+        return URL(fileURLWithPath: normalizedRoot, isDirectory: true)
+            .appendingPathComponent(trimmed)
+            .standardizedFileURL.path
+    }
+    guard let gitPath = resolved(gitDirectory),
+          let commonPath = resolved(commonGitDirectory)
+    else { return nil }
+    return gitPath == commonPath ? .checkout : .linkedWorktree
+}
+
+private func taskGitHubRepositoryComponentIsSafe(_ value: String) -> Bool {
+    guard value != ".", value != ".." else { return false }
+    return value.range(
+        of: #"^[A-Za-z0-9._-]{1,100}$"#,
+        options: .regularExpression
+    ) != nil
+}
+
+func githubRepositorySlug(from remoteURL: String) -> String? {
+    let githubHost = "github.com"
+    let trimmed = remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed.count <= 2_048 else { return nil }
+    let scpPrefix = "git" + "@" + githubHost + ":"
+    let repositoryPath: String
+    if trimmed.hasPrefix(scpPrefix) {
+        repositoryPath = String(trimmed.dropFirst(scpPrefix.count))
+        guard !repositoryPath.hasPrefix("/") else { return nil }
+    } else {
+        guard let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              ["git", "http", "https", "ssh"].contains(scheme),
+              url.host?.lowercased() == githubHost,
+              (url.user == nil || (scheme == "ssh" && url.user == "git")),
+              url.password == nil,
+              url.query == nil,
+              url.fragment == nil
+        else { return nil }
+        repositoryPath = url.path
+    }
+    var components = repositoryPath.split(separator: "/").map(String.init)
+    guard components.count == 2 else { return nil }
+    if components[1].hasSuffix(".git") {
+        components[1].removeLast(4)
+    }
+    guard components.allSatisfy(taskGitHubRepositoryComponentIsSafe) else {
+        return nil
+    }
+    return components.joined(separator: "/")
+}
+
+func taskCheckStatus(from data: Data) -> TaskCheckStatus? {
+    guard let root = try? JSONSerialization.jsonObject(with: data)
+        as? [String: Any],
+          let totalCount = root["total_count"] as? Int,
+          totalCount >= 0,
+          let checkRuns = root["check_runs"] as? [[String: Any]],
+          checkRuns.count == totalCount
+    else { return nil }
+    guard totalCount > 0 else { return .unknown }
+
+    var successCount = 0
+    var failureCount = 0
+    var pendingCount = 0
+    var inconclusiveCount = 0
+    for run in checkRuns {
+        guard let status = run["status"] as? String else { return nil }
+        if ["queued", "in_progress", "waiting", "requested", "pending"]
+            .contains(status)
+        {
+            pendingCount += 1
+            continue
+        }
+        guard status == "completed",
+              let conclusion = run["conclusion"] as? String
+        else { return nil }
+        switch conclusion {
+        case "success":
+            successCount += 1
+        case "failure", "timed_out", "action_required", "startup_failure":
+            failureCount += 1
+        case "cancelled", "neutral", "skipped", "stale":
+            inconclusiveCount += 1
+        default:
+            return nil
+        }
+    }
+    let state: TaskCheckState
+    if failureCount > 0 {
+        state = .failed
+    } else if pendingCount > 0 {
+        state = .pending
+    } else if inconclusiveCount > 0 {
+        state = .inconclusive
+    } else {
+        state = .passed
+    }
+    return TaskCheckStatus(
+        state: state,
+        totalCount: totalCount,
+        successCount: successCount,
+        failureCount: failureCount,
+        pendingCount: pendingCount,
+        inconclusiveCount: inconclusiveCount
+    )
+}
+
+func locateGitHubCLI(fileManager: FileManager = .default) -> URL? {
+    for path in [
+        "/opt/homebrew/bin/gh",
+        "/usr/local/bin/gh",
+        "/usr/bin/gh",
+    ] where fileManager.isExecutableFile(atPath: path) {
+        return URL(fileURLWithPath: path)
+    }
+    return nil
+}
+
+private func taskGitHubRepository(
+    gitExecutableURL: URL,
+    repositoryRoot: String,
+    upstreamName: String?
+) -> String? {
+    if let upstreamName,
+       let remoteName = upstreamName.split(separator: "/").first
+    {
+        guard let remote = taskStatusCommandText(
+            executableURL: gitExecutableURL,
+            arguments: [
+                "-C", repositoryRoot, "remote", "get-url", String(remoteName),
+            ],
+            timeout: 1,
+            maximumOutputBytes: 4_096
+        ) else { return nil }
+        return githubRepositorySlug(from: remote)
+    }
+    guard let remote = taskStatusCommandText(
+        executableURL: gitExecutableURL,
+        arguments: ["-C", repositoryRoot, "remote", "get-url", "origin"],
+        timeout: 1,
+        maximumOutputBytes: 4_096
+    ) else { return nil }
+    return githubRepositorySlug(from: remote)
+}
+
+private func probeTaskGitStatus(
+    workingDirectory: String,
+    gitExecutableURL: URL
+) -> TaskGitStatus? {
+    guard let directory = normalizedAbsolutePath(workingDirectory) else {
+        return nil
+    }
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(
+        atPath: directory,
+        isDirectory: &isDirectory
+    ), isDirectory.boolValue else { return nil }
+    guard let repositoryRoot = taskStatusCommandText(
+        executableURL: gitExecutableURL,
+        arguments: ["-C", directory, "rev-parse", "--show-toplevel"],
+        timeout: 1,
+        maximumOutputBytes: 4_096
+    ).flatMap(normalizedAbsolutePath),
+          let statusText = taskStatusCommandText(
+              executableURL: gitExecutableURL,
+              arguments: [
+                  "-c", "core.fsmonitor=false",
+                  "-c", "core.untrackedCache=false",
+                  "-C", repositoryRoot, "status", "--porcelain=v2", "--branch",
+                  "--untracked-files=normal",
+              ],
+              timeout: 2,
+              maximumOutputBytes: 128 * 1_024
+          ),
+          let metadataText = taskStatusCommandText(
+              executableURL: gitExecutableURL,
+              arguments: [
+                  "-C", repositoryRoot, "rev-parse", "--git-dir",
+                  "--git-common-dir",
+              ],
+              timeout: 1,
+              maximumOutputBytes: 8_192
+          )
+    else { return nil }
+    let metadataLines = metadataText.split(
+        omittingEmptySubsequences: true,
+        whereSeparator: { $0.isNewline }
+    ).map(String.init)
+    guard metadataLines.count == 2,
+          let checkoutKind = taskGitCheckoutKind(
+              repositoryRoot: repositoryRoot,
+              gitDirectory: metadataLines[0],
+              commonGitDirectory: metadataLines[1]
+          ),
+          let preliminary = parsedTaskGitStatus(
+              repositoryRoot: repositoryRoot,
+              porcelainV2: statusText,
+              checkoutKind: checkoutKind
+          )
+    else { return nil }
+    let githubRepository = taskGitHubRepository(
+        gitExecutableURL: gitExecutableURL,
+        repositoryRoot: repositoryRoot,
+        upstreamName: preliminary.upstreamName
+    )
+    return parsedTaskGitStatus(
+        repositoryRoot: repositoryRoot,
+        porcelainV2: statusText,
+        checkoutKind: checkoutKind,
+        githubRepository: githubRepository
+    )
+}
+
+private func probeTaskCheckStatus(
+    githubRepository: String,
+    headSHA: String,
+    ghExecutableURL: URL
+) -> TaskCheckStatus {
+    let repositoryComponents = githubRepository.split(separator: "/")
+        .map(String.init)
+    guard repositoryComponents.count == 2,
+          repositoryComponents.allSatisfy(taskGitHubRepositoryComponentIsSafe),
+          headSHA.range(
+              of: #"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"#,
+              options: .regularExpression
+          ) != nil
+    else { return .unknown }
+    let endpoint = "repos/\(githubRepository)/commits/\(headSHA)"
+        + "/check-runs?per_page=100&filter=latest"
+    let jq = "{total_count: .total_count, check_runs: "
+        + "[.check_runs[] | {status: .status, conclusion: .conclusion}]}"
+    guard let result = runTaskStatusCommand(
+        executableURL: ghExecutableURL,
+        arguments: [
+            "api", "-H", "Accept: application/vnd.github+json", endpoint,
+            "--jq", jq,
+        ],
+        timeout: 3,
+        maximumOutputBytes: 64 * 1_024
+    ), result.exitStatus == 0,
+       let status = taskCheckStatus(from: result.data)
+    else { return .unknown }
+    return status
+}
+
+func probeTaskRepositoryEvidence(
+    workingDirectory: String,
+    previous: TaskRepositoryEvidence?,
+    now: Date = Date(),
+    gitExecutableURL: URL = URL(fileURLWithPath: "/usr/bin/git"),
+    ghExecutableURL: URL? = locateGitHubCLI()
+) -> TaskRepositoryEvidence {
+    let normalizedDirectory = normalizedAbsolutePath(workingDirectory)
+        ?? workingDirectory
+    let matchingPrevious = previous?.workingDirectory == normalizedDirectory
+        ? previous
+        : nil
+    func isFresh(_ date: Date, lifetime: TimeInterval) -> Bool {
+        let age = now.timeIntervalSince(date)
+        return age >= 0 && age < lifetime
+    }
+    let checksAreFresh = matchingPrevious.map {
+        isFresh($0.checksObservedAt, lifetime: taskCheckStatusCacheLifetime)
+    } ?? false
+    let gitIsFresh = matchingPrevious.map {
+        isFresh($0.gitObservedAt, lifetime: taskGitStatusCacheLifetime)
+    } ?? false
+    if gitIsFresh, checksAreFresh, let matchingPrevious {
+        return matchingPrevious
+    }
+
+    let gitStatus = probeTaskGitStatus(
+        workingDirectory: normalizedDirectory,
+        gitExecutableURL: gitExecutableURL
+    )
+    let canReuseChecks = checksAreFresh
+        && matchingPrevious?.gitStatus?.repositoryRoot == gitStatus?.repositoryRoot
+        && matchingPrevious?.gitStatus?.headSHA == gitStatus?.headSHA
+        && matchingPrevious?.gitStatus?.githubRepository
+            == gitStatus?.githubRepository
+    let checkStatus: TaskCheckStatus
+    let checksObservedAt: Date
+    if canReuseChecks, let matchingPrevious {
+        checkStatus = matchingPrevious.checkStatus
+        checksObservedAt = matchingPrevious.checksObservedAt
+    } else if let githubRepository = gitStatus?.githubRepository,
+              let headSHA = gitStatus?.headSHA,
+              let ghExecutableURL
+    {
+        checkStatus = probeTaskCheckStatus(
+            githubRepository: githubRepository,
+            headSHA: headSHA,
+            ghExecutableURL: ghExecutableURL
+        )
+        checksObservedAt = now
+    } else {
+        checkStatus = .unknown
+        checksObservedAt = now
+    }
+    return TaskRepositoryEvidence(
+        workingDirectory: normalizedDirectory,
+        gitStatus: gitStatus,
+        checkStatus: checkStatus,
+        gitObservedAt: now,
+        checksObservedAt: checksObservedAt
+    )
+}
+
+func taskRepositoryEvidenceByTaskIdentity(
+    items: [TaskProgressItem],
+    previous: [String: TaskRepositoryEvidence],
+    now: Date = Date(),
+    maximumDirectories: Int = taskRepositoryProbeLimit,
+    probe: (
+        String,
+        TaskRepositoryEvidence?,
+        Date
+    ) -> TaskRepositoryEvidence = { directory, previous, now in
+        probeTaskRepositoryEvidence(
+            workingDirectory: directory,
+            previous: previous,
+            now: now
+        )
+    }
+) -> [String: TaskRepositoryEvidence] {
+    var previousByDirectory: [String: TaskRepositoryEvidence] = [:]
+    for evidence in previous.values {
+        if let existing = previousByDirectory[evidence.workingDirectory],
+           existing.gitObservedAt > evidence.gitObservedAt
+            || (existing.gitObservedAt == evidence.gitObservedAt
+                && existing.checksObservedAt >= evidence.checksObservedAt)
+        {
+            continue
+        } else {
+            previousByDirectory[evidence.workingDirectory] = evidence
+        }
+    }
+
+    var visitedDirectories = Set<String>()
+    var evidenceByDirectory: [String: TaskRepositoryEvidence] = [:]
+    var result: [String: TaskRepositoryEvidence] = [:]
+    let limit = max(0, maximumDirectories)
+    for item in items {
+        guard let directory = item.workingDirectory.flatMap(normalizedAbsolutePath)
+        else { continue }
+        if let evidence = evidenceByDirectory[directory] {
+            result[item.identityKey] = evidence
+            continue
+        }
+        guard visitedDirectories.insert(directory).inserted,
+              visitedDirectories.count <= limit
+        else { continue }
+        let evidence = probe(
+            directory,
+            previousByDirectory[directory],
+            now
+        )
+        evidenceByDirectory[directory] = evidence
+        result[item.identityKey] = evidence
+    }
+    return result
+}

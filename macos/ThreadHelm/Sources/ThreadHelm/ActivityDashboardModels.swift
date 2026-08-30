@@ -459,6 +459,8 @@ struct ActivityDashboardSnapshot: Equatable {
     var permissionQueue = ClaudePermissionQueueSnapshot.empty
     var permissionDecisionHistory: [PermissionDecisionHistoryRecord] = []
     var taskOpenEvidence: [String: TaskOpenEvidence] = [:]
+    /// 只在当前进程内使用，不进入任何持久化统计或历史文件。
+    var taskRepositoryEvidence: [String: TaskRepositoryEvidence] = [:]
     var agentSnapshots: [AgentSessionSnapshot] = []
     var attentionItems: [AgentAttentionItem] = []
     var agentStatuses: [AgentRuntimeStatus] = []

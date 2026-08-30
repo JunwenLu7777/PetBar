@@ -1861,7 +1861,8 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
                 sourceFilter: currentSourceFilter,
                 preferredTaskKey: selectedTaskKey,
                 agentStatuses: snapshot.agentStatuses,
-                taskOpenEvidence: snapshot.taskOpenEvidence
+                taskOpenEvidence: snapshot.taskOpenEvidence,
+                taskRepositoryEvidence: snapshot.taskRepositoryEvidence
             )
             selectedTaskKey = taskController.selectedTaskKeyForSelfTest()
             statusSymbol.image = NSImage(
@@ -2057,7 +2058,8 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             sourceFilter: currentSourceFilter,
             preferredTaskKey: preferredTaskKey ?? selectedTaskKey,
             agentStatuses: latestSnapshot.agentStatuses,
-            taskOpenEvidence: latestSnapshot.taskOpenEvidence
+            taskOpenEvidence: latestSnapshot.taskOpenEvidence,
+            taskRepositoryEvidence: latestSnapshot.taskRepositoryEvidence
         )
         selectedTaskKey = taskController.selectedTaskKeyForSelfTest()
     }

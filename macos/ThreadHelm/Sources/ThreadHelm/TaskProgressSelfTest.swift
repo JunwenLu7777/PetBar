@@ -24,6 +24,7 @@ func runTaskProgressSelfTest() -> Never {
     runCodexTailMetadataBackfillSelfTest(now: now, started: started)
     runCodexCompletedItemFormatSelfTest()
     runTaskProgressSelfTestPhase2(now: now, started: started)
+    runTaskRepositoryContextSelfTest()
     runTaskProgressRefreshGateSelfTest()
     guard runTaskProgressRefreshStabilityRegressionSelfTest() else {
         fputs("task progress refresh reader stability failed\n", stderr)
@@ -33,8 +34,393 @@ func runTaskProgressSelfTest() -> Never {
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
     runDiscoveryCacheAndAutoIntegrationBackoffSelfTest()
-    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; provider-atomic-replace=codex+claude; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; applescript-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
+    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; provider-atomic-replace=codex+claude; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; repository-context=git+worktree+checks+unknown+cache; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; applescript-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
     exit(0)
+}
+
+private func runTaskRepositoryContextSelfTest() {
+    func fail(_ message: String) -> Never {
+        fputs("task repository context self-test failed: \(message)\n", stderr)
+        exit(1)
+    }
+    func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
+        guard condition() else { fail(message) }
+    }
+    func json(_ value: String) -> Data {
+        guard let data = value.data(using: .utf8) else {
+            fail("JSON fixture encoding")
+        }
+        return data
+    }
+
+    let sha = String(repeating: "a", count: 40)
+    let cleanPorcelain = """
+    # branch.oid \(sha)
+    # branch.head main
+    """
+    guard let clean = parsedTaskGitStatus(
+        repositoryRoot: "/tmp/threadhelm-repository",
+        porcelainV2: cleanPorcelain,
+        checkoutKind: .checkout
+    ) else { fail("clean porcelain parsing") }
+    expect(clean.branch == "main", "clean branch")
+    expect(!clean.isDetached, "clean detached state")
+    expect(!clean.isDirty, "clean dirty state")
+    expect(clean.upstreamName == nil, "clean upstream absence")
+    expect(clean.aheadCount == nil && clean.behindCount == nil, "clean counts")
+    expect(clean.headSHA == sha, "clean full SHA")
+    expect(clean.headShortSHA == String(repeating: "a", count: 12), "short SHA")
+
+    let upstreamPorcelain = """
+    # branch.oid \(sha)
+    # branch.head feature/truth
+    # branch.upstream origin/feature/truth
+    # branch.ab +2 -3
+    1 .M N... 100644 100644 100644 \(sha) \(sha) source.swift
+    """
+    guard let upstream = parsedTaskGitStatus(
+        repositoryRoot: "/tmp/threadhelm-repository",
+        porcelainV2: upstreamPorcelain,
+        checkoutKind: .linkedWorktree
+    ) else { fail("upstream porcelain parsing") }
+    expect(upstream.branch == "feature/truth", "upstream branch")
+    expect(upstream.checkoutKind == .linkedWorktree, "linked worktree parsing")
+    expect(upstream.isDirty, "dirty parsing")
+    expect(upstream.upstreamName == "origin/feature/truth", "upstream name")
+    expect(upstream.aheadCount == 2 && upstream.behindCount == 3, "ahead/behind")
+
+    let detachedPorcelain = """
+    # branch.oid \(sha)
+    # branch.head (detached)
+    """
+    guard let detached = parsedTaskGitStatus(
+        repositoryRoot: "/tmp/threadhelm-repository",
+        porcelainV2: detachedPorcelain,
+        checkoutKind: .checkout
+    ) else { fail("detached porcelain parsing") }
+    expect(detached.isDetached && detached.branch == nil, "detached identity")
+    expect(
+        parsedTaskGitStatus(
+            repositoryRoot: "/tmp/threadhelm-repository",
+            porcelainV2: cleanPorcelain + "\n# branch.ab +x -1",
+            checkoutKind: .checkout
+        ) == nil,
+        "malformed ahead/behind must fail closed"
+    )
+    expect(
+        parsedTaskGitStatus(
+            repositoryRoot: "/tmp/threadhelm-repository",
+            porcelainV2: "# branch.oid abcdef1\n# branch.head main",
+            checkoutKind: .checkout
+        ) == nil,
+        "short object ID must fail closed"
+    )
+
+    expect(
+        taskGitCheckoutKind(
+            repositoryRoot: "/tmp/threadhelm-repository",
+            gitDirectory: ".git",
+            commonGitDirectory: ".git"
+        ) == .checkout,
+        "ordinary checkout detection"
+    )
+    expect(
+        taskGitCheckoutKind(
+            repositoryRoot: "/tmp/threadhelm-linked",
+            gitDirectory: "/tmp/threadhelm-repository/.git/worktrees/linked",
+            commonGitDirectory: "/tmp/threadhelm-repository/.git"
+        ) == .linkedWorktree,
+        "linked worktree detection"
+    )
+
+    let scpRemote = "git" + "@" + "github.com:OpenAI/Codex.git"
+    let sshRemote = "ssh://git" + "@" + "github.com/OpenAI/Codex.git"
+    let credentialRemote = "https://token" + "@" + "github.com/OpenAI/Codex.git"
+    expect(
+        githubRepositorySlug(from: "https://github.com/OpenAI/Codex.git")
+            == "OpenAI/Codex",
+        "HTTPS GitHub remote"
+    )
+    expect(
+        githubRepositorySlug(from: scpRemote) == "OpenAI/Codex",
+        "SCP GitHub remote"
+    )
+    expect(
+        githubRepositorySlug(from: sshRemote) == "OpenAI/Codex",
+        "SSH GitHub remote"
+    )
+    for unsafeRemote in [
+        credentialRemote,
+        "https://gitlab.com/OpenAI/Codex.git",
+        "https://github.com/OpenAI/Codex/extra.git",
+        "https://github.com/OpenAI/Codex.git?credential=hidden",
+        "https://github.com/../Codex.git",
+        "https://github.com/OpenAI/Codex.git\ninvalid",
+        "git" + "@" + "github.com:/OpenAI/Codex.git",
+    ] {
+        expect(
+            githubRepositorySlug(from: unsafeRemote) == nil,
+            "unsafe GitHub remote accepted"
+        )
+    }
+
+    guard let passed = taskCheckStatus(from: json("""
+    {"total_count":2,"check_runs":[
+      {"status":"completed","conclusion":"success"},
+      {"status":"completed","conclusion":"success"}
+    ]}
+    """)) else { fail("passed checks parsing") }
+    expect(
+        passed == TaskCheckStatus(
+            state: .passed,
+            totalCount: 2,
+            successCount: 2,
+            failureCount: 0,
+            pendingCount: 0,
+            inconclusiveCount: 0
+        ),
+        "passed checks counts"
+    )
+
+    guard let mixed = taskCheckStatus(from: json("""
+    {"total_count":4,"check_runs":[
+      {"status":"completed","conclusion":"success"},
+      {"status":"completed","conclusion":"failure"},
+      {"status":"in_progress","conclusion":null},
+      {"status":"completed","conclusion":"skipped"}
+    ]}
+    """)) else { fail("mixed checks parsing") }
+    expect(mixed.state == .failed, "failed checks priority")
+    expect(mixed.successCount == 1, "mixed success count")
+    expect(mixed.failureCount == 1, "mixed failure count")
+    expect(mixed.pendingCount == 1, "mixed pending count")
+    expect(mixed.inconclusiveCount == 1, "mixed inconclusive count")
+
+    guard let inconclusive = taskCheckStatus(from: json("""
+    {"total_count":4,"check_runs":[
+      {"status":"completed","conclusion":"cancelled"},
+      {"status":"completed","conclusion":"neutral"},
+      {"status":"completed","conclusion":"skipped"},
+      {"status":"completed","conclusion":"stale"}
+    ]}
+    """)) else { fail("inconclusive checks parsing") }
+    expect(inconclusive.state == .inconclusive, "inconclusive state")
+    expect(inconclusive.inconclusiveCount == 4, "inconclusive count")
+
+    guard let noChecks = taskCheckStatus(from: json(
+        #"{"total_count":0,"check_runs":[]}"#
+    )) else { fail("zero checks parsing") }
+    expect(noChecks == .unknown, "zero checks must be unknown")
+    expect(
+        taskCheckStatus(from: json(
+            #"{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"}]}"#
+        )) == nil,
+        "paginated checks must fail closed"
+    )
+    expect(
+        taskCheckStatus(from: json(
+            #"{"total_count":1,"check_runs":[{"status":"new_status","conclusion":null}]}"#
+        )) == nil,
+        "unknown check status must fail closed"
+    )
+    expect(
+        taskCheckStatus(from: json(
+            #"{"total_count":1,"check_runs":[{"status":"completed","conclusion":"new_conclusion"}]}"#
+        )) == nil,
+        "unknown check conclusion must fail closed"
+    )
+
+    let now = Date(timeIntervalSince1970: 2_000_000_000)
+    let duplicateDirectory = "/tmp/threadhelm-repository-cache-shared"
+    var cacheItems = [
+        TaskProgressItem(
+            title: "cache one",
+            kind: .running,
+            threadID: "cache-one",
+            workingDirectory: duplicateDirectory
+        ),
+        TaskProgressItem(
+            title: "cache two",
+            kind: .running,
+            threadID: "cache-two",
+            workingDirectory: duplicateDirectory
+        ),
+    ]
+    for index in 0..<9 {
+        cacheItems.append(
+            TaskProgressItem(
+                title: "cache \(index)",
+                kind: .running,
+                threadID: "cache-\(index)",
+                workingDirectory: "/tmp/threadhelm-repository-cache-\(index)"
+            )
+        )
+    }
+    var probeCounts: [String: Int] = [:]
+    let mapped = taskRepositoryEvidenceByTaskIdentity(
+        items: cacheItems,
+        previous: [:],
+        now: now,
+        maximumDirectories: 8
+    ) { directory, _, observedAt in
+        probeCounts[directory, default: 0] += 1
+        return TaskRepositoryEvidence(
+            workingDirectory: directory,
+            gitStatus: nil,
+            checkStatus: .unknown,
+            gitObservedAt: observedAt,
+            checksObservedAt: observedAt
+        )
+    }
+    expect(probeCounts.count == 8, "repository probe limit")
+    expect(probeCounts[duplicateDirectory] == 1, "same-directory deduplication")
+    expect(mapped[cacheItems[0].identityKey] == mapped[cacheItems[1].identityKey],
+           "same-directory task mapping")
+    expect(mapped.count == 9, "probe limit identity mapping")
+
+    let cachedGitStatus = TaskGitStatus(
+        repositoryRoot: duplicateDirectory,
+        branch: "main",
+        isDetached: false,
+        checkoutKind: .checkout,
+        isDirty: false,
+        upstreamName: nil,
+        aheadCount: nil,
+        behindCount: nil,
+        headSHA: sha,
+        githubRepository: nil
+    )
+    let cachedEvidence = TaskRepositoryEvidence(
+        workingDirectory: duplicateDirectory,
+        gitStatus: cachedGitStatus,
+        checkStatus: .unknown,
+        gitObservedAt: now,
+        checksObservedAt: now
+    )
+    let cacheHit = probeTaskRepositoryEvidence(
+        workingDirectory: duplicateDirectory,
+        previous: cachedEvidence,
+        now: now.addingTimeInterval(1),
+        gitExecutableURL: URL(fileURLWithPath: "/threadhelm/missing-git"),
+        ghExecutableURL: nil
+    )
+    expect(cacheHit == cachedEvidence, "fresh repository cache hit")
+
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("ThreadHelmRepositorySelfTest-\(UUID().uuidString)")
+    let repositoryURL = temporaryRoot.appendingPathComponent("repository")
+    let nestedURL = repositoryURL.appendingPathComponent("nested")
+    let linkedURL = temporaryRoot.appendingPathComponent("linked")
+    do {
+        try FileManager.default.createDirectory(
+            at: nestedURL,
+            withIntermediateDirectories: true
+        )
+    } catch {
+        fail("temporary repository directory")
+    }
+    defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+    func runGit(_ arguments: [String]) -> Bool {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        var environment = ProcessInfo.processInfo.environment
+        environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        environment["GIT_CONFIG_SYSTEM"] = "/dev/null"
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        environment["GIT_OPTIONAL_LOCKS"] = "0"
+        process.environment = environment
+        do {
+            try process.run()
+        } catch {
+            return false
+        }
+        let capture = captureProcessOutput(
+            process: process,
+            output: output.fileHandleForReading,
+            timeout: 5,
+            maximumOutputBytes: 16 * 1_024
+        )
+        return capture.termination == .exited && process.terminationStatus == 0
+    }
+
+    expect(runGit(["-C", repositoryURL.path, "init"]), "git init")
+    expect(
+        runGit([
+            "-C", repositoryURL.path, "symbolic-ref", "HEAD", "refs/heads/main",
+        ]),
+        "set main branch"
+    )
+    let fixtureURL = repositoryURL.appendingPathComponent("fixture.txt")
+    do {
+        try Data("clean\n".utf8).write(to: fixtureURL, options: .atomic)
+    } catch {
+        fail("write clean fixture")
+    }
+    expect(runGit(["-C", repositoryURL.path, "add", "fixture.txt"]), "git add")
+    expect(
+        runGit([
+            "-C", repositoryURL.path,
+            "-c", "user.name=ThreadHelm Self Test",
+            "-c", "user.email=threadhelm.invalid",
+            "-c", "commit.gpgsign=false",
+            "commit", "-m", "repository fixture",
+        ]),
+        "git commit"
+    )
+
+    let cleanEvidence = probeTaskRepositoryEvidence(
+        workingDirectory: nestedURL.path,
+        previous: nil,
+        now: now,
+        ghExecutableURL: nil
+    )
+    guard let probedClean = cleanEvidence.gitStatus else {
+        fail("real clean repository probe")
+    }
+    expect(probedClean.repositoryRoot == repositoryURL.path, "real repository root")
+    expect(probedClean.branch == "main", "real branch")
+    expect(probedClean.checkoutKind == .checkout, "real checkout kind")
+    expect(!probedClean.isDirty, "real clean state")
+    expect(probedClean.headSHA?.count == 40, "real full HEAD")
+    expect(cleanEvidence.checkStatus == .unknown, "gh absence is unknown")
+
+    do {
+        try Data("dirty\n".utf8).write(to: fixtureURL, options: .atomic)
+    } catch {
+        fail("write dirty fixture")
+    }
+    let dirtyEvidence = probeTaskRepositoryEvidence(
+        workingDirectory: repositoryURL.path,
+        previous: nil,
+        now: now,
+        ghExecutableURL: nil
+    )
+    expect(dirtyEvidence.gitStatus?.isDirty == true, "real dirty state")
+
+    expect(
+        runGit([
+            "-C", repositoryURL.path, "worktree", "add", "--detach",
+            linkedURL.path, "HEAD",
+        ]),
+        "git worktree add"
+    )
+    let linkedEvidence = probeTaskRepositoryEvidence(
+        workingDirectory: linkedURL.path,
+        previous: nil,
+        now: now,
+        ghExecutableURL: nil
+    )
+    expect(
+        linkedEvidence.gitStatus?.checkoutKind == .linkedWorktree,
+        "real linked worktree probe"
+    )
+    expect(linkedEvidence.gitStatus?.isDetached == true, "real detached worktree")
 }
 
 private func runDiscoveryCacheAndAutoIntegrationBackoffSelfTest() {

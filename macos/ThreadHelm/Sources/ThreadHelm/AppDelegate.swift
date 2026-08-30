@@ -269,6 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let taskProgressReaderStore = TaskProgressRefreshReaderStore()
     private var refreshingQuotaProviders = Set<QuotaProvider>()
     private var taskProgressRefreshGate = TaskProgressRefreshGate()
+    private var isTaskRepositoryEvidenceRefreshing = false
     private var isPanelHiddenByUser = false
     private var cachedCodexDesktopRunning = false
     private lazy var codexOverlayNotificationSynchronizer: CodexOverlayNotificationSynchronizer = {
@@ -1525,6 +1526,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // 状态收起已经不需要的问答弹窗。
                 self.claudePermissionCoordinator?
                     .dismissIfAnsweredInTerminal(in: collection.items)
+                self.refreshTaskRepositoryEvidence(
+                    for: self.dashboardStore.snapshot.taskCollection
+                )
+            }
+        }
+    }
+
+    /// Git 与 GitHub checks 都可能碰到慢仓库或网络，不能占住每两秒一次的
+    /// 任务刷新。这里只读取工作目录，并把结果放回主线程内存快照。
+    private func refreshTaskRepositoryEvidence(
+        for collection: TaskProgressCollectionSnapshot
+    ) {
+        precondition(Thread.isMainThread)
+        guard !isTaskRepositoryEvidenceRefreshing else { return }
+        guard !collection.items.isEmpty else {
+            dashboardStore.update { $0.taskRepositoryEvidence = [:] }
+            return
+        }
+        isTaskRepositoryEvidenceRefreshing = true
+        let items = collection.items
+        let previous = dashboardStore.snapshot.taskRepositoryEvidence
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let probed = taskRepositoryEvidenceByTaskIdentity(
+                items: items,
+                previous: previous
+            )
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.isTaskRepositoryEvidenceRefreshing = false
+
+                var currentDirectoryByIdentity: [String: String] = [:]
+                for item in self.dashboardStore.snapshot.taskCollection.items {
+                    guard let directory = item.workingDirectory.flatMap(
+                        normalizedAbsolutePath
+                    ) else { continue }
+                    currentDirectoryByIdentity[item.identityKey] = directory
+                }
+                let current = probed.filter { identity, evidence in
+                    currentDirectoryByIdentity[identity]
+                        == evidence.workingDirectory
+                }
+                self.dashboardStore.update {
+                    $0.taskRepositoryEvidence = current
+                }
             }
         }
     }

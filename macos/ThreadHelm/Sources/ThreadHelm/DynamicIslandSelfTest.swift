@@ -916,6 +916,31 @@ private func assertDynamicIslandTaskWorkspace() {
         exit(1)
     }
 
+    let repositoryEvidence = TaskRepositoryEvidence(
+        workingDirectory: "/tmp/threadhelm",
+        gitStatus: TaskGitStatus(
+            repositoryRoot: "/tmp/threadhelm",
+            branch: "main",
+            isDetached: false,
+            checkoutKind: .linkedWorktree,
+            isDirty: true,
+            upstreamName: "origin/main",
+            aheadCount: 2,
+            behindCount: 1,
+            headSHA: String(repeating: "a", count: 40),
+            githubRepository: "OpenAI/Codex"
+        ),
+        checkStatus: TaskCheckStatus(
+            state: .failed,
+            totalCount: 3,
+            successCount: 1,
+            failureCount: 1,
+            pendingCount: 1,
+            inconclusiveCount: 0
+        ),
+        gitObservedAt: now,
+        checksObservedAt: now
+    )
     let controller = DynamicIslandTaskViewController()
     controller.apply(
         collection: collection,
@@ -926,6 +951,9 @@ private func assertDynamicIslandTaskWorkspace() {
                 result: .unknown,
                 recordedAt: Date(timeIntervalSince1970: 12 * 60 * 60)
             ),
+        ],
+        taskRepositoryEvidence: [
+            codexRunning.identityKey: repositoryEvidence,
         ]
     )
     guard controller.visibleTaskKeysForSelfTest() == [
@@ -939,6 +967,14 @@ private func assertDynamicIslandTaskWorkspace() {
           !controller.accessibilitySnapshotForSelfTest().contains("当前活动"),
           controller.accessibilitySnapshotForSelfTest().contains("开始 "),
           controller.accessibilitySnapshotForSelfTest().contains("持续 01:30"),
+          controller.accessibilitySnapshotForSelfTest().contains(
+              "验证 · 本地测试未验证 · HEAD checks 1 项失败 · 1 项运行中 · 1/3 通过"
+          ),
+          controller.repositoryContextTextsForSelfTest() == [
+              "仓库 · /tmp/threadhelm",
+              "Git · main · linked worktree · 有改动 · origin/main ↑2 ↓1 · 提交 aaaaaaaaaaaa",
+              "验证 · 本地测试未验证 · HEAD checks 1 项失败 · 1 项运行中 · 1/3 通过",
+          ],
               controller.detailEventTextsForSelfTest()
               == [
                   budgetedActivityText,
@@ -990,7 +1026,13 @@ private func assertDynamicIslandTaskWorkspace() {
     controller.setStateFilterForSelfTest(.completed)
     guard controller.visibleTaskKeysForSelfTest() == [
         codexCompleted.identityKey,
-    ] else {
+    ],
+          controller.repositoryContextTextsForSelfTest() == [
+              "仓库 · 未验证",
+              "Git · 未验证",
+              "验证 · 本地测试未验证 · HEAD checks 未验证",
+          ]
+    else {
         fputs("dynamic island task state filter self-test failed\n", stderr)
         exit(1)
     }
