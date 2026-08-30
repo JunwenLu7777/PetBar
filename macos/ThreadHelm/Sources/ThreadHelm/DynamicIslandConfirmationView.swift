@@ -138,6 +138,11 @@ final class DynamicIslandConfirmationViewController:
     private let queueStack = NSStackView()
     private let contentContainer = NSView()
     private let validationField = confirmationLabel(size: 12, weight: .regular)
+    private let historyTitleField = confirmationLabel(size: 18, weight: .semibold)
+    private let historyPrivacyField = wrappingLabel(size: 12, weight: .regular)
+    private let historyEmptyField = confirmationLabel(size: 13, weight: .regular)
+    private let historyScrollView = NSScrollView()
+    private let historyTableView = NSTableView()
     private let overlineField = confirmationLabel(size: 10, weight: .semibold)
     private let questionPageField = confirmationLabel(size: 12, weight: .medium)
     private let questionProgressView = DynamicIslandQuestionProgressView()
@@ -184,6 +189,7 @@ final class DynamicIslandConfirmationViewController:
     private let planImpactBodyField = wrappingLabel(size: 11.5, weight: .regular)
     private var presentation: ClaudePermissionPresentation?
     private var queueRows: [QueueRow] = []
+    private var historyRecords: [PermissionDecisionHistoryRecord] = []
     private var questionDrafts: [DynamicIslandQuestionAnswerDraft] = []
     private var questionViews: [DynamicIslandQuestionInputView] = []
     private var currentQuestionIndex = 0
@@ -233,6 +239,22 @@ final class DynamicIslandConfirmationViewController:
         queueScrollView.documentView = queueTableView
         queueScrollView.hasVerticalScroller = true
         queueScrollView.drawsBackground = false
+        let historyColumn = NSTableColumn(
+            identifier: NSUserInterfaceItemIdentifier("history")
+        )
+        historyColumn.title = "审批历史"
+        historyTableView.addTableColumn(historyColumn)
+        historyTableView.headerView = nil
+        historyTableView.delegate = self
+        historyTableView.dataSource = self
+        historyTableView.rowHeight = 58
+        historyTableView.intercellSpacing = NSSize(width: 0, height: 5)
+        historyTableView.selectionHighlightStyle = .none
+        historyTableView.backgroundColor = .clear
+        historyTableView.setAccessibilityLabel("最近审批历史")
+        historyScrollView.documentView = historyTableView
+        historyScrollView.hasVerticalScroller = true
+        historyScrollView.drawsBackground = false
         toolScrollView.documentView = toolDocumentView
         toolScrollView.hasVerticalScroller = true
         toolScrollView.drawsBackground = false
@@ -247,6 +269,15 @@ final class DynamicIslandConfirmationViewController:
 
         validationField.textColor = DynamicIslandPalette.amber
         validationField.setAccessibilityLabel("确认表单提示")
+        historyTitleField.stringValue = "最近审批"
+        historyTitleField.setAccessibilityLabel("最近审批")
+        historyPrivacyField.stringValue =
+            "只保存 Agent、请求类型、裁决、时间、耗时和版本；不保存请求或回答正文。"
+        historyPrivacyField.textColor = DynamicIslandPalette.secondaryText
+        historyEmptyField.stringValue = "还没有审批记录"
+        historyEmptyField.textColor = DynamicIslandPalette.tertiaryText
+        historyEmptyField.alignment = .center
+        buildHistoryContent()
     }
 
     override func viewDidLayout() {
@@ -335,8 +366,18 @@ final class DynamicIslandConfirmationViewController:
 
     func updateQueue(_ snapshot: ClaudePermissionQueueSnapshot) {
         _ = view
-        guard snapshot.current != nil else { return }
+        guard presentation == nil || snapshot.current != nil else { return }
         applyQueueRows(from: snapshot)
+    }
+
+    func updateHistory(_ records: [PermissionDecisionHistoryRecord]) {
+        _ = view
+        historyRecords = Array(records.prefix(200))
+        historyTableView.reloadData()
+        if presentation == nil {
+            buildHistoryContent()
+            layoutVisibleContent()
+        }
     }
 
     func clear() {
@@ -359,6 +400,7 @@ final class DynamicIslandConfirmationViewController:
         planFeedbackHintField = nil
         planFeedbackScrollView = nil
         rawSummary = ""
+        buildHistoryContent()
     }
 
     func initialInputResponder() -> NSResponder? {
@@ -376,13 +418,17 @@ final class DynamicIslandConfirmationViewController:
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        queueRows.count
+        if tableView === historyTableView {
+            return historyRecords.count
+        }
+        return queueRows.count
     }
 
     func tableView(
         _ tableView: NSTableView,
         shouldSelectRow row: Int
     ) -> Bool {
+        if tableView === historyTableView { return false }
         guard queueRows.indices.contains(row) else { return false }
         return queueRows[row].isCurrent
     }
@@ -392,6 +438,10 @@ final class DynamicIslandConfirmationViewController:
         viewFor tableColumn: NSTableColumn?,
         row: Int
     ) -> NSView? {
+        if tableView === historyTableView {
+            guard historyRecords.indices.contains(row) else { return nil }
+            return historyCell(for: historyRecords[row])
+        }
         guard row < queueRows.count else { return nil }
         let rowModel = queueRows[row]
         let item = rowModel.item
@@ -498,6 +548,62 @@ final class DynamicIslandConfirmationViewController:
 
     private func agentQueueCode(_ agentID: AgentID) -> String {
         agentPresentation(for: agentID).shortName.uppercased()
+    }
+
+    private func buildHistoryContent() {
+        guard presentation == nil else { return }
+        contentContainer.subviews.forEach { $0.removeFromSuperview() }
+        for child in [
+            historyTitleField,
+            historyPrivacyField,
+            historyScrollView,
+            historyEmptyField,
+        ] {
+            contentContainer.addSubview(child)
+        }
+        historyScrollView.isHidden = historyRecords.isEmpty
+        historyEmptyField.isHidden = !historyRecords.isEmpty
+        historyTableView.reloadData()
+        view.needsLayout = true
+    }
+
+    private func historyCell(
+        for record: PermissionDecisionHistoryRecord
+    ) -> NSView {
+        let cell = NSTableCellView()
+        cell.wantsLayer = true
+        cell.layer?.cornerRadius = 7
+        cell.layer?.backgroundColor = DynamicIslandPalette.card.cgColor
+        cell.layer?.borderWidth = 1
+        cell.layer?.borderColor = DynamicIslandPalette.hairline.cgColor
+        let title = confirmationLabel(size: 12.5, weight: .semibold)
+        let detail = confirmationLabel(size: 10.5, weight: .regular)
+        let agent = agentPresentation(for: record.agentID).displayName
+        title.stringValue = "\(agent) · \(record.requestKind.displayTitle)"
+            + " · \(record.outcome.displayTitle)"
+        let version = record.agentVersionSignature.map {
+            String($0.prefix(72))
+        } ?? "版本未知"
+        detail.stringValue = "\(timeText(record.decidedAt))"
+            + " · 耗时 \(historyDurationText(record.durationSeconds))"
+            + " · \(version)"
+        detail.textColor = DynamicIslandPalette.secondaryText
+        cell.addSubview(title)
+        cell.addSubview(detail)
+        let contentWidth = max(1, historyTableView.bounds.width - 38)
+        title.frame = NSRect(x: 12, y: 31, width: contentWidth, height: 18)
+        detail.frame = NSRect(x: 12, y: 10, width: contentWidth, height: 16)
+        title.autoresizingMask = [.width]
+        detail.autoresizingMask = [.width]
+        cell.setAccessibilityLabel(title.stringValue)
+        cell.setAccessibilityValue(detail.stringValue)
+        return cell
+    }
+
+    private func historyDurationText(_ seconds: Int) -> String {
+        if seconds < 1 { return "<1 秒" }
+        if seconds < 60 { return "\(seconds) 秒" }
+        return "\(seconds / 60) 分 \(seconds % 60) 秒"
     }
 
     private func buildToolApproval(prompt: ClaudePermissionPrompt) {
@@ -710,8 +816,11 @@ final class DynamicIslandConfirmationViewController:
     }
 
     private func layoutVisibleContent() {
-        guard let presentation else { return }
         let bounds = contentContainer.bounds
+        guard let presentation else {
+            layoutHistoryContent(bounds)
+            return
+        }
         switch presentation.prompt.interactionKind {
         case .toolApproval:
             layoutToolContent(bounds)
@@ -720,6 +829,37 @@ final class DynamicIslandConfirmationViewController:
         case .exitPlanMode:
             layoutPlanContent(bounds)
         }
+    }
+
+    private func layoutHistoryContent(_ bounds: NSRect) {
+        historyTitleField.frame = NSRect(
+            x: 0,
+            y: bounds.height - 34,
+            width: bounds.width,
+            height: 24
+        )
+        historyPrivacyField.frame = NSRect(
+            x: 0,
+            y: bounds.height - 68,
+            width: bounds.width,
+            height: 30
+        )
+        historyScrollView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: bounds.width,
+            height: max(1, bounds.height - 78)
+        )
+        historyTableView.tableColumns.first?.width = max(
+            1,
+            historyScrollView.bounds.width - 4
+        )
+        historyEmptyField.frame = NSRect(
+            x: 0,
+            y: max(0, bounds.midY - 12),
+            width: bounds.width,
+            height: 24
+        )
     }
 
     private func layoutToolContent(_ bounds: NSRect) {
@@ -1171,6 +1311,20 @@ final class DynamicIslandConfirmationViewController:
     func queueRowIsCurrentForSelfTest(_ row: Int) -> Bool {
         guard queueRows.indices.contains(row) else { return false }
         return queueRows[row].isCurrent
+    }
+
+    func historyRowSummariesForSelfTest() -> [String] {
+        _ = view
+        return historyRecords.map {
+            "\(agentPresentation(for: $0.agentID).displayName) "
+                + "\($0.requestKind.displayTitle) \($0.outcome.displayTitle) "
+                + "\($0.durationSeconds)"
+        }
+    }
+
+    func historyEmptyStateIsVisibleForSelfTest() -> Bool {
+        _ = view
+        return !historyEmptyField.isHidden && historyScrollView.isHidden
     }
 
     func toolSuggestionButtonFramesForSelfTest() -> [NSRect] {

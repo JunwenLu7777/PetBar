@@ -1541,7 +1541,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     private let titleStatusDot = NSView()
     private let titleField = DynamicIslandLabel(size: 15, weight: .semibold)
     private let tabs = DynamicIslandSegmentedControl(
-        labels: ["任务", "Agents", "额度"]
+        labels: ["任务", "Agents", "审批", "额度"]
     )
     private let sourceFilter = DynamicIslandSegmentedControl(
         labels: TaskSourceFilter.options(for: AgentID.builtInOrder).map {
@@ -1788,15 +1788,20 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             "  Agents \(snapshot.availableAgentIDs.count)",
             forSegment: 1
         )
-        tabs.setLabel("  额度", forSegment: 2)
-        tabs.setAccessibilityValue(
-            "任务 \(taskCount)，Agents \(snapshot.availableAgentIDs.count)，额度"
+        tabs.setLabel(
+            "  审批 \(snapshot.permissionDecisionHistory.count)",
+            forSegment: 2
         )
+        tabs.setLabel("  额度", forSegment: 3)
         if let segmentIndex = tabSegmentIndex(for: state) {
             tabs.selectSegment(segmentIndex)
         } else {
             tabs.clearSelection()
         }
+        tabs.setAccessibilityValue(
+            "任务 \(taskCount)，Agents \(snapshot.availableAgentIDs.count)，"
+                + "审批历史 \(snapshot.permissionDecisionHistory.count)，额度"
+        )
         sourceFilter.selectSegment(sourceSegmentIndex(for: currentSourceFilter))
         sourceFilter.setAccessibilityValue(
             "当前来源筛选 \(taskSourceFilterName(currentSourceFilter))，"
@@ -1806,9 +1811,10 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         refreshButton.isEnabled = dynamicIslandDashboardRefreshEnabled(
             snapshot: snapshot
         )
-        if snapshot.permissionQueue.count > 0 {
-            confirmationController?.updateQueue(snapshot.permissionQueue)
-        }
+        confirmationController?.updateQueue(snapshot.permissionQueue)
+        confirmationController?.updateHistory(
+            snapshot.permissionDecisionHistory
+        )
 
         switch state {
         case .expanded(.confirmation):
@@ -1822,8 +1828,12 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
                 accessibilityDescription: "等待确认"
             )
             statusSymbol.contentTintColor = DynamicIslandPalette.amber
-            statusField.stringValue = "等待确认"
-            placeholderField.stringValue = "确认队列 \(confirmationCount) 项"
+            statusField.stringValue = confirmationCount > 0
+                ? "等待确认"
+                : "审批历史"
+            placeholderField.stringValue = confirmationCount > 0
+                ? "确认队列 \(confirmationCount) 项"
+                : "审批历史 \(snapshot.permissionDecisionHistory.count) 条"
         case .expanded(.agents):
             showAgentHealthContent()
             agentHealthController.apply(snapshot)
@@ -1908,9 +1918,9 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         guard case .expanded(let tab) = state else { return 0 }
         switch tab {
         case .tasks: return 0
-        case .confirmation: return nil
+        case .confirmation: return 2
         case .agents: return 1
-        case .quota: return 2
+        case .quota: return 3
         }
     }
 
@@ -1935,7 +1945,8 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     private func tabChanged(index: Int) {
         switch index {
         case 1: onTabChange?(.agents)
-        case 2: onTabChange?(.quota)
+        case 2: onTabChange?(.confirmation)
+        case 3: onTabChange?(.quota)
         default: onTabChange?(.tasks)
         }
     }
@@ -2180,6 +2191,8 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             confirmationController.removeFromParent()
         }
         confirmationController = controller
+        controller.updateQueue(latestSnapshot.permissionQueue)
+        controller.updateHistory(latestSnapshot.permissionDecisionHistory)
         if case .expanded(.confirmation) = latestState {
             showConfirmationContent(controller)
         }

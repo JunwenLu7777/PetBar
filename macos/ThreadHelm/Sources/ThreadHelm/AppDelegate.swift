@@ -232,6 +232,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let agentVersionSignatures = AgentVersionSignatureCache()
     private let agentLiveEventStore = AgentLiveEventStore()
     private let agentOpenMeasurementStore = AgentOpenMeasurementStore()
+    private let permissionDecisionHistoryStore =
+        PermissionDecisionHistoryStore()
     private let agentAttentionInterruptionGate =
         AgentAttentionInterruptionGate()
     private var agentLiveReductionGate = AgentLiveReductionGate()
@@ -343,6 +345,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             snapshot.agentStatuses = agentRuntimeStatusPlaceholders(
                 registry: agentRegistry
             )
+            snapshot.permissionDecisionHistory =
+                permissionDecisionHistoryStore.snapshot()
         }
         refreshAgentRuntimeStatuses()
         startScreenParameterMonitoring()
@@ -622,6 +626,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func startClaudePermissionHook() {
+        // 版本探测在后台完成；审批热路径只读取带锁缓存，不启动子进程。
+        let versionSignatures = agentVersionSignatures
         claudePermissionCoordinator = ClaudePermissionCoordinator(
             openTerminal: { [weak self] prompt in
                 guard let self else { return }
@@ -647,11 +653,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     snapshot.attentionItems = projected.attentionItems
                     self.updateAgentRuntimeActivity(in: &snapshot)
                 }
+            },
+            agentVersionSignature: { agentID in
+                versionSignatures.signature(for: agentID)
+            },
+            onHistoryRecord: { [weak self] record in
+                self?.recordPermissionHistory(record)
             }
         )
         // 缓存与 store 都归 AppDelegate 持有，闭包直接强引用缓存即可：
         // 不经过 self，构不成循环。
-        let versionSignatures = agentVersionSignatures
         permissionGateLiveness.setVersionSignatureProvider { agentID in
             versionSignatures.signature(for: agentID)
         }
@@ -663,6 +674,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 completion(.nativeFallback)
                 return
             }
+            let receivedAt = Date()
             let cachedCodexDesktopRunning = self.cachedCodexDesktopRunning
             let liveCodexDesktopRunning = isCodexDesktopRunning()
             // 取的是**声明**的能力，不是按本机版本折叠过的那份：折叠只说明
@@ -681,6 +693,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             guard shouldPresent else {
                 completion(.nativeFallback)
+                self.recordPermissionHistory(PermissionDecisionHistoryRecord(
+                    agentID: prompt.agentID,
+                    interactionKind: prompt.interactionKind,
+                    outcome: .nativeFallback,
+                    receivedAt: receivedAt,
+                    decidedAt: Date(),
+                    agentVersionSignature: versionSignatures.signature(
+                        for: prompt.agentID
+                    )
+                ))
                 return
             }
             self.claudePermissionCoordinator.enqueue(
@@ -706,6 +728,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             claudePermissionHookServer = server
         } catch {
             fputs("ThreadHelm Claude Hook 启动失败：\(error.localizedDescription)\n", stderr)
+        }
+    }
+
+    private func recordPermissionHistory(
+        _ record: PermissionDecisionHistoryRecord
+    ) {
+        guard permissionDecisionHistoryStore.record(record) else {
+            fputs("ThreadHelm 无法写入本地审批历史。\n", stderr)
+            return
+        }
+        dashboardStore.update {
+            $0.permissionDecisionHistory =
+                permissionDecisionHistoryStore.snapshot()
         }
     }
 

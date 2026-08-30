@@ -1203,12 +1203,13 @@ private func assertDynamicIslandTaskWorkspace() {
           topLevelTabLabels == [
               "任务 \(collection.items.count)",
               "Agents 5",
+              "审批 0",
               "额度",
           ],
           workspace.sourceFilterLabelsForSelfTest()
               == ["全部", "Codex", "Claude", "Cursor", "ZCode", "OMP"],
           workspace.selectedTopLevelTabForSelfTest() == 0,
-          !workspace.accessibilitySnapshotForSelfTest().contains("确认")
+          workspace.accessibilitySnapshotForSelfTest().contains("审批历史 0")
     else {
         fputs("dynamic island task source filter visibility self-test failed\n", stderr)
         exit(1)
@@ -1423,15 +1424,35 @@ private func assertDynamicIslandTaskWorkspace() {
         fputs("dynamic island quota duplicate source filter self-test failed\n", stderr)
         exit(1)
     }
+    let historyController = DynamicIslandConfirmationViewController()
+    workspace.installConfirmationViewController(historyController)
+    let historyRecord = PermissionDecisionHistoryRecord(
+        agentID: .codex,
+        interactionKind: .toolApproval,
+        outcome: .deny,
+        receivedAt: Date(timeIntervalSince1970: 100),
+        decidedAt: Date(timeIntervalSince1970: 103),
+        agentVersionSignature: "cli=0.150.1"
+    )
     workspace.apply(
-        snapshot: ActivityDashboardSnapshot(taskCollection: collection),
+        snapshot: ActivityDashboardSnapshot(
+            taskCollection: collection,
+            permissionDecisionHistory: [historyRecord]
+        ),
         state: .expanded(.confirmation)
     )
     guard workspace.sourceFilterIsHiddenForSelfTest(),
-          workspace.selectedTopLevelTabForSelfTest() == nil,
-          !workspace.accessibilitySnapshotForSelfTest().contains("确认")
+          workspace.selectedTopLevelTabForSelfTest() == 2,
+          workspace.accessibilitySnapshotForSelfTest().contains("审批历史 1"),
+          historyController.historyRowSummariesForSelfTest()
+            == ["Codex 工具授权 已拒绝 3"]
     else {
-        fputs("dynamic island transient confirmation navigation self-test failed\n", stderr)
+        fputs("dynamic island approval history navigation self-test failed\n", stderr)
+        exit(1)
+    }
+    historyController.updateHistory([])
+    guard historyController.historyEmptyStateIsVisibleForSelfTest() else {
+        fputs("dynamic island approval history empty state self-test failed\n", stderr)
         exit(1)
     }
     workspace.apply(
@@ -3286,7 +3307,8 @@ func runDynamicIslandSelfTest() -> Never {
             + "collection=full+compact store-observer=pass quota-snapshot=pass "
             + "quota-workspace=left-228+rows+reset-credits "
             + "quota-phases=6/6 stale-data=preserved+scroll-no-overlap "
-            + "top-tabs=tasks+agents+quota confirmation=transient "
+            + "top-tabs=tasks+agents+approval+quota "
+            + "confirmation=history+transient "
             + "manual-refresh=tasks+all-providers "
             + "window-actions=refresh+hide+provider+copy+detail-ack "
             + "passive-refresh=no-ack "

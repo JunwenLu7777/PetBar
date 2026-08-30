@@ -16,12 +16,15 @@ final class ClaudePermissionCoordinator {
     private struct Entry {
         let prompt: ClaudePermissionPrompt
         let arrivedAt: Date
+        let agentVersionSignature: String?
         let completion: (ClaudePermissionUserDecision) -> Void
     }
 
     private let now: () -> Date
     private let openTerminal: (ClaudePermissionPrompt) -> Void
     private let onQueueChange: (ClaudePermissionQueueSnapshot) -> Void
+    private let agentVersionSignature: (AgentID) -> String?
+    private let onHistoryRecord: (PermissionDecisionHistoryRecord) -> Void
     private weak var presenter: ClaudePermissionPresenting?
     private var currentEntry: Entry?
     private var entries: [Entry] = []
@@ -30,11 +33,15 @@ final class ClaudePermissionCoordinator {
     init(
         now: @escaping () -> Date = Date.init,
         openTerminal: @escaping (ClaudePermissionPrompt) -> Void,
-        onQueueChange: @escaping (ClaudePermissionQueueSnapshot) -> Void
+        onQueueChange: @escaping (ClaudePermissionQueueSnapshot) -> Void,
+        agentVersionSignature: @escaping (AgentID) -> String? = { _ in nil },
+        onHistoryRecord: @escaping (PermissionDecisionHistoryRecord) -> Void = { _ in }
     ) {
         self.now = now
         self.openTerminal = openTerminal
         self.onQueueChange = onQueueChange
+        self.agentVersionSignature = agentVersionSignature
+        self.onHistoryRecord = onHistoryRecord
     }
 
     func setPresenter(_ presenter: ClaudePermissionPresenting?) {
@@ -55,6 +62,7 @@ final class ClaudePermissionCoordinator {
         entries.append(Entry(
             prompt: prompt,
             arrivedAt: now(),
+            agentVersionSignature: agentVersionSignature(prompt.agentID),
             completion: completion
         ))
         if currentEntry == nil {
@@ -65,17 +73,22 @@ final class ClaudePermissionCoordinator {
     }
 
     func expire(requestID: UUID) {
-        if currentEntry?.prompt.requestID == requestID {
+        if let entry = currentEntry,
+           entry.prompt.requestID == requestID
+        {
             currentEntry = nil
             currentEntryWasWaitingForInput = false
             presenter?.dismiss()
+            recordHistory(entry, outcome: .expired, decidedAt: now())
             promoteNext()
             return
         }
 
-        let previousCount = entries.count
-        entries.removeAll { $0.prompt.requestID == requestID }
-        if entries.count != previousCount {
+        if let index = entries.firstIndex(where: {
+            $0.prompt.requestID == requestID
+        }) {
+            let entry = entries.remove(at: index)
+            recordHistory(entry, outcome: .expired, decidedAt: now())
             publishQueueChange()
         }
     }
@@ -132,7 +145,11 @@ final class ClaudePermissionCoordinator {
         currentEntryWasWaitingForInput = false
         presenter?.dismiss()
         publishQueueChange()
-        outstanding.forEach { $0.completion(.nativeFallback) }
+        let decidedAt = now()
+        outstanding.forEach {
+            $0.completion(.nativeFallback)
+            recordHistory($0, outcome: .nativeFallback, decidedAt: decidedAt)
+        }
     }
 
     private func finishCurrent(
@@ -148,6 +165,11 @@ final class ClaudePermissionCoordinator {
         presenter?.dismiss()
         publishQueueChange()
         entry.completion(decision)
+        recordHistory(
+            entry,
+            outcome: permissionHistoryOutcome(for: decision),
+            decidedAt: now()
+        )
         if shouldOpenTerminal {
             openTerminal(entry.prompt)
         }
@@ -186,6 +208,21 @@ final class ClaudePermissionCoordinator {
 
     private func publishQueueChange() {
         onQueueChange(queueSnapshot())
+    }
+
+    private func recordHistory(
+        _ entry: Entry,
+        outcome: PermissionHistoryOutcome,
+        decidedAt: Date
+    ) {
+        onHistoryRecord(PermissionDecisionHistoryRecord(
+            agentID: entry.prompt.agentID,
+            interactionKind: entry.prompt.interactionKind,
+            outcome: outcome,
+            receivedAt: entry.arrivedAt,
+            decidedAt: decidedAt,
+            agentVersionSignature: entry.agentVersionSignature
+        ))
     }
 
     private func queueSnapshot() -> ClaudePermissionQueueSnapshot {

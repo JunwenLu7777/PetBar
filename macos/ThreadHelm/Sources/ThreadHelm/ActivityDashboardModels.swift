@@ -457,6 +457,7 @@ struct ActivityDashboardSnapshot: Equatable {
     var availableAgentIDs: [AgentID] = AgentID.builtInOrder
     var selectedQuotaProvider: QuotaProvider = .codex
     var permissionQueue = ClaudePermissionQueueSnapshot.empty
+    var permissionDecisionHistory: [PermissionDecisionHistoryRecord] = []
     var taskOpenEvidence: [String: TaskOpenEvidence] = [:]
     var agentSnapshots: [AgentSessionSnapshot] = []
     var attentionItems: [AgentAttentionItem] = []

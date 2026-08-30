@@ -796,9 +796,10 @@ private final class ClaudePermissionPresenterProbe: ClaudePermissionPresenting {
     private(set) var isPresenting = false
     private(set) var presentCount = 0
     private(set) var dismissCount = 0
+    private(set) var lastPresentation: ClaudePermissionPresentation?
 
     func present(_ presentation: ClaudePermissionPresentation) {
-        _ = presentation
+        lastPresentation = presentation
         isPresenting = true
         presentCount += 1
     }
@@ -1276,6 +1277,121 @@ func runClaudeHookSelfTest() -> Never {
     }
     try? manager.removeItem(at: temporaryRoot)
 
+    let historyRoot = manager.temporaryDirectory.appendingPathComponent(
+        "threadhelm-permission-history-self-test-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let historyURL = historyRoot.appendingPathComponent("history.json")
+    defer { try? manager.removeItem(at: historyRoot) }
+    var historyNow = Date(timeIntervalSince1970: 1_800_000_000)
+    var emittedHistory: [PermissionDecisionHistoryRecord] = []
+    let historyPresenter = ClaudePermissionPresenterProbe()
+    let historyCoordinator = ClaudePermissionCoordinator(
+        now: { historyNow },
+        openTerminal: { _ in },
+        onQueueChange: { _ in },
+        agentVersionSignature: { _ in "cli=2.1.226" },
+        onHistoryRecord: { emittedHistory.append($0) }
+    )
+    historyCoordinator.setPresenter(historyPresenter)
+    historyCoordinator.enqueue(prompt: toolPrompt) { _ in }
+    historyNow = historyNow.addingTimeInterval(4)
+    historyPresenter.lastPresentation?.onDecision(
+        .deny("sensitive-deny-reason-must-not-be-saved")
+    )
+    historyCoordinator.enqueue(prompt: questionPrompt) { _ in }
+    historyNow = historyNow.addingTimeInterval(5)
+    historyCoordinator.expire(requestID: questionPrompt.requestID)
+    historyCoordinator.enqueue(prompt: planPrompt) { _ in }
+    historyNow = historyNow.addingTimeInterval(2)
+    historyCoordinator.cancelAll()
+    guard emittedHistory.map(\.outcome) == [
+        .deny, .expired, .nativeFallback,
+    ], emittedHistory.map(\.requestKind) == [
+        .tool, .question, .plan,
+    ], emittedHistory.map(\.durationSeconds) == [4, 5, 2],
+       emittedHistory.allSatisfy({
+           $0.agentVersionSignature == "cli=2.1.226"
+       }),
+       permissionHistoryOutcome(for: .allowOnce) == .allowOnce,
+       permissionHistoryOutcome(for: .allowWithSuggestion([:]))
+        == .allowWithSuggestion,
+       permissionHistoryOutcome(for: .submitAnswers([:])) == .submitAnswers,
+       permissionHistoryOutcome(for: .planFeedback("sensitive")) == .planFeedback
+    else {
+        fail("审批历史没有覆盖裁决、过期和原生回退")
+    }
+
+    let historyStore = PermissionDecisionHistoryStore(
+        fileURL: historyURL,
+        fileManager: manager,
+        maximumRecords: 4
+    )
+    for record in emittedHistory {
+        guard historyStore.record(record) else {
+            fail("审批历史写入失败")
+        }
+    }
+    historyNow = historyNow.addingTimeInterval(1)
+    guard historyStore.record(PermissionDecisionHistoryRecord(
+        agentID: .cursor,
+        interactionKind: .toolApproval,
+        outcome: .allowWithSuggestion,
+        receivedAt: historyNow,
+        decidedAt: historyNow,
+        agentVersionSignature: "desktop=3.17.21"
+    )) else {
+        fail("审批历史长期允许写入失败")
+    }
+    historyNow = historyNow.addingTimeInterval(1)
+    guard historyStore.record(PermissionDecisionHistoryRecord(
+        agentID: .zcode,
+        interactionKind: .toolApproval,
+        outcome: .deny,
+        receivedAt: historyNow,
+        decidedAt: historyNow,
+        agentVersionSignature: "/tmp/private-version-must-be-dropped"
+    )) else {
+        fail("审批历史有界写入失败")
+    }
+    let historySnapshot = PermissionDecisionHistoryStore(
+        fileURL: historyURL,
+        fileManager: manager,
+        maximumRecords: 4
+    ).snapshot()
+    let historyPermissions = ((try? manager.attributesOfItem(
+        atPath: historyURL.path
+    )[.posixPermissions]) as? NSNumber)?.intValue
+    guard historySnapshot.count == 4,
+          historySnapshot.first?.agentID == .zcode,
+          historySnapshot.first?.agentVersionSignature == nil,
+          historySnapshot.last?.requestKind == .question,
+          historyPermissions.map({ $0 & 0o777 }) == 0o600,
+          let historyData = try? Data(contentsOf: historyURL),
+          let historyObject = try? JSONSerialization.jsonObject(
+              with: historyData
+          ) as? [String: Any],
+          Set(historyObject.keys) == Set(["schemaVersion", "records"]),
+          let encodedRecords = historyObject["records"] as? [[String: Any]],
+          encodedRecords.allSatisfy({
+              Set($0.keys) == Set([
+                  "agentID", "requestKind", "outcome", "receivedAt",
+                  "decidedAt", "agentVersionSignature",
+              ]) || Set($0.keys) == Set([
+                  "agentID", "requestKind", "outcome", "receivedAt",
+                  "decidedAt",
+              ])
+          }),
+          let historyText = String(data: historyData, encoding: .utf8),
+          !historyText.contains("sensitive-deny-reason"),
+          !historyText.contains("sessionID"),
+          !historyText.contains("workingDirectory"),
+          !historyText.contains("toolName"),
+          !historyText.contains("originalToolInput")
+    else {
+        fail("审批历史有界、重载、0600 或 metadata-only 边界")
+    }
+
     print(
         "claude-hook-self-test: protocol=4/4; question-decode=label+detail; "
             + "terminal-handoff=matched+presenter-dismissed+released; "
@@ -1284,7 +1400,8 @@ func runClaudeHookSelfTest() -> Never {
             + "presenter-switch=no-completion; decision=exactly-once; "
             + "tool-decision=allow+suggestion+deny+nativeFallback; "
             + "plan-decision=allowOnce+feedback; "
-            + "privacy=pass; auth=header; queue=bounded; "
+            + "privacy=pass; history=metadata-only+bounded+0600; "
+            + "auth=header; queue=bounded; "
             + "config=optional+install+legacy-upgrade+conflict-preserved"
             + "+idempotent+uninstall+crlf+strict-json"
     )
