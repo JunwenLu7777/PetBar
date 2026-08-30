@@ -859,6 +859,81 @@ func taskCheckStatus(from data: Data) -> TaskCheckStatus? {
     )
 }
 
+func taskCommitStatus(from data: Data) -> TaskCheckStatus? {
+    guard let root = try? JSONSerialization.jsonObject(with: data)
+        as? [String: Any],
+          let totalCount = root["total_count"] as? Int,
+          totalCount >= 0,
+          let statuses = root["statuses"] as? [[String: Any]],
+          statuses.count == totalCount
+    else { return nil }
+    guard totalCount > 0 else { return .unknown }
+
+    var successCount = 0
+    var failureCount = 0
+    var pendingCount = 0
+    for status in statuses {
+        guard let state = status["state"] as? String else { return nil }
+        switch state {
+        case "success":
+            successCount += 1
+        case "failure", "error":
+            failureCount += 1
+        case "pending":
+            pendingCount += 1
+        default:
+            return nil
+        }
+    }
+    let state: TaskCheckState
+    if failureCount > 0 {
+        state = .failed
+    } else if pendingCount > 0 {
+        state = .pending
+    } else {
+        state = .passed
+    }
+    return TaskCheckStatus(
+        state: state,
+        totalCount: totalCount,
+        successCount: successCount,
+        failureCount: failureCount,
+        pendingCount: pendingCount,
+        inconclusiveCount: 0
+    )
+}
+
+func combinedTaskCheckStatus(
+    checkRuns: TaskCheckStatus,
+    commitStatuses: TaskCheckStatus
+) -> TaskCheckStatus {
+    let totalCount = checkRuns.totalCount + commitStatuses.totalCount
+    guard totalCount > 0 else { return .unknown }
+    let successCount = checkRuns.successCount + commitStatuses.successCount
+    let failureCount = checkRuns.failureCount + commitStatuses.failureCount
+    let pendingCount = checkRuns.pendingCount + commitStatuses.pendingCount
+    let inconclusiveCount = checkRuns.inconclusiveCount
+        + commitStatuses.inconclusiveCount
+    let state: TaskCheckState
+    if failureCount > 0 {
+        state = .failed
+    } else if pendingCount > 0 {
+        state = .pending
+    } else if inconclusiveCount > 0 {
+        state = .inconclusive
+    } else {
+        state = .passed
+    }
+    return TaskCheckStatus(
+        state: state,
+        totalCount: totalCount,
+        successCount: successCount,
+        failureCount: failureCount,
+        pendingCount: pendingCount,
+        inconclusiveCount: inconclusiveCount
+    )
+}
+
 func locateGitHubCLI(fileManager: FileManager = .default) -> URL? {
     for path in [
         "/opt/homebrew/bin/gh",
@@ -999,24 +1074,63 @@ func taskCheckStatusCommandArguments(
     ]
 }
 
+func taskCommitStatusCommandArguments(
+    githubRepository: String,
+    headSHA: String
+) -> [String]? {
+    let repositoryComponents = githubRepository.split(separator: "/")
+        .map(String.init)
+    guard repositoryComponents.count == 2,
+          repositoryComponents.allSatisfy(taskGitHubRepositoryComponentIsSafe),
+          headSHA.range(
+              of: #"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"#,
+              options: .regularExpression
+          ) != nil
+    else { return nil }
+    let endpoint = "repos/\(githubRepository)/commits/\(headSHA)"
+        + "/status?per_page=100"
+    let jq = "{total_count: .total_count, statuses: "
+        + "[.statuses[] | {state: .state}]}"
+    return [
+        "api", "--hostname", "github.com",
+        "-H", "Accept: application/vnd.github+json", endpoint,
+        "--jq", jq,
+    ]
+}
+
 private func probeTaskCheckStatus(
     githubRepository: String,
     headSHA: String,
     ghExecutableURL: URL
 ) -> TaskCheckStatus {
-    guard let arguments = taskCheckStatusCommandArguments(
-        githubRepository: githubRepository,
-        headSHA: headSHA
-    ) else { return .unknown }
-    guard let result = runTaskStatusCommand(
+    guard let checkArguments = taskCheckStatusCommandArguments(
+              githubRepository: githubRepository,
+              headSHA: headSHA
+          ),
+          let commitStatusArguments = taskCommitStatusCommandArguments(
+              githubRepository: githubRepository,
+              headSHA: headSHA
+          )
+    else { return .unknown }
+    guard let checkResult = runTaskStatusCommand(
         executableURL: ghExecutableURL,
-        arguments: arguments,
+        arguments: checkArguments,
         timeout: 3,
         maximumOutputBytes: 64 * 1_024
-    ), result.exitStatus == 0,
-       let status = taskCheckStatus(from: result.data)
+    ), checkResult.exitStatus == 0,
+       let checkStatus = taskCheckStatus(from: checkResult.data),
+       let commitStatusResult = runTaskStatusCommand(
+           executableURL: ghExecutableURL,
+           arguments: commitStatusArguments,
+           timeout: 3,
+           maximumOutputBytes: 64 * 1_024
+       ), commitStatusResult.exitStatus == 0,
+       let commitStatus = taskCommitStatus(from: commitStatusResult.data)
     else { return .unknown }
-    return status
+    return combinedTaskCheckStatus(
+        checkRuns: checkStatus,
+        commitStatuses: commitStatus
+    )
 }
 
 func probeTaskRepositoryEvidence(

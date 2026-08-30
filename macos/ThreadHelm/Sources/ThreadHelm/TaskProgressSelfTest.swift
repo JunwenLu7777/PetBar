@@ -34,7 +34,7 @@ func runTaskProgressSelfTest() -> Never {
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
     runDiscoveryCacheAndAutoIntegrationBackoffSelfTest()
-    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; provider-atomic-replace=codex+claude; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; repository-context=git+worktree+checks+unknown+cache+isolated-env+fixed-host+slash-remote; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; applescript-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
+    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; provider-atomic-replace=codex+claude; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; repository-context=git+worktree+checks+commit-status+unknown+cache+isolated-env+fixed-host+slash-remote; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; applescript-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
     exit(0)
 }
 
@@ -215,6 +215,28 @@ private func runTaskRepositoryContextSelfTest() {
         ) == nil,
         "unsafe GitHub check repository"
     )
+    guard let commitStatusArguments = taskCommitStatusCommandArguments(
+        githubRepository: "OpenAI/Codex",
+        headSHA: sha
+    ) else { fail("GitHub commit status arguments") }
+    expect(
+        Array(commitStatusArguments.prefix(4))
+            == ["api", "--hostname", "github.com", "-H"],
+        "GitHub commit statuses must pin github.com"
+    )
+    expect(
+        commitStatusArguments.contains(
+            "repos/OpenAI/Codex/commits/\(sha)/status?per_page=100"
+        ),
+        "GitHub commit status endpoint"
+    )
+    expect(
+        taskCommitStatusCommandArguments(
+            githubRepository: "github.enterprise.invalid/OpenAI/Codex",
+            headSHA: sha
+        ) == nil,
+        "unsafe GitHub commit status repository"
+    )
 
     guard let passed = taskCheckStatus(from: json("""
     {"total_count":2,"check_runs":[
@@ -280,6 +302,98 @@ private func runTaskRepositoryContextSelfTest() {
             #"{"total_count":1,"check_runs":[{"status":"completed","conclusion":"new_conclusion"}]}"#
         )) == nil,
         "unknown check conclusion must fail closed"
+    )
+
+    guard let passedCommitStatuses = taskCommitStatus(from: json("""
+    {"total_count":2,"statuses":[
+      {"state":"success"},
+      {"state":"success"}
+    ]}
+    """)) else { fail("passed commit statuses parsing") }
+    expect(
+        passedCommitStatuses == TaskCheckStatus(
+            state: .passed,
+            totalCount: 2,
+            successCount: 2,
+            failureCount: 0,
+            pendingCount: 0,
+            inconclusiveCount: 0
+        ),
+        "passed commit status counts"
+    )
+
+    guard let failedCommitStatuses = taskCommitStatus(from: json("""
+    {"total_count":2,"statuses":[
+      {"state":"success"},
+      {"state":"failure"}
+    ]}
+    """)) else { fail("failed commit statuses parsing") }
+    expect(failedCommitStatuses.state == .failed, "failed commit status state")
+    expect(failedCommitStatuses.failureCount == 1, "failed commit status count")
+
+    guard let errorCommitStatus = taskCommitStatus(from: json(
+        #"{"total_count":1,"statuses":[{"state":"error"}]}"#
+    )) else { fail("error commit status parsing") }
+    expect(errorCommitStatus.state == .failed, "error commit status state")
+    expect(errorCommitStatus.failureCount == 1, "error commit status count")
+
+    guard let pendingCommitStatus = taskCommitStatus(from: json(
+        #"{"total_count":1,"statuses":[{"state":"pending"}]}"#
+    )) else { fail("pending commit status parsing") }
+    expect(pendingCommitStatus.state == .pending, "pending commit status state")
+    expect(pendingCommitStatus.pendingCount == 1, "pending commit status count")
+
+    guard let noCommitStatuses = taskCommitStatus(from: json(
+        #"{"state":"pending","total_count":0,"statuses":[]}"#
+    )) else { fail("zero commit statuses parsing") }
+    expect(noCommitStatuses == .unknown, "zero commit statuses must be unknown")
+    expect(
+        taskCommitStatus(from: json(
+            #"{"total_count":2,"statuses":[{"state":"success"}]}"#
+        )) == nil,
+        "paginated commit statuses must fail closed"
+    )
+    expect(
+        taskCommitStatus(from: json(
+            #"{"total_count":1,"statuses":[{"state":"new_state"}]}"#
+        )) == nil,
+        "unknown commit status must fail closed"
+    )
+
+    expect(
+        combinedTaskCheckStatus(
+            checkRuns: passed,
+            commitStatuses: failedCommitStatuses
+        ) == TaskCheckStatus(
+            state: .failed,
+            totalCount: 4,
+            successCount: 3,
+            failureCount: 1,
+            pendingCount: 0,
+            inconclusiveCount: 0
+        ),
+        "failed commit status must override passed check runs"
+    )
+    expect(
+        combinedTaskCheckStatus(
+            checkRuns: inconclusive,
+            commitStatuses: pendingCommitStatus
+        ).state == .pending,
+        "pending commit status must override inconclusive check runs"
+    )
+    expect(
+        combinedTaskCheckStatus(
+            checkRuns: inconclusive,
+            commitStatuses: passedCommitStatuses
+        ).state == .inconclusive,
+        "inconclusive check runs must override passed commit statuses"
+    )
+    expect(
+        combinedTaskCheckStatus(
+            checkRuns: noChecks,
+            commitStatuses: noCommitStatuses
+        ) == .unknown,
+        "zero checks and commit statuses must be unknown"
     )
 
     let now = Date(timeIntervalSince1970: 2_000_000_000)
