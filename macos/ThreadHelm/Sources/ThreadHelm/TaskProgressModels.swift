@@ -589,6 +589,26 @@ private struct TaskStatusCommandResult {
     let exitStatus: Int32
 }
 
+func taskStatusCommandEnvironment(
+    inheriting inherited: [String: String]
+) -> [String: String] {
+    // `git -C` does not override repository-routing variables such as
+    // GIT_DIR or GIT_WORK_TREE. Start every probe without inherited Git state.
+    var environment = inherited.filter { key, _ in
+        !key.hasPrefix("GIT_")
+    }
+    environment["LC_ALL"] = "C"
+    environment["LANG"] = "C"
+    environment["NO_COLOR"] = "1"
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    environment["GIT_PAGER"] = "cat"
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment["PAGER"] = "cat"
+    environment["GH_PROMPT_DISABLED"] = "1"
+    environment["GH_NO_UPDATE_NOTIFIER"] = "1"
+    return environment
+}
+
 private func runTaskStatusCommand(
     executableURL: URL,
     arguments: [String],
@@ -602,16 +622,9 @@ private func runTaskStatusCommand(
     process.standardInput = FileHandle.nullDevice
     process.standardOutput = output
     process.standardError = FileHandle.nullDevice
-    var environment = ProcessInfo.processInfo.environment
-    environment["LC_ALL"] = "C"
-    environment["LANG"] = "C"
-    environment["NO_COLOR"] = "1"
-    environment["GIT_OPTIONAL_LOCKS"] = "0"
-    environment["GIT_PAGER"] = "cat"
-    environment["PAGER"] = "cat"
-    environment["GH_PROMPT_DISABLED"] = "1"
-    environment["GH_NO_UPDATE_NOTIFIER"] = "1"
-    process.environment = environment
+    process.environment = taskStatusCommandEnvironment(
+        inheriting: ProcessInfo.processInfo.environment
+    )
     do {
         try process.run()
     } catch {
@@ -860,24 +873,33 @@ func locateGitHubCLI(fileManager: FileManager = .default) -> URL? {
 private func taskGitHubRepository(
     gitExecutableURL: URL,
     repositoryRoot: String,
+    branch: String?,
     upstreamName: String?
 ) -> String? {
-    if let upstreamName,
-       let remoteName = upstreamName.split(separator: "/").first
-    {
-        guard let remote = taskStatusCommandText(
-            executableURL: gitExecutableURL,
-            arguments: [
-                "-C", repositoryRoot, "remote", "get-url", String(remoteName),
-            ],
-            timeout: 1,
-            maximumOutputBytes: 4_096
-        ) else { return nil }
-        return githubRepositorySlug(from: remote)
+    let remoteName: String
+    if upstreamName != nil {
+        guard let branch,
+              let configuredRemote = taskStatusCommandText(
+                  executableURL: gitExecutableURL,
+                  arguments: [
+                      "-C", repositoryRoot, "config", "--get",
+                      "branch.\(branch).remote",
+                  ],
+                  timeout: 1,
+                  maximumOutputBytes: 4_096
+              ),
+              !configuredRemote.isEmpty,
+              configuredRemote.count <= 256
+        else { return nil }
+        remoteName = configuredRemote
+    } else {
+        remoteName = "origin"
     }
     guard let remote = taskStatusCommandText(
         executableURL: gitExecutableURL,
-        arguments: ["-C", repositoryRoot, "remote", "get-url", "origin"],
+        arguments: [
+            "-C", repositoryRoot, "remote", "get-url", remoteName,
+        ],
         timeout: 1,
         maximumOutputBytes: 4_096
     ) else { return nil }
@@ -942,6 +964,7 @@ private func probeTaskGitStatus(
     let githubRepository = taskGitHubRepository(
         gitExecutableURL: gitExecutableURL,
         repositoryRoot: repositoryRoot,
+        branch: preliminary.branch,
         upstreamName: preliminary.upstreamName
     )
     return parsedTaskGitStatus(
@@ -952,11 +975,10 @@ private func probeTaskGitStatus(
     )
 }
 
-private func probeTaskCheckStatus(
+func taskCheckStatusCommandArguments(
     githubRepository: String,
-    headSHA: String,
-    ghExecutableURL: URL
-) -> TaskCheckStatus {
+    headSHA: String
+) -> [String]? {
     let repositoryComponents = githubRepository.split(separator: "/")
         .map(String.init)
     guard repositoryComponents.count == 2,
@@ -965,17 +987,30 @@ private func probeTaskCheckStatus(
               of: #"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"#,
               options: .regularExpression
           ) != nil
-    else { return .unknown }
+    else { return nil }
     let endpoint = "repos/\(githubRepository)/commits/\(headSHA)"
         + "/check-runs?per_page=100&filter=latest"
     let jq = "{total_count: .total_count, check_runs: "
         + "[.check_runs[] | {status: .status, conclusion: .conclusion}]}"
+    return [
+        "api", "--hostname", "github.com",
+        "-H", "Accept: application/vnd.github+json", endpoint,
+        "--jq", jq,
+    ]
+}
+
+private func probeTaskCheckStatus(
+    githubRepository: String,
+    headSHA: String,
+    ghExecutableURL: URL
+) -> TaskCheckStatus {
+    guard let arguments = taskCheckStatusCommandArguments(
+        githubRepository: githubRepository,
+        headSHA: headSHA
+    ) else { return .unknown }
     guard let result = runTaskStatusCommand(
         executableURL: ghExecutableURL,
-        arguments: [
-            "api", "-H", "Accept: application/vnd.github+json", endpoint,
-            "--jq", jq,
-        ],
+        arguments: arguments,
         timeout: 3,
         maximumOutputBytes: 64 * 1_024
     ), result.exitStatus == 0,

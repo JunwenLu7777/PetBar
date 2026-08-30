@@ -34,7 +34,7 @@ func runTaskProgressSelfTest() -> Never {
     runClaudeAgentsCommandTimeoutSelfTest()
     runRuntimeHealthWriterFailureSelfTest()
     runDiscoveryCacheAndAutoIntegrationBackoffSelfTest()
-    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; provider-atomic-replace=codex+claude; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; repository-context=git+worktree+checks+unknown+cache; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; applescript-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
+    print("task-progress-self-test: agent-core=5+builtin+sixth; agent-registry=dedupe+fail-open; agent-reducer=duplicate+out-of-order+stable-tie; lifecycle=7/7; safe-activity=pass; updated-sort=pass; active-scroll=pass; terminal-backfill=pass; title=1/1; index=1/1; deep-link=2/2; completed-unread=pass; read-state=6/6; top-level-filter=explicit-visible+automation-safe; task-dedup=pass; full-collection=pass; codex-cwd=tail-metadata-backfill; provider-atomic-replace=codex+claude; events=all-safe; privacy=pass; open-results=typed+count-only+0600; attention=allowlist+60s+foreground; attention-feedback=count-only+0600; refresh-gate=single-flight+generation; refresh-reader=reuse; repository-context=git+worktree+checks+unknown+cache+isolated-env+fixed-host+slash-remote; claude-desktop=local-session+navigation; claude-agents-timeout=bounded; applescript-timeout=bounded; runtime-health=dynamic-only+failure-logged-once; system-symbols=6/6; claude-source=pass; claude-public-output=pass; claude-agent-merge=order-independent+dead-pid; claude-navigation=identity-first+pid-reuse+dead-process+deleted-session+moved-project+same-cwd; claude-entry-points=same-cwd; claude-terminal-focus=pid-chain+3-hosts; claude-iterm-resume=2/2; claude-otty=3/3; claude-resume=2/2; discovery-cache=ttl+invalidate; auto-integration-backoff=5m/15m/60m+min-interval-survives-success; auto-integration-accounting=7/7; auto-integration-candidate=dual-gate+filter+single-per-round")
     exit(0)
 }
 
@@ -163,6 +163,58 @@ private func runTaskRepositoryContextSelfTest() {
             "unsafe GitHub remote accepted"
         )
     }
+
+    let sanitizedEnvironment = taskStatusCommandEnvironment(inheriting: [
+        "PATH": "/usr/bin",
+        "GH_HOST": "github.enterprise.invalid",
+        "GIT_DIR": "/tmp/wrong.git",
+        "GIT_WORK_TREE": "/tmp/wrong-worktree",
+        "GIT_INDEX_FILE": "/tmp/wrong-index",
+        "GIT_COMMON_DIR": "/tmp/wrong-common",
+        "GIT_OBJECT_DIRECTORY": "/tmp/wrong-objects",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.worktree",
+        "GIT_CONFIG_VALUE_0": "/tmp/wrong-config-worktree",
+    ])
+    for unsafeKey in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+    ] {
+        expect(
+            sanitizedEnvironment[unsafeKey] == nil,
+            "inherited \(unsafeKey) must be removed"
+        )
+    }
+    expect(sanitizedEnvironment["PATH"] == "/usr/bin", "safe environment kept")
+    expect(
+        sanitizedEnvironment["GIT_OPTIONAL_LOCKS"] == "0"
+            && sanitizedEnvironment["GIT_PAGER"] == "cat"
+            && sanitizedEnvironment["GIT_TERMINAL_PROMPT"] == "0",
+        "controlled Git environment"
+    )
+
+    guard let checkArguments = taskCheckStatusCommandArguments(
+        githubRepository: "OpenAI/Codex",
+        headSHA: sha
+    ) else { fail("GitHub check arguments") }
+    expect(
+        Array(checkArguments.prefix(4))
+            == ["api", "--hostname", "github.com", "-H"],
+        "GitHub checks must pin github.com"
+    )
+    expect(
+        taskCheckStatusCommandArguments(
+            githubRepository: "github.enterprise.invalid/OpenAI/Codex",
+            headSHA: sha
+        ) == nil,
+        "unsafe GitHub check repository"
+    )
 
     guard let passed = taskCheckStatus(from: json("""
     {"total_count":2,"check_runs":[
@@ -329,11 +381,11 @@ private func runTaskRepositoryContextSelfTest() {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
-        var environment = ProcessInfo.processInfo.environment
+        var environment = taskStatusCommandEnvironment(
+            inheriting: ProcessInfo.processInfo.environment
+        )
         environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
         environment["GIT_CONFIG_SYSTEM"] = "/dev/null"
-        environment["GIT_TERMINAL_PROMPT"] = "0"
-        environment["GIT_OPTIONAL_LOCKS"] = "0"
         process.environment = environment
         do {
             try process.run()
@@ -389,6 +441,49 @@ private func runTaskRepositoryContextSelfTest() {
     expect(!probedClean.isDirty, "real clean state")
     expect(probedClean.headSHA?.count == 40, "real full HEAD")
     expect(cleanEvidence.checkStatus == .unknown, "gh absence is unknown")
+
+    expect(
+        runGit([
+            "-C", repositoryURL.path, "remote", "add", "team/fork",
+            "https://github.com/OpenAI/Codex.git",
+        ]),
+        "add slash remote"
+    )
+    expect(
+        runGit([
+            "-C", repositoryURL.path, "config", "branch.main.remote",
+            "team/fork",
+        ]),
+        "configure slash upstream remote"
+    )
+    expect(
+        runGit([
+            "-C", repositoryURL.path, "config", "branch.main.merge",
+            "refs/heads/main",
+        ]),
+        "configure slash upstream branch"
+    )
+    expect(
+        runGit([
+            "-C", repositoryURL.path, "update-ref",
+            "refs/remotes/team/fork/main", "HEAD",
+        ]),
+        "create slash upstream ref"
+    )
+    let slashRemoteEvidence = probeTaskRepositoryEvidence(
+        workingDirectory: repositoryURL.path,
+        previous: nil,
+        now: now,
+        ghExecutableURL: nil
+    )
+    expect(
+        slashRemoteEvidence.gitStatus?.upstreamName == "team/fork/main",
+        "slash upstream name"
+    )
+    expect(
+        slashRemoteEvidence.gitStatus?.githubRepository == "OpenAI/Codex",
+        "slash remote repository"
+    )
 
     do {
         try Data("dirty\n".utf8).write(to: fixtureURL, options: .atomic)
