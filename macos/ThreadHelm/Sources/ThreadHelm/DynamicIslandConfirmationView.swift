@@ -134,7 +134,7 @@ final class DynamicIslandConfirmationViewController:
     private let queueTableView = NSTableView()
     private let queuePanelView = NSView()
     private let queueTitleField = confirmationLabel(size: 13, weight: .semibold)
-    private let queueCountField = confirmationLabel(size: 10.5, weight: .semibold)
+    private let queueCountField = confirmationLabel(size: 11, weight: .semibold)
     private let queueStack = NSStackView()
     private let contentContainer = NSView()
     private let validationField = confirmationLabel(size: 12, weight: .regular)
@@ -143,10 +143,10 @@ final class DynamicIslandConfirmationViewController:
     private let historyEmptyField = confirmationLabel(size: 13, weight: .regular)
     private let historyScrollView = NSScrollView()
     private let historyTableView = NSTableView()
-    private let overlineField = confirmationLabel(size: 10, weight: .semibold)
+    private let overlineField = confirmationLabel(size: 11, weight: .semibold)
     private let questionPageField = confirmationLabel(size: 12, weight: .medium)
     private let questionProgressView = DynamicIslandQuestionProgressView()
-    private let formTitleField = confirmationLabel(size: 15, weight: .semibold)
+    private let formTitleField = confirmationLabel(size: 18, weight: .bold)
     private let formMessageField = wrappingLabel(size: 13, weight: .regular)
     private let toolScrollView = NSScrollView()
     private let toolDocumentView = NSView()
@@ -167,7 +167,7 @@ final class DynamicIslandConfirmationViewController:
         borderColor: DynamicIslandPalette.amber.withAlphaComponent(0.62),
         accentColor: DynamicIslandPalette.amber
     )
-    private let toolCommandOverline = confirmationLabel(size: 10, weight: .semibold)
+    private let toolCommandOverline = confirmationLabel(size: 11, weight: .semibold)
     private let toolCommandField = wrappingLabel(size: 14, weight: .semibold)
     private let toolCommandKindField = confirmationLabel(size: 11, weight: .medium)
     private let toolRiskTitleField = confirmationLabel(size: 11, weight: .semibold)
@@ -180,13 +180,13 @@ final class DynamicIslandConfirmationViewController:
     private var planFeedbackHintField: NSTextField?
     private var planFeedbackScrollView: NSScrollView?
     private let planImpactCard = DynamicIslandCardView(
-        cornerRadius: 7,
+        cornerRadius: 8,
         backgroundColor: DynamicIslandPalette.amber.withAlphaComponent(0.08),
         borderColor: DynamicIslandPalette.amber.withAlphaComponent(0.34),
         accentColor: DynamicIslandPalette.amber
     )
-    private let planImpactTitleField = confirmationLabel(size: 10.5, weight: .semibold)
-    private let planImpactBodyField = wrappingLabel(size: 11.5, weight: .regular)
+    private let planImpactTitleField = confirmationLabel(size: 11, weight: .semibold)
+    private let planImpactBodyField = wrappingLabel(size: 12, weight: .regular)
     private var presentation: ClaudePermissionPresentation?
     private var queueRows: [QueueRow] = []
     private var historyRecords: [PermissionDecisionHistoryRecord] = []
@@ -210,7 +210,7 @@ final class DynamicIslandConfirmationViewController:
         queuePanelView.wantsLayer = true
         queuePanelView.layer?.backgroundColor =
             DynamicIslandPalette.surface.cgColor
-        queuePanelView.layer?.cornerRadius = 8
+        queuePanelView.layer?.cornerRadius = 10
         queuePanelView.layer?.borderWidth = 1
         queuePanelView.layer?.borderColor = DynamicIslandPalette.hairline.cgColor
         queuePanelView.addSubview(queueTitleField)
@@ -218,6 +218,7 @@ final class DynamicIslandConfirmationViewController:
         queuePanelView.addSubview(queueStack)
         queueTitleField.stringValue = "待确认队列"
         queueTitleField.setAccessibilityLabel("待确认队列")
+        queueTitleField.textColor = DynamicIslandPalette.primaryText
         queueCountField.alignment = .right
         queueCountField.textColor = DynamicIslandPalette.amber
         queueCountField.setAccessibilityLabel("待确认数量")
@@ -283,10 +284,11 @@ final class DynamicIslandConfirmationViewController:
     override func viewDidLayout() {
         super.viewDidLayout()
         let bounds = view.bounds
+        let queueWidth: CGFloat = min(236, max(216, bounds.width * 0.30))
         queueScrollView.frame = NSRect(
             x: 0,
             y: 0,
-            width: min(248, bounds.width * 0.34),
+            width: queueWidth,
             height: bounds.height
         ).insetBy(dx: 0, dy: 8)
         queuePanelView.frame = queueScrollView.frame
@@ -296,16 +298,16 @@ final class DynamicIslandConfirmationViewController:
             queueScrollView.bounds.width - 4
         )
         queueTitleField.frame = NSRect(
-            x: 12,
-            y: queuePanelView.bounds.height - 30,
+            x: 14,
+            y: queuePanelView.bounds.height - 32,
             width: queuePanelView.bounds.width - 80,
-            height: 18
+            height: 20
         )
         queueCountField.frame = NSRect(
             x: queuePanelView.bounds.width - 70,
-            y: queuePanelView.bounds.height - 29,
-            width: 58,
-            height: 16
+            y: queuePanelView.bounds.height - 31,
+            width: 56,
+            height: 18
         )
         queueStack.frame = NSRect(
             x: 10,
@@ -314,9 +316,9 @@ final class DynamicIslandConfirmationViewController:
             height: max(1, queuePanelView.bounds.height - 52)
         )
         contentContainer.frame = NSRect(
-            x: queueScrollView.frame.maxX + 12,
+            x: queuePanelView.frame.maxX + 14,
             y: 44,
-            width: max(1, bounds.width - queueScrollView.frame.maxX - 20),
+            width: max(1, bounds.width - queuePanelView.frame.maxX - 22),
             height: max(1, bounds.height - 52)
         )
         validationField.frame = NSRect(
@@ -497,51 +499,19 @@ final class DynamicIslandConfirmationViewController:
         if queueRows.isEmpty {
             let label = confirmationLabel(size: 12, weight: .regular)
             label.stringValue = "暂无待确认请求"
+            label.textColor = DynamicIslandPalette.tertiaryText
             label.setAccessibilityLabel(label.stringValue)
             queueStack.addArrangedSubview(label)
             return
         }
         for (index, row) in queueRows.enumerated() {
-            let rowView = NSView()
-            rowView.wantsLayer = true
-            rowView.layer?.cornerRadius = 7
-            rowView.layer?.backgroundColor = row.isCurrent
-                ? DynamicIslandPalette.amber.withAlphaComponent(0.16).cgColor
-                : DynamicIslandPalette.card.withAlphaComponent(0.72).cgColor
-            rowView.layer?.borderWidth = row.isCurrent ? 1 : 0
-            rowView.layer?.borderColor = DynamicIslandPalette.amber.cgColor
-            let icon = confirmationLabel(size: 16, weight: .semibold)
-            let title = confirmationLabel(size: 12, weight: .semibold)
-            let detail = confirmationLabel(size: 10, weight: .medium)
-            let time = confirmationLabel(size: 10, weight: .medium)
-            icon.stringValue = kindIcon(row.item.interactionKind)
-            icon.alignment = .center
-            icon.textColor = row.isCurrent
-                ? DynamicIslandPalette.primaryText
-                : DynamicIslandPalette.secondaryText
-            title.stringValue = "\(index + 1)  \(row.item.title)"
-            // 队列会同时排 Claude 与 Codex 的请求，来源必须写在行里，
-            // 否则用户无从判断自己批的是哪一家。
-            detail.stringValue = "\(kindTitle(row.item.interactionKind))"
-                + " · \(agentQueueCode(row.item.agentID))"
-            detail.textColor = DynamicIslandPalette.secondaryText
-            time.stringValue = compactQueueAgeText(row.item.arrivedAt)
-            time.alignment = .right
-            time.textColor = row.isCurrent
-                ? DynamicIslandPalette.amber
-                : DynamicIslandPalette.tertiaryText
-            rowView.addSubview(icon)
-            rowView.addSubview(title)
-            rowView.addSubview(detail)
-            rowView.addSubview(time)
-            icon.frame = NSRect(x: 10, y: 18, width: 28, height: 28)
-            title.frame = NSRect(x: 46, y: 35, width: 116, height: 17)
-            detail.frame = NSRect(x: 46, y: 15, width: 166, height: 15)
-            time.frame = NSRect(x: 164, y: 35, width: 48, height: 16)
-            rowView.setAccessibilityLabel(title.stringValue)
-            rowView.setAccessibilityValue("\(detail.stringValue)，\(time.stringValue)")
-            rowView.widthAnchor.constraint(equalToConstant: 224).isActive = true
-            rowView.heightAnchor.constraint(equalToConstant: 62).isActive = true
+            let rowView = DynamicIslandQueueRowView(
+                index: index + 1,
+                item: row.item,
+                isCurrent: row.isCurrent
+            )
+            rowView.widthAnchor.constraint(equalToConstant: max(1, queuePanelView.bounds.width - 20)).isActive = true
+            rowView.heightAnchor.constraint(equalToConstant: 60).isActive = true
             queueStack.addArrangedSubview(rowView)
         }
     }
@@ -665,7 +635,7 @@ final class DynamicIslandConfirmationViewController:
     }
 
     private func buildQuestions(prompt: ClaudePermissionPrompt) {
-        overlineField.stringValue = "CLAUDE · THREADHELM"
+        overlineField.stringValue = "\(agentQueueCode(prompt.agentID)) · THREADHELM"
         contentContainer.addSubview(overlineField)
         contentContainer.addSubview(formTitleField)
         contentContainer.addSubview(formMessageField)
@@ -710,7 +680,7 @@ final class DynamicIslandConfirmationViewController:
     }
 
     private func buildPlanReview(prompt: ClaudePermissionPrompt) {
-        overlineField.stringValue = "CLAUDE · THREADHELM"
+        overlineField.stringValue = "\(agentQueueCode(prompt.agentID)) · THREADHELM"
         formTitleField.stringValue = "计划审批"
         formMessageField.stringValue = prompt.message
         let planScroll = NSScrollView()
@@ -731,28 +701,25 @@ final class DynamicIslandConfirmationViewController:
         planScroll.layer?.backgroundColor = DynamicIslandPalette.background.cgColor
         planScroll.layer?.borderWidth = 1
         planScroll.layer?.borderColor = DynamicIslandPalette.strongHairline.cgColor
-        planScroll.layer?.cornerRadius = 6
+        planScroll.layer?.cornerRadius = 8
         planScroll.setAccessibilityLabel("Claude 计划内容")
 
         let feedbackScroll = NSScrollView()
         let feedback = NSTextView()
         feedbackScroll.wantsLayer = true
-        feedbackScroll.layer?.borderWidth = 2
+        feedbackScroll.layer?.borderWidth = 1.5
         feedbackScroll.layer?.borderColor = DynamicIslandPalette.amber
             .withAlphaComponent(0.85).cgColor
         let feedbackBackground = NSColor(calibratedWhite: 0.14, alpha: 1)
         feedbackScroll.layer?.backgroundColor = feedbackBackground.cgColor
-        feedbackScroll.layer?.cornerRadius = 6
+        feedbackScroll.layer?.cornerRadius = 8
         feedback.drawsBackground = true
         feedback.backgroundColor = feedbackBackground
         feedback.textColor = DynamicIslandPalette.primaryText
         feedback.font = .systemFont(ofSize: 13)
-        feedback.textContainerInset = NSSize(width: 8, height: 8)
+        feedback.textContainerInset = NSSize(width: 10, height: 8)
         feedback.wantsLayer = true
-        feedback.layer?.borderWidth = 2
-        feedback.layer?.borderColor = DynamicIslandPalette.amber
-            .withAlphaComponent(0.85).cgColor
-        feedback.layer?.cornerRadius = 6
+        feedback.layer?.borderWidth = 0
         feedback.setAccessibilityLabel("计划修改反馈")
         feedbackScroll.documentView = feedback
         feedbackScroll.hasVerticalScroller = true
@@ -875,9 +842,9 @@ final class DynamicIslandConfirmationViewController:
         let footerWidth = min(bounds.width, 328)
         let footerX = max(0, bounds.width - footerWidth)
         let footerFrames = [
-            NSRect(x: footerX, y: 4, width: 96, height: 30),
-            NSRect(x: footerX + 104, y: 4, width: 82, height: 30),
-            NSRect(x: footerX + 194, y: 4, width: 126, height: 30),
+            NSRect(x: footerX, y: 4, width: 96, height: 32),
+            NSRect(x: footerX + 104, y: 4, width: 82, height: 32),
+            NSRect(x: footerX + 194, y: 4, width: 126, height: 32),
         ]
         for (index, button) in toolFooterButtons.enumerated() {
             button.frame = footerFrames[min(index, footerFrames.count - 1)]
@@ -946,47 +913,67 @@ final class DynamicIslandConfirmationViewController:
         overlineField.frame = NSRect(x: 0, y: bounds.height - 24, width: bounds.width, height: 14)
         formTitleField.frame = NSRect(
             x: 0,
-            y: bounds.height - 58,
+            y: bounds.height - 56,
             width: bounds.width,
             height: 28
         )
         formMessageField.frame = NSRect(
             x: 0,
-            y: bounds.height - 92,
+            y: bounds.height - 86,
             width: bounds.width,
-            height: 34
+            height: 24
         )
-        let sidebarWidth = min(184, max(158, bounds.width * 0.34))
-        let questionWidth = max(220, bounds.width - sidebarWidth - 12)
+
+        let hasMultipleQuestions = questionViews.count > 1
+        let sidebarWidth: CGFloat = hasMultipleQuestions ? 172 : 0
+        let questionWidth: CGFloat = hasMultipleQuestions
+            ? max(220, bounds.width - sidebarWidth - 14)
+            : bounds.width
+
         for (index, questionView) in questionViews.enumerated() {
             questionView.isHidden = index != currentQuestionIndex
             questionView.frame = NSRect(
                 x: 0,
-                y: 44,
+                y: 48,
                 width: questionWidth,
-                height: max(1, bounds.height - 150)
+                height: max(1, bounds.height - 142)
             )
         }
-        questionProgressView.frame = NSRect(
-            x: questionWidth + 12,
-            y: 44,
-            width: max(1, bounds.width - questionWidth - 12),
-            height: max(1, bounds.height - 150)
-        )
+
+        questionProgressView.isHidden = !hasMultipleQuestions
+        if hasMultipleQuestions {
+            questionProgressView.frame = NSRect(
+                x: questionWidth + 14,
+                y: 48,
+                width: max(1, bounds.width - questionWidth - 14),
+                height: max(1, bounds.height - 142)
+            )
+        }
         updateQuestionProgress()
+
         let buttons = contentContainer.subviews.compactMap { $0 as? NSButton }
         let titles = buttons.reduce(into: [String: NSButton]()) { $0[$1.title] = $1 }
-        titles["上一题"]?.frame = NSRect(x: 0, y: 4, width: 74, height: 30)
-        titles["下一题"]?.frame = NSRect(x: 82, y: 4, width: 74, height: 30)
-        questionPageField.frame = NSRect(x: 164, y: 9, width: 90, height: 20)
-        questionPageField.stringValue =
-            "问题 \(min(currentQuestionIndex + 1, questionViews.count)) / \(questionViews.count)"
-        questionPageField.isHidden = questionViews.isEmpty
-        titles["回到终端"]?.frame = NSRect(x: bounds.width - 230, y: 4, width: 96, height: 30)
-        titles["提交回答"]?.frame = NSRect(x: bounds.width - 126, y: 4, width: 126, height: 30)
-        titles["上一题"]?.isEnabled = currentQuestionIndex > 0 && !didEmitDecision
-        titles["下一题"]?.isEnabled = currentQuestionIndex + 1 < questionViews.count
-            && !didEmitDecision
+
+        if hasMultipleQuestions {
+            titles["上一题"]?.isHidden = false
+            titles["下一题"]?.isHidden = false
+            questionPageField.isHidden = false
+            titles["上一题"]?.frame = NSRect(x: 0, y: 6, width: 74, height: 32)
+            titles["下一题"]?.frame = NSRect(x: 82, y: 6, width: 74, height: 32)
+            questionPageField.frame = NSRect(x: 164, y: 12, width: 90, height: 20)
+            questionPageField.stringValue =
+                "问题 \(min(currentQuestionIndex + 1, questionViews.count)) / \(questionViews.count)"
+            titles["上一题"]?.isEnabled = currentQuestionIndex > 0 && !didEmitDecision
+            titles["下一题"]?.isEnabled = currentQuestionIndex + 1 < questionViews.count
+                && !didEmitDecision
+        } else {
+            titles["上一题"]?.isHidden = true
+            titles["下一题"]?.isHidden = true
+            questionPageField.isHidden = true
+        }
+
+        titles["回到终端"]?.frame = NSRect(x: bounds.width - 236, y: 6, width: 96, height: 32)
+        titles["提交回答"]?.frame = NSRect(x: bounds.width - 130, y: 6, width: 130, height: 32)
     }
 
     private func layoutPlanContent(_ bounds: NSRect) {
@@ -1384,9 +1371,112 @@ final class DynamicIslandConfirmationViewController:
     }
 }
 
+private final class DynamicIslandQueueRowView: NSView {
+    override var isFlipped: Bool { true }
+
+    init(index: Int, item: ClaudePermissionQueueItem, isCurrent: Bool) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 1
+
+        let backgroundColor: NSColor
+        let borderColor: NSColor
+        if isCurrent {
+            backgroundColor = DynamicIslandPalette.amber.withAlphaComponent(0.12)
+            borderColor = DynamicIslandPalette.amber.withAlphaComponent(0.48)
+        } else {
+            backgroundColor = DynamicIslandPalette.card
+            borderColor = DynamicIslandPalette.hairline
+        }
+        layer?.backgroundColor = backgroundColor.cgColor
+        layer?.borderColor = borderColor.cgColor
+
+        if isCurrent {
+            let accent = NSView(frame: NSRect(x: 0, y: 7, width: 3, height: 46))
+            accent.wantsLayer = true
+            accent.layer?.cornerRadius = 1.5
+            accent.layer?.backgroundColor = DynamicIslandPalette.amber.cgColor
+            accent.setAccessibilityElement(false)
+            addSubview(accent)
+        }
+
+        let iconBadge = NSView(frame: NSRect(x: 10, y: 16, width: 28, height: 28))
+        iconBadge.wantsLayer = true
+        iconBadge.layer?.cornerRadius = 14
+        iconBadge.layer?.backgroundColor = (isCurrent
+            ? DynamicIslandPalette.amber.withAlphaComponent(0.20)
+            : NSColor.white.withAlphaComponent(0.06)).cgColor
+        iconBadge.setAccessibilityElement(false)
+
+        let iconLabel = confirmationLabel(size: 13, weight: .bold)
+        iconLabel.stringValue = kindIcon(item.interactionKind)
+        iconLabel.textColor = isCurrent ? DynamicIslandPalette.amber : DynamicIslandPalette.secondaryText
+        iconLabel.alignment = .center
+        iconLabel.frame = NSRect(x: 0, y: 4, width: 28, height: 20)
+        iconLabel.setAccessibilityElement(false)
+        iconBadge.addSubview(iconLabel)
+        addSubview(iconBadge)
+
+        let title = confirmationLabel(size: 12.5, weight: .semibold)
+        title.stringValue = item.title
+        title.textColor = DynamicIslandPalette.primaryText
+        title.frame = NSRect(x: 46, y: 11, width: 110, height: 18)
+        title.lineBreakMode = .byTruncatingTail
+        addSubview(title)
+
+        let detail = confirmationLabel(size: 11, weight: .regular)
+        let agentCode = agentPresentation(for: item.agentID).shortName.uppercased()
+        detail.stringValue = "\(kindTitle(item.interactionKind)) · \(agentCode)"
+        detail.textColor = DynamicIslandPalette.secondaryText
+        detail.frame = NSRect(x: 46, y: 32, width: 156, height: 16)
+        addSubview(detail)
+
+        let time = confirmationLabel(size: 10.5, weight: .medium)
+        time.stringValue = compactQueueAgeText(item.arrivedAt)
+        time.alignment = .right
+        time.textColor = isCurrent ? DynamicIslandPalette.amber : DynamicIslandPalette.tertiaryText
+        time.frame = NSRect(x: 156, y: 11, width: 44, height: 16)
+        addSubview(time)
+
+        setAccessibilityLabel("\(index) \(item.title)")
+        setAccessibilityValue("\(detail.stringValue)，\(time.stringValue)")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func kindTitle(_ kind: ClaudePermissionInteractionKind) -> String {
+        switch kind {
+        case .toolApproval: return "工具授权"
+        case .askUserQuestion: return "问题回答"
+        case .exitPlanMode: return "计划审批"
+        }
+    }
+
+    private func kindIcon(_ kind: ClaudePermissionInteractionKind) -> String {
+        switch kind {
+        case .toolApproval: return "⌘"
+        case .askUserQuestion: return "?"
+        case .exitPlanMode: return "≡"
+        }
+    }
+
+    private func compactQueueAgeText(_ date: Date) -> String {
+        let elapsed = max(0, dynamicIslandCurrentDate().timeIntervalSince(date))
+        if elapsed < 60 { return "刚刚" }
+        if elapsed < 3_600 { return "\(max(1, Int(elapsed / 60))) 分" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+}
+
 private final class DynamicIslandQuestionProgressView: NSView {
-    private let titleField = confirmationLabel(size: 11, weight: .semibold)
-    private let summaryField = confirmationLabel(size: 10.5, weight: .medium)
+    private let titleField = confirmationLabel(size: 12, weight: .semibold)
+    private let summaryField = confirmationLabel(size: 11, weight: .medium)
     private let stack = NSStackView()
 
     override init(frame frameRect: NSRect) {
@@ -1401,7 +1491,7 @@ private final class DynamicIslandQuestionProgressView: NSView {
         summaryField.textColor = DynamicIslandPalette.secondaryText
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
+        stack.spacing = 6
         addSubview(titleField)
         addSubview(summaryField)
         addSubview(stack)
@@ -1429,10 +1519,10 @@ private final class DynamicIslandQuestionProgressView: NSView {
             height: 16
         )
         stack.frame = NSRect(
-            x: 10,
-            y: 38,
-            width: max(1, bounds.width - 20),
-            height: max(1, bounds.height - 78)
+            x: 8,
+            y: 36,
+            width: max(1, bounds.width - 16),
+            height: max(1, bounds.height - 74)
         )
     }
 
@@ -1463,7 +1553,7 @@ private final class DynamicIslandQuestionProgressView: NSView {
             )
             stack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-            row.heightAnchor.constraint(equalToConstant: 46).isActive = true
+            row.heightAnchor.constraint(equalToConstant: 44).isActive = true
         }
         summaryField.stringValue = "已回答 \(answeredCount) / \(questions.count)"
         setAccessibilityValue(
@@ -1475,41 +1565,64 @@ private final class DynamicIslandQuestionProgressView: NSView {
 }
 
 private final class DynamicIslandQuestionProgressRowView: NSView {
-    private let numberField = confirmationLabel(size: 11, weight: .semibold)
-    private let titleField = confirmationLabel(size: 10.5, weight: .medium)
-    private let stateField = confirmationLabel(size: 9.5, weight: .medium)
+    override var isFlipped: Bool { true }
+
+    private let stepBadge = NSView()
+    private let stepNumber = confirmationLabel(size: 10.5, weight: .bold)
+    private let titleField = confirmationLabel(size: 11.5, weight: .medium)
+    private let stateField = confirmationLabel(size: 10, weight: .medium)
 
     init(index: Int, title: String, isCurrent: Bool, isAnswered: Bool) {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 6
         layer?.backgroundColor = (
             isCurrent
-                ? DynamicIslandPalette.amber.withAlphaComponent(0.12)
-                : DynamicIslandPalette.raised
+                ? DynamicIslandPalette.amber.withAlphaComponent(0.10)
+                : DynamicIslandPalette.card.withAlphaComponent(0.60)
         ).cgColor
         layer?.borderColor = (
             isCurrent
-                ? DynamicIslandPalette.amber.withAlphaComponent(0.58)
+                ? DynamicIslandPalette.amber.withAlphaComponent(0.50)
                 : DynamicIslandPalette.hairline
         ).cgColor
         layer?.borderWidth = 1
-        numberField.stringValue = "\(index)"
-        numberField.alignment = .center
-        numberField.textColor = isCurrent
-            ? DynamicIslandPalette.amber
-            : DynamicIslandPalette.secondaryText
+
+        stepBadge.wantsLayer = true
+        stepBadge.layer?.cornerRadius = 9
+        if isAnswered {
+            stepBadge.layer?.backgroundColor = DynamicIslandPalette.green.cgColor
+            stepNumber.stringValue = "✓"
+            stepNumber.textColor = NSColor(calibratedWhite: 0.1, alpha: 1)
+        } else if isCurrent {
+            stepBadge.layer?.backgroundColor = DynamicIslandPalette.amber.withAlphaComponent(0.25).cgColor
+            stepBadge.layer?.borderColor = DynamicIslandPalette.amber.cgColor
+            stepBadge.layer?.borderWidth = 1
+            stepNumber.stringValue = "\(index)"
+            stepNumber.textColor = DynamicIslandPalette.amber
+        } else {
+            stepBadge.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
+            stepNumber.stringValue = "\(index)"
+            stepNumber.textColor = DynamicIslandPalette.secondaryText
+        }
+        stepNumber.alignment = .center
+        stepNumber.setAccessibilityElement(false)
+        stepBadge.addSubview(stepNumber)
+        addSubview(stepBadge)
+
         titleField.stringValue = title
         titleField.lineBreakMode = .byTruncatingTail
+        titleField.textColor = isCurrent ? DynamicIslandPalette.primaryText : DynamicIslandPalette.secondaryText
+        addSubview(titleField)
+
         stateField.stringValue = isAnswered
-            ? "✓ 已回答"
+            ? "已完成"
             : (isCurrent ? "当前" : "待回答")
         stateField.textColor = isAnswered
             ? DynamicIslandPalette.green
             : (isCurrent ? DynamicIslandPalette.amber : DynamicIslandPalette.tertiaryText)
-        addSubview(numberField)
-        addSubview(titleField)
         addSubview(stateField)
+
         setAccessibilityLabel("问题 \(index) \(title)")
         setAccessibilityValue(stateField.stringValue)
     }
@@ -1521,17 +1634,18 @@ private final class DynamicIslandQuestionProgressRowView: NSView {
 
     override func layout() {
         super.layout()
-        numberField.frame = NSRect(x: 8, y: 14, width: 20, height: 18)
+        stepBadge.frame = NSRect(x: 8, y: 13, width: 18, height: 18)
+        stepNumber.frame = NSRect(x: 0, y: 1, width: 18, height: 16)
         titleField.frame = NSRect(
-            x: 34,
-            y: 23,
-            width: max(1, bounds.width - 44),
-            height: 15
+            x: 32,
+            y: 7,
+            width: max(1, bounds.width - 40),
+            height: 16
         )
         stateField.frame = NSRect(
-            x: 34,
-            y: 7,
-            width: max(1, bounds.width - 44),
+            x: 32,
+            y: 24,
+            width: max(1, bounds.width - 40),
             height: 14
         )
     }
@@ -1546,15 +1660,11 @@ final class DynamicIslandQuestionInputView: NSView {
     private let question: ClaudeQuestion
     private let scrollView = NSScrollView()
     private let documentView = NSView()
-    private let headerField = wrappingLabel(size: 13, weight: .semibold)
+    private let headerBadge = NSTextField(labelWithString: "")
+    private let headerField = wrappingLabel(size: 15, weight: .semibold)
+    private let inputContainer = NSView()
     private let textField = NSTextField()
-    private let guidanceCard = DynamicIslandCardView(
-        cornerRadius: 7,
-        backgroundColor: DynamicIslandPalette.surface,
-        borderColor: DynamicIslandPalette.hairline
-    )
-    private let guidanceTitleField = confirmationLabel(size: 10.5, weight: .semibold)
-    private let guidanceBodyField = wrappingLabel(size: 11, weight: .regular)
+    private let footnoteField = confirmationLabel(size: 11.5, weight: .regular)
     private var optionButtons: [NSButton] = []
 
     var initialInputResponder: NSResponder { textField }
@@ -1563,13 +1673,27 @@ final class DynamicIslandQuestionInputView: NSView {
         self.question = question
         super.init(frame: .zero)
         addSubview(scrollView)
-        documentView.addSubview(headerField)
         scrollView.documentView = documentView
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
 
+        let selectionText = question.allowsMultipleSelection ? "多选题" : "单选题"
+        headerBadge.stringValue = selectionText
+        headerBadge.font = .systemFont(ofSize: 11, weight: .semibold)
+        headerBadge.textColor = DynamicIslandPalette.amber
+        headerBadge.alignment = .center
+        headerBadge.wantsLayer = true
+        headerBadge.layer?.cornerRadius = 4
+        headerBadge.layer?.backgroundColor = DynamicIslandPalette.amber.withAlphaComponent(0.14).cgColor
+        headerBadge.setAccessibilityElement(false)
+        documentView.addSubview(headerBadge)
+
         headerField.stringValue = question.header ?? question.answerKey
+        headerField.font = .systemFont(ofSize: 15, weight: .semibold)
+        headerField.textColor = DynamicIslandPalette.primaryText
         headerField.setAccessibilityLabel("问题")
+        documentView.addSubview(headerField)
+
         optionButtons = question.options.enumerated().map { index, option in
             let button = DynamicIslandQuestionOptionButton(
                 label: option.label,
@@ -1584,42 +1708,39 @@ final class DynamicIslandQuestionInputView: NSView {
             documentView.addSubview(button)
             return button
         }
-        let placeholder = question.options.isEmpty ? "输入回答" : "自定义回答"
+
+        let placeholder = question.options.isEmpty ? "输入回答..." : "输入自定义回答 (覆盖上方选项)..."
+        inputContainer.wantsLayer = true
+        inputContainer.layer?.cornerRadius = 8
+        inputContainer.layer?.borderWidth = 1
+        inputContainer.layer?.borderColor = DynamicIslandPalette.hairline.cgColor
+        inputContainer.layer?.backgroundColor = DynamicIslandPalette.card.cgColor
+        documentView.addSubview(inputContainer)
+
         textField.placeholderString = placeholder
         textField.placeholderAttributedString = NSAttributedString(
             string: placeholder,
             attributes: [
                 .foregroundColor: DynamicIslandPalette.tertiaryText,
-                .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+                .font: NSFont.systemFont(ofSize: 12.5, weight: .regular),
             ]
         )
-        textField.font = .systemFont(ofSize: 13)
+        textField.font = .systemFont(ofSize: 12.5)
         textField.textColor = DynamicIslandPalette.primaryText
-        textField.backgroundColor = DynamicIslandPalette.card
+        textField.drawsBackground = false
         textField.isBezeled = false
         textField.focusRingType = .none
-        textField.wantsLayer = true
-        textField.layer?.cornerRadius = 7
-        textField.layer?.borderWidth = 1
-        textField.layer?.borderColor = DynamicIslandPalette.strongHairline.cgColor
-        textField.layer?.backgroundColor = DynamicIslandPalette.card.cgColor
         textField.setAccessibilityLabel("自定义回答")
         textField.target = self
         textField.action = #selector(customTextChanged)
-        documentView.addSubview(textField)
-        guidanceTitleField.stringValue = "回答规则"
-        guidanceTitleField.textColor = DynamicIslandPalette.secondaryText
-        let selectionText = question.allowsMultipleSelection ? "多选" : "单选"
-        guidanceBodyField.stringValue = question.options.isEmpty
-            ? "自由输入 · 切换题目会保存当前回答。"
-            : "\(selectionText) · 自定义回答会覆盖选项；切换题目会保存当前回答。"
-        guidanceBodyField.textColor = DynamicIslandPalette.secondaryText
-        guidanceCard.addSubview(guidanceTitleField)
-        guidanceCard.addSubview(guidanceBodyField)
-        guidanceCard.setAccessibilityLabel(
-            "回答规则，\(guidanceBodyField.stringValue)"
-        )
-        documentView.addSubview(guidanceCard)
+        inputContainer.addSubview(textField)
+
+        footnoteField.stringValue = question.options.isEmpty
+            ? "💡 自由输入 · 切换题目会自动保存回答。"
+            : "💡 \(question.allowsMultipleSelection ? "多选" : "单选") · 自定义回答会覆盖选项；切换题目会自动保存回答。"
+        footnoteField.textColor = DynamicIslandPalette.secondaryText
+        footnoteField.setAccessibilityLabel("回答规则，\(footnoteField.stringValue)")
+        documentView.addSubview(footnoteField)
     }
 
     @available(*, unavailable)
@@ -1630,31 +1751,53 @@ final class DynamicIslandQuestionInputView: NSView {
     override func layout() {
         super.layout()
         scrollView.frame = bounds
-        let width = max(1, bounds.width - 18)
-        let requiredHeight = CGFloat(156 + optionButtons.count * 52)
-        let documentHeight = max(bounds.height, requiredHeight)
+        let width = max(1, bounds.width - 16)
+
+        var optionHeights: [CGFloat] = []
+        for button in optionButtons {
+            let h = (button as? DynamicIslandQuestionOptionButton)?.calculatedHeight(forWidth: width) ?? 50
+            optionHeights.append(h)
+        }
+        let totalOptionsHeight = optionHeights.reduce(0, +) + CGFloat(max(0, optionButtons.count - 1) * 8)
+
+        let headerHeight: CGFloat = 28
+        let inputHeight: CGFloat = 36
+        let footnoteHeight: CGFloat = 18
+        let spacing: CGFloat = 10
+
+        let contentHeight = headerHeight
+            + (optionButtons.isEmpty ? 0 : (totalOptionsHeight + spacing))
+            + inputHeight + spacing + footnoteHeight + 20
+        let documentHeight = max(bounds.height, contentHeight)
         documentView.frame = NSRect(
             x: 0,
             y: 0,
             width: width,
             height: documentHeight
         )
-        var y: CGFloat = max(documentHeight - 28, 0)
-        headerField.frame = NSRect(x: 0, y: y, width: width, height: 24)
-        y -= 40
-        for button in optionButtons {
-            button.frame = NSRect(x: 0, y: max(0, y), width: width, height: 46)
-            y -= 52
+
+        var y = documentHeight - headerHeight
+        headerBadge.frame = NSRect(x: 0, y: y + 2, width: 48, height: 22)
+        headerField.frame = NSRect(x: 54, y: y, width: max(1, width - 54), height: 26)
+
+        if !optionButtons.isEmpty {
+            y -= (spacing + 2)
+            for (index, button) in optionButtons.enumerated() {
+                let btnHeight = optionHeights[index]
+                y -= btnHeight
+                button.frame = NSRect(x: 0, y: max(0, y), width: width, height: btnHeight)
+                y -= 8
+            }
+            y += 8
         }
-        textField.frame = NSRect(x: 0, y: max(0, y), width: width, height: 28)
-        guidanceCard.frame = NSRect(
-            x: 0,
-            y: max(0, y - 78),
-            width: width,
-            height: 64
-        )
-        guidanceTitleField.frame = NSRect(x: 12, y: 39, width: width - 24, height: 16)
-        guidanceBodyField.frame = NSRect(x: 12, y: 8, width: width - 24, height: 30)
+
+        y -= (spacing + 4)
+        inputContainer.frame = NSRect(x: 0, y: max(0, y - inputHeight), width: width, height: inputHeight)
+        textField.frame = NSRect(x: 12, y: (inputHeight - 20) / 2, width: max(1, width - 24), height: 20)
+        y -= inputHeight
+
+        y -= (spacing - 2)
+        footnoteField.frame = NSRect(x: 2, y: max(0, y - footnoteHeight), width: width - 4, height: footnoteHeight)
     }
 
     override func viewWillMove(toSuperview newSuperview: NSView?) {
@@ -1691,10 +1834,9 @@ final class DynamicIslandQuestionInputView: NSView {
 
     private func applyDraftToControls() {
         for button in optionButtons {
-            button.state = draft.selectedOptionIndexes.contains(button.tag) ? .on : .off
-            (button as? DynamicIslandQuestionOptionButton)?.setSelected(
-                draft.selectedOptionIndexes.contains(button.tag)
-            )
+            let isSelected = draft.selectedOptionIndexes.contains(button.tag)
+            button.state = isSelected ? .on : .off
+            (button as? DynamicIslandQuestionOptionButton)?.setSelected(isSelected)
         }
         textField.stringValue = draft.customText
     }
@@ -1718,33 +1860,85 @@ final class DynamicIslandQuestionInputView: NSView {
     }
 }
 
-private final class DynamicIslandQuestionOptionButton: NSButton {
+final class DynamicIslandQuestionOptionButton: NSButton {
+    override var isFlipped: Bool { true }
+
     private let optionLabel: String
     private let optionDetail: String?
     private let allowsMultipleSelection: Bool
+    private var isHovered = false
+
+    private let indicatorView = NSView()
+    private let indicatorDot = NSView()
+    private let indicatorCheck = NSTextField(labelWithString: "")
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
 
     init(
         label: String,
         detail: String?,
         allowsMultipleSelection: Bool
     ) {
-        optionLabel = label
-        optionDetail = detail
+        self.optionLabel = label
+        self.optionDetail = detail
         self.allowsMultipleSelection = allowsMultipleSelection
         super.init(frame: .zero)
+        self.title = ""
+        self.attributedTitle = NSAttributedString(string: "")
         isBordered = false
         focusRingType = .none
         setButtonType(.toggle)
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 8
         layer?.borderWidth = 1
-        font = .systemFont(ofSize: 13, weight: .medium)
+
+        setupSubviews()
         updateAppearance()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setupSubviews() {
+        indicatorView.wantsLayer = true
+        indicatorView.layer?.borderWidth = 1.5
+        indicatorView.layer?.cornerRadius = allowsMultipleSelection ? 4 : 9
+        indicatorView.setAccessibilityElement(false)
+        addSubview(indicatorView)
+
+        if allowsMultipleSelection {
+            indicatorCheck.font = .systemFont(ofSize: 11, weight: .bold)
+            indicatorCheck.alignment = .center
+            indicatorCheck.textColor = NSColor(calibratedWhite: 0.1, alpha: 1)
+            indicatorCheck.stringValue = "✓"
+            indicatorCheck.setAccessibilityElement(false)
+            indicatorView.addSubview(indicatorCheck)
+        } else {
+            indicatorDot.wantsLayer = true
+            indicatorDot.layer?.cornerRadius = 3
+            indicatorDot.layer?.backgroundColor = NSColor(calibratedWhite: 0.1, alpha: 1).cgColor
+            indicatorDot.setAccessibilityElement(false)
+            indicatorView.addSubview(indicatorDot)
+        }
+
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = DynamicIslandPalette.primaryText
+        titleLabel.stringValue = optionLabel
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setAccessibilityElement(false)
+        addSubview(titleLabel)
+
+        if let optionDetail, !optionDetail.isEmpty {
+            detailLabel.font = .systemFont(ofSize: 11.5, weight: .regular)
+            detailLabel.textColor = DynamicIslandPalette.secondaryText
+            detailLabel.stringValue = optionDetail
+            detailLabel.lineBreakMode = .byWordWrapping
+            detailLabel.maximumNumberOfLines = 2
+            detailLabel.setAccessibilityElement(false)
+            addSubview(detailLabel)
+        }
     }
 
     override var state: NSControl.StateValue {
@@ -1756,46 +1950,125 @@ private final class DynamicIslandQuestionOptionButton: NSButton {
         updateAppearance()
     }
 
-    private func updateAppearance() {
-        let selected = state == .on
-        layer?.backgroundColor = (selected
-            ? DynamicIslandPalette.amber.withAlphaComponent(0.16)
-            : DynamicIslandPalette.card).cgColor
-        layer?.borderColor = (selected
-            ? DynamicIslandPalette.amber.withAlphaComponent(0.78)
-            : DynamicIslandPalette.hairline).cgColor
-        let mark = selected
-            ? (allowsMultipleSelection ? "☑" : "●")
-            : (allowsMultipleSelection ? "☐" : "○")
-        let title = [mark + "  " + optionLabel, optionDetail]
-            .compactMap { $0 }
-            .joined(separator: "\n")
-        let attributed = NSMutableAttributedString(
-            string: title,
-            attributes: [
-                .foregroundColor: DynamicIslandPalette.primaryText,
-                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            ]
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
         )
-        if let optionDetail,
-           let range = title.range(of: optionDetail)
-        {
-            attributed.addAttributes(
-                [
-                    .foregroundColor: DynamicIslandPalette.secondaryText,
-                    .font: NSFont.systemFont(ofSize: 12, weight: .regular),
-                ],
-                range: NSRange(range, in: title)
+        addTrackingArea(trackingArea)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        isHovered = true
+        updateAppearance()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isHovered = false
+        updateAppearance()
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func layout() {
+        super.layout()
+        let hasDetail = optionDetail != nil && !(optionDetail!.isEmpty)
+        let indicatorSize: CGFloat = 18
+        let indicatorX: CGFloat = 14
+
+        if hasDetail {
+            indicatorView.frame = NSRect(x: indicatorX, y: 13, width: indicatorSize, height: indicatorSize)
+            titleLabel.frame = NSRect(
+                x: 42,
+                y: 10,
+                width: max(1, bounds.width - 54),
+                height: 18
+            )
+            detailLabel.frame = NSRect(
+                x: 42,
+                y: 30,
+                width: max(1, bounds.width - 54),
+                height: max(14, bounds.height - 38)
+            )
+        } else {
+            let midY = (bounds.height - indicatorSize) / 2
+            indicatorView.frame = NSRect(x: indicatorX, y: midY, width: indicatorSize, height: indicatorSize)
+            titleLabel.frame = NSRect(
+                x: 42,
+                y: (bounds.height - 18) / 2,
+                width: max(1, bounds.width - 54),
+                height: 18
             )
         }
-        attributedTitle = attributed
-        alignment = .left
+
+        if allowsMultipleSelection {
+            indicatorCheck.frame = NSRect(x: 0, y: 1, width: indicatorSize, height: indicatorSize - 2)
+        } else {
+            indicatorDot.frame = NSRect(x: 6, y: 6, width: 6, height: 6)
+        }
+    }
+
+    func calculatedHeight(forWidth width: CGFloat) -> CGFloat {
+        guard let optionDetail, !optionDetail.isEmpty else {
+            return 42
+        }
+        if optionDetail.count > 35 {
+            return 58
+        }
+        return 50
+    }
+
+    private func updateAppearance() {
+        let selected = state == .on
+        let backgroundColor: NSColor
+        let borderColor: NSColor
+
+        if selected {
+            backgroundColor = DynamicIslandPalette.amber.withAlphaComponent(0.12)
+            borderColor = DynamicIslandPalette.amber.withAlphaComponent(0.65)
+        } else if isHovered {
+            backgroundColor = NSColor(calibratedWhite: 0.18, alpha: 0.90)
+            borderColor = NSColor.white.withAlphaComponent(0.22)
+        } else {
+            backgroundColor = DynamicIslandPalette.card
+            borderColor = DynamicIslandPalette.hairline
+        }
+
+        layer?.backgroundColor = backgroundColor.cgColor
+        layer?.borderColor = borderColor.cgColor
+
+        if selected {
+            indicatorView.layer?.backgroundColor = DynamicIslandPalette.amber.cgColor
+            indicatorView.layer?.borderColor = DynamicIslandPalette.amber.cgColor
+            indicatorDot.isHidden = false
+            indicatorCheck.isHidden = false
+        } else {
+            indicatorView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.04).cgColor
+            indicatorView.layer?.borderColor = NSColor.white.withAlphaComponent(0.28).cgColor
+            indicatorDot.isHidden = true
+            indicatorCheck.isHidden = true
+        }
+
+        titleLabel.textColor = DynamicIslandPalette.primaryText
+        detailLabel.textColor = selected
+            ? DynamicIslandPalette.primaryText.withAlphaComponent(0.75)
+            : DynamicIslandPalette.secondaryText
     }
 }
 
 private final class DynamicIslandActionButton: NSButton {
     private let handler: () -> Void
     private var visualStyle: DynamicIslandButtonStyle = .secondary
+    private var isHovered = false
 
     init(title: String, handler: @escaping () -> Void) {
         self.handler = handler
@@ -1804,7 +2077,7 @@ private final class DynamicIslandActionButton: NSButton {
         isBordered = false
         focusRingType = .none
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 8
         layer?.borderWidth = 1
         target = self
         action = #selector(performAction)
@@ -1829,33 +2102,78 @@ private final class DynamicIslandActionButton: NSButton {
         applyAppearance()
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        isHovered = true
+        applyAppearance()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isHovered = false
+        applyAppearance()
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if isEnabled {
+            addCursorRect(bounds, cursor: .pointingHand)
+        }
+    }
+
     private func applyAppearance() {
         let foreground: NSColor
         let background: NSColor
         let border: NSColor
         switch visualStyle {
         case .primary:
-            foreground = NSColor(calibratedWhite: 0.05, alpha: 1)
-            background = DynamicIslandPalette.amber
+            foreground = NSColor(calibratedWhite: 0.08, alpha: 1)
+            background = isHovered
+                ? NSColor(calibratedRed: 1.0, green: 0.72, blue: 0.16, alpha: 1)
+                : DynamicIslandPalette.amber
             border = DynamicIslandPalette.amber
         case .destructive:
             foreground = DynamicIslandPalette.red
-            background = DynamicIslandPalette.red.withAlphaComponent(0.08)
-            border = DynamicIslandPalette.red.withAlphaComponent(0.78)
+            background = isHovered
+                ? DynamicIslandPalette.red.withAlphaComponent(0.18)
+                : DynamicIslandPalette.red.withAlphaComponent(0.10)
+            border = DynamicIslandPalette.red.withAlphaComponent(0.50)
         case .subtle:
-            foreground = DynamicIslandPalette.tertiaryText
-            background = NSColor.white.withAlphaComponent(0.018)
+            foreground = isHovered
+                ? DynamicIslandPalette.primaryText
+                : DynamicIslandPalette.tertiaryText
+            background = isHovered
+                ? NSColor.white.withAlphaComponent(0.06)
+                : NSColor.white.withAlphaComponent(0.02)
             border = DynamicIslandPalette.hairline.withAlphaComponent(0.45)
         case .icon:
             foreground = DynamicIslandPalette.primaryText
-            background = DynamicIslandPalette.raised
+            background = isHovered ? DynamicIslandPalette.card : DynamicIslandPalette.raised
             border = DynamicIslandPalette.strongHairline
         case .secondary:
             foreground = DynamicIslandPalette.primaryText
-            background = DynamicIslandPalette.card
-            border = DynamicIslandPalette.strongHairline
+            background = isHovered
+                ? NSColor(calibratedWhite: 0.22, alpha: 0.95)
+                : NSColor(calibratedWhite: 0.16, alpha: 0.85)
+            border = isHovered
+                ? NSColor.white.withAlphaComponent(0.24)
+                : NSColor.white.withAlphaComponent(0.12)
         case .bare:
-            foreground = DynamicIslandPalette.secondaryText
+            foreground = isHovered
+                ? DynamicIslandPalette.primaryText
+                : DynamicIslandPalette.secondaryText
             background = NSColor.clear
             border = NSColor.clear
         }
