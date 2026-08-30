@@ -920,7 +920,13 @@ private func assertDynamicIslandTaskWorkspace() {
     controller.apply(
         collection: collection,
         sourceFilter: .codex,
-        preferredTaskKey: codexRunning.identityKey
+        preferredTaskKey: codexRunning.identityKey,
+        taskOpenEvidence: [
+            codexRunning.identityKey: TaskOpenEvidence(
+                result: .unknown,
+                recordedAt: Date(timeIntervalSince1970: 12 * 60 * 60)
+            ),
+        ]
     )
     guard controller.visibleTaskKeysForSelfTest() == [
         codexRunning.identityKey,
@@ -952,7 +958,10 @@ private func assertDynamicIslandTaskWorkspace() {
           controller.footerButtonGapForSelfTest() >= 14,
           controller.copyButtonUsesCompactContentLayoutForSelfTest(),
           controller.copyPathForSelfTest() == "/tmp/threadhelm",
-          controller.openButtonTitleForSelfTest() == "打开 Codex"
+          controller.openButtonTitleForSelfTest() == "打开 Codex",
+          controller.openResultTextForSelfTest().contains(
+              "已发起打开，但尚未确认是否回到原会话"
+          )
     else {
         fputs("dynamic island task controller self-test failed\n", stderr)
         exit(1)

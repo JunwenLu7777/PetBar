@@ -969,7 +969,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                   metadata: adapter.metadata,
                   permissionQueue: dashboardStore.snapshot.permissionQueue
               )
-        else { return .unavailable }
+        else {
+            return recordTaskOpenEvidence(.unavailable, for: item)
+        }
         let report = adapter.openSessionIfInstalled(session: snapshot) {
             if item.source == .claudeCode {
                 lastClaudePermissionOpenResult = nil
@@ -995,14 +997,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return adapter.openValidated(session: snapshot)
         }
-        return recordOpenReport(report)
+        return recordOpenReport(report, for: item)
     }
 
-    private func recordOpenReport(_ report: AgentOpenReport) -> OpenResult {
+    private func recordOpenReport(
+        _ report: AgentOpenReport,
+        for item: TaskProgressItem
+    ) -> OpenResult {
         if !agentOpenMeasurementStore.record(report) {
             fputs("ThreadHelm 无法写入本地打开结果计数。\n", stderr)
         }
-        return report.result
+        return recordTaskOpenEvidence(report.result, for: item)
+    }
+
+    private func recordTaskOpenEvidence(
+        _ result: OpenResult,
+        for item: TaskProgressItem
+    ) -> OpenResult {
+        dashboardStore.update { snapshot in
+            let liveKeys = Set(
+                snapshot.taskCollection.items.map(\.identityKey)
+                    + [item.identityKey]
+            )
+            snapshot.taskOpenEvidence = snapshot.taskOpenEvidence.filter {
+                liveKeys.contains($0.key)
+            }
+            snapshot.taskOpenEvidence[item.identityKey] = TaskOpenEvidence(
+                result: result,
+                recordedAt: Date()
+            )
+        }
+        return result
     }
 
     private func copyWorkingDirectoryToPasteboard(_ path: String) -> Bool {

@@ -441,6 +441,13 @@ struct ClaudePermissionQueueSnapshot: Equatable {
     var count: Int { (current == nil ? 0 : 1) + pending.count }
 }
 
+/// 用户点击“打开”后，任务详情里保留的最近一次真实结果。只存在内存中，
+/// 不把 task key、session/thread ID 或时间线写进本地统计文件。
+struct TaskOpenEvidence: Equatable {
+    let result: OpenResult
+    let recordedAt: Date
+}
+
 struct ActivityDashboardSnapshot: Equatable {
     var taskCollection = TaskProgressCollectionSnapshot(
         items: TaskProgressSnapshot.reading.items
@@ -450,6 +457,7 @@ struct ActivityDashboardSnapshot: Equatable {
     var availableAgentIDs: [AgentID] = AgentID.builtInOrder
     var selectedQuotaProvider: QuotaProvider = .codex
     var permissionQueue = ClaudePermissionQueueSnapshot.empty
+    var taskOpenEvidence: [String: TaskOpenEvidence] = [:]
     var agentSnapshots: [AgentSessionSnapshot] = []
     var attentionItems: [AgentAttentionItem] = []
     var agentStatuses: [AgentRuntimeStatus] = []

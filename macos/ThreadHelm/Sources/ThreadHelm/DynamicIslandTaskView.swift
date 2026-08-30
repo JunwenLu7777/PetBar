@@ -235,6 +235,10 @@ final class DynamicIslandTaskViewController:
         size: 12,
         weight: .regular
     )
+    private let openResultField = DynamicIslandTaskLabel(
+        size: 12,
+        weight: .regular
+    )
     private let detailHeaderDivider = DynamicIslandDividerView()
     private let eventsTitleField = DynamicIslandTaskLabel(
         size: 12,
@@ -277,6 +281,7 @@ final class DynamicIslandTaskViewController:
     private var sourceFilter = TaskSourceFilter.all
     private var stateFilter = TaskStateFilter.all
     private var agentStatuses: [AgentRuntimeStatus] = []
+    private var taskOpenEvidence: [String: TaskOpenEvidence] = [:]
     private var visibleSections: [TaskQueueSection] = []
     private var queueRows: [DynamicIslandTaskQueueRow] = []
     private var visibleItems: [TaskProgressItem] = []
@@ -342,6 +347,7 @@ final class DynamicIslandTaskViewController:
         detailContentView.addSubview(startedField)
         detailContentView.addSubview(elapsedField)
         detailContentView.addSubview(workingDirectoryField)
+        detailContentView.addSubview(openResultField)
         detailContentView.addSubview(detailHeaderDivider)
         detailContentView.addSubview(eventsTitleField)
         detailContentView.addSubview(eventsCard)
@@ -402,6 +408,7 @@ final class DynamicIslandTaskViewController:
         eventsTitleField.textColor = DynamicIslandPalette.secondaryText
         providerField.textColor = DynamicIslandPalette.secondaryText
         workingDirectoryField.textColor = DynamicIslandPalette.secondaryText
+        openResultField.textColor = DynamicIslandPalette.secondaryText
         identityField.textColor = DynamicIslandPalette.secondaryText
         openButton.target = self
         openButton.action = #selector(openSelectedTask)
@@ -513,13 +520,17 @@ final class DynamicIslandTaskViewController:
         collection: TaskProgressCollectionSnapshot,
         sourceFilter: TaskSourceFilter,
         preferredTaskKey: String?,
-        agentStatuses: [AgentRuntimeStatus]? = nil
+        agentStatuses: [AgentRuntimeStatus]? = nil,
+        taskOpenEvidence: [String: TaskOpenEvidence]? = nil
     ) {
         _ = view
         self.collection = collection
         self.sourceFilter = sourceFilter
         if let agentStatuses {
             self.agentStatuses = agentStatuses
+        }
+        if let taskOpenEvidence {
+            self.taskOpenEvidence = taskOpenEvidence
         }
         updateCounts()
         // An explicit navigation target must beat the controller's incidental
@@ -767,6 +778,7 @@ final class DynamicIslandTaskViewController:
             startedField.stringValue = ""
             elapsedField.stringValue = ""
             workingDirectoryField.stringValue = "工作目录不可用"
+            openResultField.stringValue = "返回结果 · 尚未尝试"
             identityField.stringValue = ""
             openButton.setVisualStyle(.bare)
             openButton.setDisplayTitle("仅查看状态")
@@ -795,6 +807,7 @@ final class DynamicIslandTaskViewController:
         elapsedField.stringValue = "持续 \(durationText)"
         workingDirectoryField.stringValue = copyPathForSelfTest()
             ?? "工作目录不可用"
+        openResultField.stringValue = openResultText(for: item)
         identityField.stringValue = secondaryIdentityText(for: item) ?? ""
         openButton.setDisplayTitle(item.openButtonTitle)
         openButton.setAccessibilityLabel("打开当前任务")
@@ -848,6 +861,7 @@ final class DynamicIslandTaskViewController:
             startedField,
             elapsedField,
             workingDirectoryField,
+            openResultField,
             detailHeaderDivider,
             eventsTitleField,
             eventsCard,
@@ -928,15 +942,21 @@ final class DynamicIslandTaskViewController:
             width: fieldWidth - 250,
             height: 20
         )
+        openResultField.frame = NSRect(
+            x: inset,
+            y: contentHeight - 114,
+            width: fieldWidth,
+            height: 20
+        )
         detailHeaderDivider.frame = NSRect(
             x: inset,
-            y: contentHeight - 108,
+            y: contentHeight - 132,
             width: fieldWidth,
             height: 1
         )
         eventsTitleField.frame = NSRect(
             x: inset,
-            y: contentHeight - 134,
+            y: contentHeight - 158,
             width: fieldWidth,
             height: 18
         )
@@ -944,7 +964,7 @@ final class DynamicIslandTaskViewController:
             x: inset,
             y: 64,
             width: fieldWidth,
-            height: max(96, contentHeight - 210)
+            height: max(96, contentHeight - 234)
         )
         eventsScrollView.frame = eventsCard.bounds.insetBy(dx: 10, dy: 10)
         layoutEventsTable()
@@ -1128,6 +1148,7 @@ final class DynamicIslandTaskViewController:
                 startedField.stringValue,
                 elapsedField.stringValue,
                 workingDirectoryField.stringValue,
+                openResultField.stringValue,
                 "最近事件",
             ].joined(separator: "，")
         }
@@ -1155,6 +1176,14 @@ final class DynamicIslandTaskViewController:
             return "Session \(session)"
         }
         return nil
+    }
+
+    private func openResultText(for item: TaskProgressItem) -> String {
+        guard let evidence = taskOpenEvidence[item.identityKey] else {
+            return "返回结果 · 尚未尝试"
+        }
+        return "返回结果 · \(evidence.result.feedbackDescription) · "
+            + eventTimeFormatter.string(from: evidence.recordedAt)
     }
 
     private var eventTimeFormatter: DateFormatter {
@@ -1260,6 +1289,11 @@ final class DynamicIslandTaskViewController:
     func openButtonTitleForSelfTest() -> String {
         _ = view
         return openButton.title
+    }
+
+    func openResultTextForSelfTest() -> String {
+        _ = view
+        return openResultField.stringValue
     }
 
     func showHoverForSelfTest(item: TaskProgressItem) {
