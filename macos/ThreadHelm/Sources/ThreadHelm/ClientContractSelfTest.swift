@@ -73,6 +73,10 @@ func runClientContractSelfTest() -> Never {
         fputs("bounded process capture failed\n", stderr)
         exit(1)
     }
+    guard runCodexQuotaEnvironmentSelfTest() else {
+        fputs("Codex quota process environment failed\n", stderr)
+        exit(1)
+    }
     guard runCodexQuotaTimeoutSelfTest() else {
         fputs("Codex quota timeout completion failed\n", stderr)
         exit(1)
@@ -121,9 +125,91 @@ func runClientContractSelfTest() -> Never {
         "client-contract-self-test: agent-transport=64KiB+250ms+metadata-only+fail-open "
         + "app-server-reset-credits=pass path-discovery=codex+claude "
             + "count-only-credits=pass process-timeout=term+kill "
-            + "inherited-pipe=nonblocking codex-timeout=completion"
+            + "inherited-pipe=nonblocking codex-environment=supplemented "
+            + "codex-timeout=completion"
     )
     exit(0)
+}
+
+private func runCodexQuotaEnvironmentSelfTest() -> Bool {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "threadhelm-codex-environment-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let executable = directory.appendingPathComponent("codex")
+    let capturedPathFile = directory.appendingPathComponent("path.txt")
+    let fakeHome = directory.appendingPathComponent("home", isDirectory: true)
+    let interpreterDirectory = fakeHome.appendingPathComponent(
+        ".local/bin",
+        isDirectory: true
+    )
+    let interpreter = interpreterDirectory.appendingPathComponent(
+        "threadhelm-test-node"
+    )
+    defer { try? FileManager.default.removeItem(at: directory) }
+    do {
+        try FileManager.default.createDirectory(
+            at: interpreterDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            "#!/usr/bin/env threadhelm-test-node\n".utf8
+        ).write(to: executable)
+        try Data(
+            """
+            #!/bin/sh
+            printf '%s' "$PATH" > "$THREADHELM_PATH_CAPTURE"
+            IFS= read -r _
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}'
+            IFS= read -r _
+            IFS= read -r _
+            printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"usedPercent":25,"windowDurationMins":10080}}}}'
+            """.utf8
+        ).write(to: interpreter)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executable.path
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: interpreter.path
+        )
+    } catch {
+        return false
+    }
+
+    let basePath = "/usr/bin:/bin:/usr/sbin:/sbin"
+    let environment = supplementedExecutableEnvironment(
+        base: [
+            "PATH": basePath,
+            "THREADHELM_PATH_CAPTURE": capturedPathFile.path,
+        ],
+        homeDirectory: fakeHome
+    )
+    let completion = DispatchSemaphore(value: 0)
+    var result: Result<RateLimitsResult, Error>?
+    CodexQuotaClient(
+        executableLocator: { executable },
+        timeout: 3,
+        processEnvironment: environment
+    ).fetch {
+        result = $0
+        completion.signal()
+    }
+    guard completion.wait(timeout: .now() + 5) == .success,
+          case .success(let response) = result,
+          response.rateLimits.primary?.usedPercent == 25,
+          let capturedPath = try? String(contentsOf: capturedPathFile),
+          capturedPath == [
+              basePath,
+              "/opt/homebrew/bin",
+              "/usr/local/bin",
+              fakeHome.appendingPathComponent(".local/bin").path,
+          ].joined(separator: ":")
+    else {
+        return false
+    }
+    return true
 }
 
 private func runCodexQuotaTimeoutSelfTest() -> Bool {

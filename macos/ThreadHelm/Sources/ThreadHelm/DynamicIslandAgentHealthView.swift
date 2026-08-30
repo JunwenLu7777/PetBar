@@ -2,7 +2,7 @@
 //  DynamicIslandAgentHealthView.swift
 //  ThreadHelm
 //
-//  模块职责：只读展示五个本地 Agent 的发现、观察与集成健康状态。
+//  模块职责：展示五个本地 Agent 的发现、观察、集成健康与任务筛选配置。
 //
 
 import AppKit
@@ -164,12 +164,14 @@ final class DynamicIslandAgentHealthViewController:
     private var eventChannelAvailable: Bool?
     private var isAutoIntegrationEnabled = false
     private var hasConfirmedAutoIntegration = false
+    private var taskSourceFilterAgentIDs = Set<AgentID>()
     private var isAwaitingAutoIntegrationConfirmation = false
     private var autoIntegrationConfirmTimer: Timer?
     private var transientStates: [AgentID: AgentIntegrationRowTransientState] = [:]
     private var transientResetTimers: [AgentID: Timer] = [:]
     var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
     var onToggleAutoIntegration: ((Bool) -> Void)?
+    var onTaskSourceFilterVisibilityChange: ((AgentID, Bool) -> Void)?
 
     deinit {
         for timer in transientResetTimers.values {
@@ -293,6 +295,23 @@ final class DynamicIslandAgentHealthViewController:
             isEnabled: isAutoIntegrationEnabled,
             hasConfirmed: hasConfirmedAutoIntegration,
             isAwaitingConfirmation: isAwaitingAutoIntegrationConfirmation
+        )
+    }
+
+    func taskSourceFilterVisibilitySummariesForSelfTest() -> [String] {
+        statuses.map {
+            "\($0.metadata.id.rawValue)|"
+                + (taskSourceFilterAgentIDs.contains($0.metadata.id)
+                    ? "visible"
+                    : "hidden")
+        }
+    }
+
+    func performTaskSourceFilterVisibilityToggleForSelfTest(_ agentID: AgentID) {
+        _ = view
+        setTaskSourceFilterVisibility(
+            for: agentID,
+            isVisible: !taskSourceFilterAgentIDs.contains(agentID)
         )
     }
 
@@ -459,6 +478,7 @@ final class DynamicIslandAgentHealthViewController:
             isAwaitingAutoIntegrationConfirmation = false
         }
         renderAutoIntegrationStatus()
+        taskSourceFilterAgentIDs = Set(snapshot.taskSourceFilterAgentIDs)
         statuses = (snapshot.agentStatuses.isEmpty
             ? agentRuntimeStatusPlaceholders()
             : snapshot.agentStatuses).sorted {
@@ -490,8 +510,17 @@ final class DynamicIslandAgentHealthViewController:
             status: status,
             profile: validationProfile(for: status.metadata.id),
             transientState: transientState,
+            isShownInTaskSourceFilter: taskSourceFilterAgentIDs.contains(
+                status.metadata.id
+            ),
             onPerformIntegration: { [weak self] agentID, op in
                 self?.onPerformIntegration?(agentID, op)
+            },
+            onTaskSourceFilterVisibilityChange: { [weak self] agentID, isVisible in
+                self?.setTaskSourceFilterVisibility(
+                    for: agentID,
+                    isVisible: isVisible
+                )
             }
         )
     }
@@ -509,6 +538,9 @@ final class DynamicIslandAgentHealthViewController:
                 status,
                 profile: validationProfile(for: status.metadata.id)
             )
+                + (taskSourceFilterAgentIDs.contains(status.metadata.id)
+                    ? "，任务展示已开启"
+                    : "，任务展示已关闭")
         }
     }
 
@@ -549,6 +581,23 @@ final class DynamicIslandAgentHealthViewController:
         channelCard.setAccessibilityValue(detail)
     }
 
+    private func setTaskSourceFilterVisibility(
+        for agentID: AgentID,
+        isVisible: Bool
+    ) {
+        guard statuses.contains(where: { $0.metadata.id == agentID }) else {
+            return
+        }
+        if isVisible {
+            taskSourceFilterAgentIDs.insert(agentID)
+        } else {
+            taskSourceFilterAgentIDs.remove(agentID)
+        }
+        tableView.reloadData()
+        updateAccessibility()
+        onTaskSourceFilterVisibilityChange?(agentID, isVisible)
+    }
+
     private func updateAccessibility() {
         view.setAccessibilityLabel("Agents 和 Integrations 健康状态")
         view.setAccessibilityValue(accessibilitySnapshotForSelfTest())
@@ -579,22 +628,33 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
     private let healthField = DynamicIslandAgentHealthLabel(size: 12, weight: .medium)
     private let integrationField = DynamicIslandAgentHealthLabel(size: 12, weight: .medium)
     private let actionButton = DynamicIslandButton(title: "一键安装", style: .primary)
+    private let taskSourceFilterButton = DynamicIslandButton(
+        title: "任务展示：关闭",
+        style: .bare
+    )
     private let activityField = DynamicIslandAgentHealthLabel(size: 11, weight: .regular)
     private let capabilityField = DynamicIslandAgentHealthLabel(size: 11, weight: .regular)
     private let limitationField = DynamicIslandAgentHealthLabel(size: 11, weight: .regular)
 
     private let agentID: AgentID
+    private let isShownInTaskSourceFilter: Bool
     private var targetOperation: AgentIntegrationOperation?
     private let onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
+    private let onTaskSourceFilterVisibilityChange: ((AgentID, Bool) -> Void)?
 
     init(
         status: AgentRuntimeStatus,
         profile: AgentValidationProfile,
         transientState: AgentIntegrationRowTransientState = .idle,
-        onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)? = nil
+        isShownInTaskSourceFilter: Bool,
+        onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)? = nil,
+        onTaskSourceFilterVisibilityChange: ((AgentID, Bool) -> Void)? = nil
     ) {
         self.agentID = status.metadata.id
+        self.isShownInTaskSourceFilter = isShownInTaskSourceFilter
         self.onPerformIntegration = onPerformIntegration
+        self.onTaskSourceFilterVisibilityChange =
+            onTaskSourceFilterVisibilityChange
         super.init(frame: .zero)
         addSubview(card)
         for subview in [
@@ -607,6 +667,7 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
             integrationField,
             actionButton,
             activityField,
+            taskSourceFilterButton,
             capabilityField,
             limitationField,
         ] {
@@ -615,6 +676,21 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
 
         actionButton.target = self
         actionButton.action = #selector(handleActionButtonClick)
+        taskSourceFilterButton.target = self
+        taskSourceFilterButton.action = #selector(handleTaskSourceFilterButtonClick)
+        taskSourceFilterButton.setDisplayTitle(
+            isShownInTaskSourceFilter ? "任务展示：开启" : "任务展示：关闭"
+        )
+        taskSourceFilterButton.setVisualStyle(
+            isShownInTaskSourceFilter ? .secondary : .bare
+        )
+        taskSourceFilterButton.toolTip =
+            "控制任务页和胶囊中显示哪些 Agent 任务；“全部”只汇总已开启的 Agent，不影响任务采集、审批或集成。"
+        taskSourceFilterButton.setAccessibilityLabel(
+            isShownInTaskSourceFilter
+                ? "\(status.metadata.displayName) 任务展示已开启，点击后关闭"
+                : "\(status.metadata.displayName) 任务展示已关闭，点击后开启"
+        )
 
         let brandColor = status.metadata.brandColor.color
         iconBadge.wantsLayer = true
@@ -666,7 +742,12 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
             profile: profile
         )
         setAccessibilityLabel(status.metadata.displayName)
-        setAccessibilityValue(summary)
+        setAccessibilityValue(
+            summary
+                + (isShownInTaskSourceFilter
+                    ? "，任务展示已开启"
+                    : "，任务展示已关闭")
+        )
     }
 
     private func configureIntegrationUI(
@@ -707,6 +788,13 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
     @objc private func handleActionButtonClick() {
         guard let targetOperation else { return }
         onPerformIntegration?(agentID, targetOperation)
+    }
+
+    @objc private func handleTaskSourceFilterButtonClick() {
+        onTaskSourceFilterVisibilityChange?(
+            agentID,
+            !isShownInTaskSourceFilter
+        )
     }
 
     @available(*, unavailable)
@@ -752,10 +840,16 @@ private final class DynamicIslandAgentHealthRowView: NSTableCellView {
             width: 96,
             height: 26
         )
+        taskSourceFilterButton.frame = NSRect(
+            x: card.bounds.width - 128,
+            y: 12,
+            width: 116,
+            height: 26
+        )
         activityField.frame = NSRect(
             x: rightX,
-            y: 22,
-            width: 270,
+            y: 17,
+            width: max(1, taskSourceFilterButton.frame.minX - rightX - 8),
             height: 17
         )
         healthField.alignment = .right

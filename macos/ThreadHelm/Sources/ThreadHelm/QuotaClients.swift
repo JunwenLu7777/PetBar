@@ -390,6 +390,7 @@ final class CodexQuotaClient {
     private let executableLocator: () -> URL?
     private let timeout: TimeInterval
     private let terminationGracePeriod: TimeInterval
+    private let processEnvironment: [String: String]
     private let maximumOutputBytes = 1_048_576
 
     init(
@@ -397,11 +398,13 @@ final class CodexQuotaClient {
             locateCodexExecutable()
         },
         timeout: TimeInterval = 15,
-        terminationGracePeriod: TimeInterval = 0.25
+        terminationGracePeriod: TimeInterval = 0.25,
+        processEnvironment: [String: String] = supplementedExecutableEnvironment()
     ) {
         self.executableLocator = executableLocator
         self.timeout = max(0.01, timeout)
         self.terminationGracePeriod = max(0.01, terminationGracePeriod)
+        self.processEnvironment = processEnvironment
     }
 
     func fetch(completion: @escaping (Result<RateLimitsResult, Error>) -> Void) {
@@ -420,6 +423,7 @@ final class CodexQuotaClient {
         let stdin = Pipe()
         process.executableURL = codexURL
         process.arguments = ["app-server", "--stdio"]
+        process.environment = processEnvironment
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
         process.standardInput = stdin

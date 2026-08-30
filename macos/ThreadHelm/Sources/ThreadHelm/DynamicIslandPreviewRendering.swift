@@ -344,6 +344,7 @@ private func dynamicIslandPreviewSnapshot(
             ? [:]
             : quotaStates(for: state, allStates: allQuotaStates),
         availableProviders: availableProviders,
+        taskSourceFilterAgentIDs: [.codex, .claudeCode],
         selectedQuotaProvider: selectedProvider,
         permissionQueue: queue,
         acknowledgedTerminalTaskKeys: acknowledged,

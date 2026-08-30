@@ -343,6 +343,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             snapshot.isAutoIntegrationEnabled = isAutoIntegrationEnabledInitial
             snapshot.hasConfirmedAutoIntegration =
                 hasConfirmedAutoIntegrationInitial
+            snapshot.taskSourceFilterAgentIDs =
+                TaskSourceFilter.configuredAgentIDs(
+                    availableAgentIDs: agentRegistry.agentIDs
+                )
             snapshot.agentStatuses = agentRuntimeStatusPlaceholders(
                 registry: agentRegistry
             )
@@ -1096,8 +1100,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             },
             toggleAutoIntegration: { [weak self] enabled in
                 self?.toggleAutoIntegration(enabled)
+            },
+            setTaskSourceFilterVisibility: { [weak self] agentID, isVisible in
+                self?.setTaskSourceFilterVisibility(
+                    for: agentID,
+                    isVisible: isVisible
+                )
             }
         ).bind(to: controller)
+    }
+
+    private func setTaskSourceFilterVisibility(
+        for agentID: AgentID,
+        isVisible: Bool
+    ) {
+        guard agentRegistry.agentIDs.contains(agentID) else { return }
+        var configured = Set(dashboardStore.snapshot.taskSourceFilterAgentIDs)
+        if isVisible {
+            configured.insert(agentID)
+        } else {
+            configured.remove(agentID)
+        }
+        let next = TaskSourceFilter.persistConfiguredAgentIDs(
+            Array(configured),
+            availableAgentIDs: agentRegistry.agentIDs
+        )
+        dashboardStore.update {
+            $0.taskSourceFilterAgentIDs = next
+        }
     }
 
     /// UI 只在用户完成二次确认后才会用 `enabled == true` 调到这里，
@@ -1673,17 +1703,20 @@ struct DynamicIslandDashboardActionBinding {
     let selectQuotaProvider: (QuotaProvider) -> Void
     let performIntegration: (AgentID, AgentIntegrationOperation) -> Void
     let toggleAutoIntegration: (Bool) -> Void
+    let setTaskSourceFilterVisibility: (AgentID, Bool) -> Void
 
     init(
         refreshDashboard: @escaping () -> Void,
         selectQuotaProvider: @escaping (QuotaProvider) -> Void,
         performIntegration: @escaping (AgentID, AgentIntegrationOperation) -> Void = { _, _ in },
-        toggleAutoIntegration: @escaping (Bool) -> Void = { _ in }
+        toggleAutoIntegration: @escaping (Bool) -> Void = { _ in },
+        setTaskSourceFilterVisibility: @escaping (AgentID, Bool) -> Void = { _, _ in }
     ) {
         self.refreshDashboard = refreshDashboard
         self.selectQuotaProvider = selectQuotaProvider
         self.performIntegration = performIntegration
         self.toggleAutoIntegration = toggleAutoIntegration
+        self.setTaskSourceFilterVisibility = setTaskSourceFilterVisibility
     }
 
     func bind(to controller: DynamicIslandWindowController) {
@@ -1691,6 +1724,8 @@ struct DynamicIslandDashboardActionBinding {
         controller.onQuotaProviderChange = selectQuotaProvider
         controller.onPerformIntegration = performIntegration
         controller.onToggleAutoIntegration = toggleAutoIntegration
+        controller.onTaskSourceFilterVisibilityChange =
+            setTaskSourceFilterVisibility
     }
 }
 

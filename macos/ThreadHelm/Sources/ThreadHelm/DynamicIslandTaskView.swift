@@ -396,7 +396,7 @@ final class DynamicIslandTaskViewController:
         tableView.dataSource = self
         tableView.target = self
         tableView.action = #selector(tableSelectionChanged)
-        tableView.setAccessibilityLabel("完整任务列表")
+        tableView.setAccessibilityLabel("任务列表")
 
         tableScrollView.documentView = tableView
         tableScrollView.hasVerticalScroller = true

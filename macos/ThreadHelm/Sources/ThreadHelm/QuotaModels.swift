@@ -426,6 +426,24 @@ func supplementedPathDirectories(
     ).filter { !base.contains($0) }
 }
 
+/// launchd 的默认 PATH 不含 Homebrew 和用户级 bin。厂商 CLI 可能是
+/// `#!/usr/bin/env node` 包装脚本；只找到脚本路径还不够，子进程环境也必须
+/// 能找到它的解释器。
+func supplementedExecutableEnvironment(
+    base: [String: String] = ProcessInfo.processInfo.environment,
+    homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+) -> [String: String] {
+    var environment = base
+    let existing = pathEnvironmentDirectories(base["PATH"])
+    let supplemented = supplementedPathDirectories(
+        base: existing,
+        homeDirectory: homeDirectory
+    )
+    guard supplemented.count > existing.count else { return environment }
+    environment["PATH"] = supplemented.joined(separator: ":")
+    return environment
+}
+
 private func executablePaths(
     named executableName: String,
     pathEnvironment: String?

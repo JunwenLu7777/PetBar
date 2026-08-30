@@ -242,6 +242,44 @@ func runAgentIntegrationSelfTest() {
         failAgentIntegrationSelfTest("source-agnostic filters")
     }
 
+    let visibilitySuite = "threadhelm-task-source-filter-\(UUID().uuidString)"
+    guard let visibilityDefaults = UserDefaults(suiteName: visibilitySuite) else {
+        failAgentIntegrationSelfTest("task source filter preference defaults")
+    }
+    defer { visibilityDefaults.removePersistentDomain(forName: visibilitySuite) }
+    let availableAgentIDs = registry.agentIDs
+    guard TaskSourceFilter.configuredAgentIDs(
+        defaults: visibilityDefaults,
+        availableAgentIDs: availableAgentIDs
+    ) == [.codex],
+          TaskSourceFilter.persistConfiguredAgentIDs(
+              [
+                  .omp,
+                  .codex,
+                  .omp,
+                  AgentID(rawValue: "staleAgent"),
+                  mock.metadata.id,
+              ],
+              defaults: visibilityDefaults,
+              availableAgentIDs: availableAgentIDs
+          ) == [.codex, .omp, mock.metadata.id],
+          TaskSourceFilter.configuredAgentIDs(
+              defaults: visibilityDefaults,
+              availableAgentIDs: availableAgentIDs
+          ) == [.codex, .omp, mock.metadata.id],
+          TaskSourceFilter.persistConfiguredAgentIDs(
+              [],
+              defaults: visibilityDefaults,
+              availableAgentIDs: availableAgentIDs
+          ).isEmpty,
+          TaskSourceFilter.configuredAgentIDs(
+              defaults: visibilityDefaults,
+              availableAgentIDs: availableAgentIDs
+          ).isEmpty
+    else {
+        failAgentIntegrationSelfTest("task source filter preference")
+    }
+
     runAgentTaskProgressRegistrySelfTest(mockAgentID: mock.metadata.id)
     runAgentReducerSelfTest()
     runAgentHookCommandSelfTest()

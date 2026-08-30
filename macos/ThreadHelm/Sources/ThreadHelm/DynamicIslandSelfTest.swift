@@ -182,6 +182,7 @@ private func assertDynamicIslandCapsulePresentation() {
                 .claudeCode: claudeQuotaState,
             ],
             availableProviders: availableProviders,
+            taskSourceFilterAgentIDs: [.codex, .claudeCode],
             selectedQuotaProvider: selectedQuotaProvider,
             permissionQueue: queue,
             acknowledgedTerminalTaskKeys: acknowledged,
@@ -223,6 +224,47 @@ private func assertDynamicIslandCapsulePresentation() {
           waiting.preferredTab == .tasks
     else {
         fputs("dynamic island capsule waiting priority self-test failed\n", stderr)
+        exit(1)
+    }
+
+    var sourceFilteredSnapshot = snapshot(items: [runningTask, waitingTask])
+    sourceFilteredSnapshot.taskSourceFilterAgentIDs = [.codex]
+    let sourceFiltered = dynamicIslandCapsulePresentation(
+        snapshot: sourceFilteredSnapshot,
+        now: now
+    )
+    guard sourceFiltered.title == runningTask.title,
+          sourceFiltered.provider == .codex
+    else {
+        fputs("dynamic island capsule source visibility self-test failed\n", stderr)
+        exit(1)
+    }
+
+    var emptySourceSnapshot = snapshot(items: [runningTask, waitingTask])
+    emptySourceSnapshot.taskSourceFilterAgentIDs = []
+    let emptySource = dynamicIslandCapsulePresentation(
+        snapshot: emptySourceSnapshot,
+        now: now
+    )
+    guard emptySource.title == "ThreadHelm 空闲",
+          emptySource.preferredTab == .quota,
+          emptySource.selectedTaskKey == nil
+    else {
+        fputs("dynamic island capsule empty source visibility self-test failed\n", stderr)
+        exit(1)
+    }
+
+    emptySourceSnapshot.permissionQueue = ClaudePermissionQueueSnapshot(
+        current: queueItem
+    )
+    let emptySourceWithApproval = dynamicIslandCapsulePresentation(
+        snapshot: emptySourceSnapshot,
+        now: now
+    )
+    guard emptySourceWithApproval.title == queueItem.title,
+          emptySourceWithApproval.preferredTab == .confirmation
+    else {
+        fputs("dynamic island capsule approval visibility self-test failed\n", stderr)
         exit(1)
     }
 
@@ -489,6 +531,7 @@ private func assertDynamicIslandChromeAccessibility() {
                 )
             ],
             availableProviders: [.codex],
+            taskSourceFilterAgentIDs: [.codex, .claudeCode],
             selectedQuotaProvider: .codex,
             permissionQueue: ClaudePermissionQueueSnapshot(current: prompt),
             acknowledgedTerminalTaskKeys: [],
@@ -1231,7 +1274,10 @@ private func assertDynamicIslandTaskWorkspace() {
     var emittedSourceFilters: [TaskSourceFilter] = []
     workspace.onSourceFilterChange = { emittedSourceFilters.append($0) }
     workspace.apply(
-        snapshot: ActivityDashboardSnapshot(taskCollection: collection),
+        snapshot: ActivityDashboardSnapshot(
+            taskCollection: collection,
+            taskSourceFilterAgentIDs: [.codex, .claudeCode]
+        ),
         state: .expanded(.tasks)
     )
     let expandedHeader = workspace.headerLayoutSnapshotForSelfTest()
@@ -1249,7 +1295,7 @@ private func assertDynamicIslandTaskWorkspace() {
               "额度",
           ],
           workspace.sourceFilterLabelsForSelfTest()
-              == ["全部", "Codex", "Claude", "Cursor", "ZCode", "OMP"],
+              == ["全部", "Codex", "Claude"],
           workspace.selectedTopLevelTabForSelfTest() == 0,
           workspace.accessibilitySnapshotForSelfTest().contains("审批历史 0")
     else {
@@ -1267,6 +1313,69 @@ private func assertDynamicIslandTaskWorkspace() {
         exit(1)
     }
 
+    workspace.apply(
+        snapshot: ActivityDashboardSnapshot(
+            taskCollection: collection,
+            taskSourceFilterAgentIDs: [.codex]
+        ),
+        state: .expanded(.tasks)
+    )
+    workspace.setSourceFilterForSelfTest(.all)
+    let visibleKeysAfterSourceFallback = workspace.taskVisibleKeysForSelfTest()
+    guard workspace.sourceFilterLabelsForSelfTest() == ["全部", "Codex"],
+          workspace.topLevelTabLabelsForSelfTest()[0]
+              .trimmingCharacters(in: .whitespaces) == "任务 2",
+          workspace.accessibilitySnapshotForSelfTest().contains(
+              "当前来源筛选 全部"
+          ),
+          visibleKeysAfterSourceFallback == [
+              codexRunning.identityKey,
+              codexCompleted.identityKey,
+          ]
+    else {
+        fputs(
+            "dynamic island hidden selected source fallback self-test failed "
+                + "labels=\(workspace.sourceFilterLabelsForSelfTest()) "
+                + "tabs=\(workspace.topLevelTabLabelsForSelfTest()) "
+                + "accessibility=\(workspace.accessibilitySnapshotForSelfTest()) "
+                + "keys=\(visibleKeysAfterSourceFallback)\n",
+            stderr
+        )
+        exit(1)
+    }
+
+    workspace.apply(
+        snapshot: ActivityDashboardSnapshot(
+            taskCollection: collection,
+            taskSourceFilterAgentIDs: []
+        ),
+        state: .expanded(.tasks)
+    )
+    workspace.setSourceFilterForSelfTest(.all)
+    let emptyTaskAccessibility = workspace
+        .taskAccessibilitySnapshotForSelfTest()
+    guard workspace.sourceFilterLabelsForSelfTest() == ["全部"],
+          workspace.topLevelTabLabelsForSelfTest()[0]
+              .trimmingCharacters(in: .whitespaces) == "任务 0",
+          workspace.accessibilitySnapshotForSelfTest().contains(
+              "当前来源筛选 全部"
+          ),
+          workspace.taskVisibleKeysForSelfTest().isEmpty,
+          workspace.taskSelectedKeyForSelfTest() == nil,
+          emptyTaskAccessibility.contains("全部 0"),
+          emptyTaskAccessibility.contains("运行 0"),
+          emptyTaskAccessibility.contains("等待 0"),
+          emptyTaskAccessibility.contains("完成 0"),
+          emptyTaskAccessibility.contains("失败 0"),
+          emptyTaskAccessibility.contains("没有匹配任务"),
+          !emptyTaskAccessibility.contains(claudeWaiting.title),
+          !emptyTaskAccessibility.contains(codexRunning.title),
+          collection.items.count == 4
+    else {
+        fputs("dynamic island empty agent visibility self-test failed\n", stderr)
+        exit(1)
+    }
+
     let mockAgentID = AgentID(rawValue: "mockSixth")
     let mockTask = TaskProgressItem(
         title: "Mock sixth running",
@@ -1281,10 +1390,19 @@ private func assertDynamicIslandTaskWorkspace() {
     workspace.apply(
         snapshot: ActivityDashboardSnapshot(
             taskCollection: extendedCollection,
-            availableAgentIDs: AgentID.builtInOrder + [mockAgentID]
+            availableAgentIDs: AgentID.builtInOrder + [mockAgentID],
+            taskSourceFilterAgentIDs: [mockAgentID]
         ),
         state: .expanded(.tasks)
     )
+    guard workspace.sourceFilterLabelsForSelfTest() == ["全部", "mockSixth"],
+          workspace.topLevelTabLabelsForSelfTest()[0]
+              .trimmingCharacters(in: .whitespaces) == "任务 1",
+          workspace.taskVisibleKeysForSelfTest() == [mockTask.identityKey]
+    else {
+        fputs("dynamic island sixth agent all-source self-test failed\n", stderr)
+        exit(1)
+    }
     workspace.setSourceFilterForSelfTest(TaskSourceFilter(agentID: mockAgentID))
     guard workspace.sourceFilterLabelsForSelfTest().last == "mockSixth",
           emittedSourceFilters.last?.agentID == mockAgentID,
@@ -1297,6 +1415,7 @@ private func assertDynamicIslandTaskWorkspace() {
     var agentHealthSnapshot = ActivityDashboardSnapshot(
         taskCollection: collection
     )
+    agentHealthSnapshot.taskSourceFilterAgentIDs = [.codex, .claudeCode]
     agentHealthSnapshot.agentEventChannelAvailable = false
     agentHealthSnapshot.agentStatuses = builtInAgentMetadata().map { metadata in
         let components: [AgentVersionComponent]
@@ -1360,6 +1479,10 @@ private func assertDynamicIslandTaskWorkspace() {
             attentionCount: metadata.id == .claudeCode ? 1 : 0
         )
     }
+    var taskSourceVisibilityChanges: [(AgentID, Bool)] = []
+    workspace.onTaskSourceFilterVisibilityChange = {
+        taskSourceVisibilityChanges.append(($0, $1))
+    }
     workspace.apply(
         snapshot: agentHealthSnapshot,
         state: .expanded(.agents)
@@ -1407,9 +1530,27 @@ private func assertDynamicIslandTaskWorkspace() {
           workspace.agentHealthAccessibilitySnapshotForSelfTest()
               .contains("集成已安装"),
           workspace.agentHealthAccessibilitySnapshotForSelfTest()
-              .contains("未发现 ZCode")
+              .contains("未发现 ZCode"),
+          workspace.taskSourceFilterVisibilitySummariesForSelfTest() == [
+              "codex|visible",
+              "claudeCode|visible",
+              "cursor|hidden",
+              "zcode|hidden",
+              "omp|hidden",
+          ]
     else {
         fputs("dynamic island agent health workspace self-test failed\n", stderr)
+        exit(1)
+    }
+
+    workspace.performTaskSourceFilterVisibilityToggleForSelfTest(.claudeCode)
+    guard taskSourceVisibilityChanges.count == 1,
+          taskSourceVisibilityChanges.first?.0 == .claudeCode,
+          taskSourceVisibilityChanges.first?.1 == false,
+          workspace.taskSourceFilterVisibilitySummariesForSelfTest()[1]
+              == "claudeCode|hidden"
+    else {
+        fputs("dynamic island agent visibility control self-test failed\n", stderr)
         exit(1)
     }
 

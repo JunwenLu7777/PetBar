@@ -1194,32 +1194,14 @@ func makeGenericAgentDiscoveryProvider(
     return { cache.read() }
 }
 
-/// launchd 拉起的常驻面板只有 `/usr/bin:/bin:/usr/sbin:/sbin`。厂商 CLI
-/// 里有相当一部分是 `#!/usr/bin/env node` 之类的包装脚本（codex 就是），
-/// 在这个 PATH 下连解释器都找不到，`--version` 直接执行失败——于是版本读
-/// 不出来、能力被判 unvalidated，受管集成和审批闸门一并静默关闭。补上
-/// 常见的用户级 bin 目录，只影响我们自己起的这个探测子进程。
-private func agentVersionProbeEnvironment(
-    base: [String: String] = ProcessInfo.processInfo.environment,
-    homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
-) -> [String: String] {
-    var environment = base
-    let existing = pathEnvironmentDirectories(base["PATH"])
-    let supplemented = supplementedPathDirectories(
-        base: existing,
-        homeDirectory: homeDirectory
-    )
-    // 一个都不缺就原样交回：没必要把用户的 PATH 重写成我们归一化后的样子。
-    guard supplemented.count > existing.count else { return environment }
-    environment["PATH"] = supplemented.joined(separator: ":")
-    return environment
-}
-
 func agentVersionProbeEnvironmentForSelfTest(
     base: [String: String],
     homeDirectory: URL
 ) -> [String: String] {
-    agentVersionProbeEnvironment(base: base, homeDirectory: homeDirectory)
+    supplementedExecutableEnvironment(
+        base: base,
+        homeDirectory: homeDirectory
+    )
 }
 
 private func localAgentVersion(executableURL: URL) -> String? {
@@ -1227,7 +1209,7 @@ private func localAgentVersion(executableURL: URL) -> String? {
     let stdout = Pipe()
     process.executableURL = executableURL
     process.arguments = ["--version"]
-    process.environment = agentVersionProbeEnvironment()
+    process.environment = supplementedExecutableEnvironment()
     process.standardOutput = stdout
     process.standardError = FileHandle.nullDevice
     do {

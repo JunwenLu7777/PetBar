@@ -32,6 +32,55 @@ struct TaskSourceFilter: RawRepresentable, Hashable {
     static func options(for agentIDs: [AgentID]) -> [TaskSourceFilter] {
         [.all] + agentIDs.map(TaskSourceFilter.init(agentID:))
     }
+
+    private static let configuredAgentIDsDefaultsKey =
+        "dev.threadhelm.task-source-filter.agent-ids"
+
+    static func configuredAgentIDs(
+        defaults: UserDefaults = .standard,
+        availableAgentIDs: [AgentID]
+    ) -> [AgentID] {
+        let requestedIDs: [AgentID]
+        if defaults.object(forKey: configuredAgentIDsDefaultsKey) == nil {
+            requestedIDs = [.codex]
+        } else {
+            requestedIDs = (defaults.stringArray(
+                forKey: configuredAgentIDsDefaultsKey
+            ) ?? []).map(AgentID.init(rawValue:))
+        }
+        return normalizedAgentIDs(
+            requestedIDs,
+            availableAgentIDs: availableAgentIDs
+        )
+    }
+
+    @discardableResult
+    static func persistConfiguredAgentIDs(
+        _ agentIDs: [AgentID],
+        defaults: UserDefaults = .standard,
+        availableAgentIDs: [AgentID]
+    ) -> [AgentID] {
+        let normalized = normalizedAgentIDs(
+            agentIDs,
+            availableAgentIDs: availableAgentIDs
+        )
+        defaults.set(
+            normalized.map(\.rawValue),
+            forKey: configuredAgentIDsDefaultsKey
+        )
+        return normalized
+    }
+
+    private static func normalizedAgentIDs(
+        _ agentIDs: [AgentID],
+        availableAgentIDs: [AgentID]
+    ) -> [AgentID] {
+        let requested = Set(agentIDs)
+        var seen = Set<AgentID>()
+        return availableAgentIDs.filter {
+            requested.contains($0) && seen.insert($0).inserted
+        }
+    }
 }
 
 enum TaskStateFilter: String, CaseIterable {
@@ -455,6 +504,17 @@ struct ActivityDashboardSnapshot: Equatable {
     var quotaStates: [QuotaProvider: QuotaProviderState] = [:]
     var availableProviders: [QuotaProvider] = [.codex]
     var availableAgentIDs: [AgentID] = AgentID.builtInOrder
+    /// 控制任务页和任务胶囊展示哪些 Agent；`全部` 只汇总这里选中的来源。
+    var taskSourceFilterAgentIDs: [AgentID] = [.codex]
+    var displayedTaskCollection: TaskProgressCollectionSnapshot {
+        let availableAgentIDs = Set(availableAgentIDs)
+        let displayedAgentIDs = Set(taskSourceFilterAgentIDs.filter {
+            availableAgentIDs.contains($0)
+        })
+        return TaskProgressCollectionSnapshot(items: taskCollection.items.filter {
+            displayedAgentIDs.contains($0.source)
+        })
+    }
     var selectedQuotaProvider: QuotaProvider = .codex
     var permissionQueue = ClaudePermissionQueueSnapshot.empty
     var permissionDecisionHistory: [PermissionDecisionHistoryRecord] = []

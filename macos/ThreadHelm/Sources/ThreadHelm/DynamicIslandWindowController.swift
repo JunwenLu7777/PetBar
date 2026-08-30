@@ -20,6 +20,7 @@ final class DynamicIslandWindowController {
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
     var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
     var onToggleAutoIntegration: ((Bool) -> Void)?
+    var onTaskSourceFilterVisibilityChange: ((AgentID, Bool) -> Void)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onTaskDetailOpened: ((TaskProgressItem) -> Void)?
 
@@ -102,6 +103,10 @@ final class DynamicIslandWindowController {
         }
         rootController.onToggleAutoIntegration = { [weak self] enabled in
             self?.onToggleAutoIntegration?(enabled)
+        }
+        rootController.onTaskSourceFilterVisibilityChange = {
+            [weak self] agentID, isVisible in
+            self?.onTaskSourceFilterVisibilityChange?(agentID, isVisible)
         }
         rootController.onOpenTask = { [weak self] item in
             self?.onOpenTask?(item) ?? .failed

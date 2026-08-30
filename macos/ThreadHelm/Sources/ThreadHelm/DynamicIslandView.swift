@@ -751,17 +751,18 @@ func dynamicIslandCapsulePresentation(
         )
     }
 
-    if let item = snapshot.taskCollection.items.first(where: {
+    let displayedTaskItems = snapshot.displayedTaskCollection.items
+    if let item = displayedTaskItems.first(where: {
         $0.kind == .waitingForInput
     }) {
         return taskModel(item, style: .waiting)
     }
-    if let item = snapshot.taskCollection.items.first(where: {
+    if let item = displayedTaskItems.first(where: {
         $0.kind == .running
     }) {
         return taskModel(item, style: .indeterminate)
     }
-    if let item = snapshot.taskCollection.items.first(where: {
+    if let item = displayedTaskItems.first(where: {
         guard $0.kind == .failed,
               let key = terminalTaskAcknowledgementKey(for: $0)
         else { return false }
@@ -883,6 +884,7 @@ final class DynamicIslandRootViewController: NSViewController {
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
     var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
     var onToggleAutoIntegration: ((Bool) -> Void)?
+    var onTaskSourceFilterVisibilityChange: ((AgentID, Bool) -> Void)?
     var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onSelectedTaskKeyChange: ((String?) -> Void)?
@@ -930,6 +932,10 @@ final class DynamicIslandRootViewController: NSViewController {
         }
         workspaceController.onToggleAutoIntegration = { [weak self] enabled in
             self?.onToggleAutoIntegration?(enabled)
+        }
+        workspaceController.onTaskSourceFilterVisibilityChange = {
+            [weak self] agentID, isVisible in
+            self?.onTaskSourceFilterVisibilityChange?(agentID, isVisible)
         }
         workspaceController.onOpenTask = { [weak self] item in
             self?.onOpenTask?(item) ?? .failed
@@ -1529,6 +1535,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     var onQuotaProviderChange: ((QuotaProvider) -> Void)?
     var onPerformIntegration: ((AgentID, AgentIntegrationOperation) -> Void)?
     var onToggleAutoIntegration: ((Bool) -> Void)?
+    var onTaskSourceFilterVisibilityChange: ((AgentID, Bool) -> Void)?
     var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onCopyWorkingDirectory: ((String) -> Bool)?
     var onSelectedTaskKeyChange: ((String?) -> Void)?
@@ -1544,7 +1551,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         labels: ["任务", "Agents", "审批", "额度"]
     )
     private let sourceFilter = DynamicIslandSegmentedControl(
-        labels: TaskSourceFilter.options(for: AgentID.builtInOrder).map {
+        labels: TaskSourceFilter.options(for: [.codex]).map {
             taskSourceFilterName($0)
         }
     )
@@ -1574,7 +1581,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     private let placeholderField = DynamicIslandLabel(size: 13, weight: .regular)
     private var currentSourceFilter = TaskSourceFilter.all
     private var sourceFilterOptions = TaskSourceFilter.options(
-        for: AgentID.builtInOrder
+        for: [.codex]
     )
     private var latestSnapshot = ActivityDashboardSnapshot()
     private var latestState = DynamicIslandPresentationState.capsule
@@ -1668,6 +1675,10 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         agentHealthController.onToggleAutoIntegration = { [weak self] enabled in
             self?.onToggleAutoIntegration?(enabled)
         }
+        agentHealthController.onTaskSourceFilterVisibilityChange = {
+            [weak self] agentID, isVisible in
+            self?.onTaskSourceFilterVisibilityChange?(agentID, isVisible)
+        }
         quotaController.onSelectProvider = { [weak self] provider in
             self?.onQuotaProviderChange?(provider)
         }
@@ -1699,6 +1710,16 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
 
     func agentAutoIntegrationControlForSelfTest() -> AgentAutoIntegrationControl {
         agentHealthController.autoIntegrationControlForSelfTest()
+    }
+
+    func taskSourceFilterVisibilitySummariesForSelfTest() -> [String] {
+        agentHealthController.taskSourceFilterVisibilitySummariesForSelfTest()
+    }
+
+    func performTaskSourceFilterVisibilityToggleForSelfTest(_ agentID: AgentID) {
+        agentHealthController.performTaskSourceFilterVisibilityToggleForSelfTest(
+            agentID
+        )
     }
 
     func armAgentAutoIntegrationConfirmationForPreview() {
@@ -1769,13 +1790,24 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         _ = view
         latestSnapshot = snapshot
         latestState = state
-        let taskCount = snapshot.taskCollection.items.count
+        let displayedTaskCollection = snapshot.displayedTaskCollection
+        let taskCount = displayedTaskCollection.items.count
         let confirmationCount = snapshot.permissionQueue.count
         var seenAgentIDs = Set<AgentID>()
         let availableAgentIDs = snapshot.availableAgentIDs
             .filter { seenAgentIDs.insert($0).inserted }
             .sorted()
-        sourceFilterOptions = TaskSourceFilter.options(for: availableAgentIDs)
+        let availableAgentIDSet = Set(availableAgentIDs)
+        var seenTaskSourceFilterAgentIDs = Set<AgentID>()
+        let taskSourceFilterAgentIDs = snapshot.taskSourceFilterAgentIDs
+            .filter {
+                availableAgentIDSet.contains($0)
+                    && seenTaskSourceFilterAgentIDs.insert($0).inserted
+            }
+            .sorted()
+        sourceFilterOptions = TaskSourceFilter.options(
+            for: taskSourceFilterAgentIDs
+        )
         if !sourceFilterOptions.contains(currentSourceFilter) {
             currentSourceFilter = .all
         }
@@ -1785,7 +1817,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             forSegment: 0
         )
         tabs.setLabel(
-            "  Agents \(snapshot.availableAgentIDs.count)",
+            "  Agents \(availableAgentIDs.count)",
             forSegment: 1
         )
         tabs.setLabel(
@@ -1799,7 +1831,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             tabs.clearSelection()
         }
         tabs.setAccessibilityValue(
-            "任务 \(taskCount)，Agents \(snapshot.availableAgentIDs.count)，"
+            "任务 \(taskCount)，Agents \(availableAgentIDs.count)，"
                 + "审批历史 \(snapshot.permissionDecisionHistory.count)，额度"
         )
         sourceFilter.selectSegment(sourceSegmentIndex(for: currentSourceFilter))
@@ -1843,7 +1875,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
             )
             statusSymbol.contentTintColor = DynamicIslandPalette.green
             statusField.stringValue = "Agent 健康状态"
-            placeholderField.stringValue = "\(snapshot.availableAgentIDs.count) 个 Agent"
+            placeholderField.stringValue = "\(availableAgentIDs.count) 个 Agent"
         case .expanded(.quota):
             showQuotaContent()
             quotaController.apply(snapshot)
@@ -1857,7 +1889,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         case .hidden, .capsule, .expanded(.tasks):
             showTaskContent()
             taskController.apply(
-                collection: snapshot.taskCollection,
+                collection: displayedTaskCollection,
                 sourceFilter: currentSourceFilter,
                 preferredTaskKey: selectedTaskKey,
                 agentStatuses: snapshot.agentStatuses,
@@ -1956,6 +1988,11 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
         currentSourceFilter = sourceFilterOptions.indices.contains(index)
             ? sourceFilterOptions[index]
             : .all
+        sourceFilter.setAccessibilityValue(
+            "当前来源筛选 \(taskSourceFilterName(currentSourceFilter))，"
+                + sourceFilterOptions.map(taskSourceFilterName)
+                    .joined(separator: "，")
+        )
         reapplyTaskControllerIfVisible(preferredTaskKey: nil)
         onSourceFilterChange?(currentSourceFilter)
     }
@@ -2054,7 +2091,7 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
     private func reapplyTaskControllerIfVisible(preferredTaskKey: String?) {
         guard case .expanded(.tasks) = latestState else { return }
         taskController.apply(
-            collection: latestSnapshot.taskCollection,
+            collection: latestSnapshot.displayedTaskCollection,
             sourceFilter: currentSourceFilter,
             preferredTaskKey: preferredTaskKey ?? selectedTaskKey,
             agentStatuses: latestSnapshot.agentStatuses,
@@ -2081,6 +2118,14 @@ final class DynamicIslandWorkspaceViewController: NSViewController {
 
     func taskVisibleKeysForSelfTest() -> [String] {
         taskController.visibleTaskKeysForSelfTest()
+    }
+
+    func taskSelectedKeyForSelfTest() -> String? {
+        taskController.selectedTaskKeyForSelfTest()
+    }
+
+    func taskAccessibilitySnapshotForSelfTest() -> String {
+        taskController.accessibilitySnapshotForSelfTest()
     }
 
     func confirmationInitialInputResponder() -> NSResponder? {
