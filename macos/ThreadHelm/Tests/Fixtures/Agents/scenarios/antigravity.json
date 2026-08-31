@@ -1,0 +1,518 @@
+{
+  "schemaVersion": 1,
+  "agentId": "antigravity",
+  "observedAgentVersion": "1.1.22",
+  "baselineCommit": "8a0792ded390272977e4183ee8596bfbf0633f68",
+  "redaction": {
+    "status": "redacted",
+    "excluded": [
+      "rawPrompt",
+      "hiddenReasoning",
+      "fullToolArguments",
+      "toolOutput",
+      "secrets",
+      "personalPaths"
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "antigravity-install-discovery",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "The agy CLI and its user-level hooks.json location are discovered without editing any existing named hook.",
+      "captureSource": "local CLI observation",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "agy executable and hooks configuration present"
+      },
+      "expected": {
+        "executionState": "discovering",
+        "attentionReason": "none",
+        "actionability": "viewOnly",
+        "evidenceQuality": "processObservation",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "agy --version"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-idle-before-first-invocation",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "A conversation exists but no active turn is running.",
+      "captureSource": "hooks.json PreInvocation payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "no active turn for the conversation"
+      },
+      "expected": {
+        "executionState": "idle",
+        "attentionReason": "none",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "officialHook",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "PreInvocation payload with conversationId"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-pre-invocation-running",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "PreInvocation fires before each model call and is the most reliable running signal.",
+      "captureSource": "hooks.json PreInvocation payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "pre_invocation active turn"
+      },
+      "expected": {
+        "executionState": "running",
+        "attentionReason": "none",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "officialHook",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "PreInvocation payload with invocationNum"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-pre-tool-use-running",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "PreToolUse fires before every tool step and doubles as the approval gate.",
+      "captureSource": "hooks.json PreToolUse payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "pre_tool_use tool lifecycle observed"
+      },
+      "expected": {
+        "executionState": "running",
+        "attentionReason": "none",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "officialHook",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "PreToolUse payload with toolCall.name"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-post-tool-use-running",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "PostToolUse carries the full toolCall despite the vendor documentation listing only stepIdx and error.",
+      "captureSource": "hooks.json PostToolUse payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "post_tool_use tool lifecycle observed"
+      },
+      "expected": {
+        "executionState": "running",
+        "attentionReason": "none",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "officialHook",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "PostToolUse payload observed with toolCall present"
+        }
+      ],
+      "explicitUnknowns": [
+        "Vendor documentation for PostToolUse omits toolCall; the observed payload includes it."
+      ]
+    },
+    {
+      "id": "antigravity-recoverable-tool-failure",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "A tool step reports a non-zero exit but the loop keeps running.",
+      "captureSource": "hooks.json PostToolUse payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "post_tool_use tool reports failure; subsequent turn continues"
+      },
+      "expected": {
+        "executionState": "running",
+        "attentionReason": "none",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "inferred",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "PostToolUse payload with non-empty error and a following invocation"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-stop-not-fully-idle-running",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "Stop arrives while background work is still outstanding, so the session is not terminal yet.",
+      "captureSource": "hooks.json Stop payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "stop with fullyidle=false; continued agent activity"
+      },
+      "expected": {
+        "executionState": "running",
+        "attentionReason": "none",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "officialHook",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "Stop payload with fullyIdle=false"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-terminal-stop-completion",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "Stop is the only terminal signal agy emits; a clean termination reason means the turn finished.",
+      "captureSource": "hooks.json Stop payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "stop with normal terminal lifecycle outcome"
+      },
+      "expected": {
+        "executionState": "completed",
+        "attentionReason": "reviewReady",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "officialHook",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "Stop payload with terminationReason=NO_TOOL_CALL and empty error"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-terminal-stop-task-failure",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "Stop carries a non-empty error, which is the only explicit failure marker agy provides.",
+      "captureSource": "hooks.json Stop payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "stop with terminal error"
+      },
+      "expected": {
+        "executionState": "failed",
+        "attentionReason": "taskFailure",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "inferred",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "interrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "Stop payload with non-empty error"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-duplicate-terminal-failure",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "The same terminal Stop is delivered twice and must not produce a second attention item.",
+      "captureSource": "hooks.json Stop payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "stop delivered twice; terminal error"
+      },
+      "expected": {
+        "executionState": "failed",
+        "attentionReason": "taskFailure",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "inferred",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "interrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "Duplicate Stop payload with identical conversationId"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-out-of-order-terminal-failure",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "An older Stop arrives after a newer one and must not overwrite the newer terminal state.",
+      "captureSource": "hooks.json Stop payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "older stop replayed; terminal error"
+      },
+      "expected": {
+        "executionState": "failed",
+        "attentionReason": "taskFailure",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "inferred",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "interrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "Out-of-order Stop payload with lower monotonic value"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-app-restart-terminal-failure",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "The panel restarts and picks up a terminal failure that was already written, without double-reporting it.",
+      "captureSource": "hooks.json Stop payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "restored stop after panel restart; terminal error"
+      },
+      "expected": {
+        "executionState": "failed",
+        "attentionReason": "taskFailure",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "inferred",
+        "freshness": "fresh",
+        "openResult": "notAttempted",
+        "interruptDecision": "interrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "Undelivered Stop envelope replayed after panel restart"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-missing-identity-task-failure",
+      "agentId": "antigravity",
+      "capabilityStatus": "unknown",
+      "scenario": "A terminal payload without a conversationId leaves nothing to resume, so navigation degrades to view-only.",
+      "captureSource": "hooks.json Stop payload",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "stop with terminal error and identity absent"
+      },
+      "expected": {
+        "executionState": "failed",
+        "attentionReason": "taskFailure",
+        "actionability": "viewOnly",
+        "evidenceQuality": "inferred",
+        "freshness": "fresh",
+        "openResult": "unavailable",
+        "interruptDecision": "interrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "Stop payload with conversationId absent"
+        }
+      ],
+      "explicitUnknowns": [
+        "Without a conversationId there is no resume target; agy CLI sessions have no separate application to focus."
+      ]
+    },
+    {
+      "id": "antigravity-stale-cleanup",
+      "agentId": "antigravity",
+      "capabilityStatus": "supported",
+      "scenario": "A session with no further hook evidence passes its stale deadline.",
+      "captureSource": "local freshness policy",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "no fresh lifecycle evidence; freshness expired"
+      },
+      "expected": {
+        "executionState": "stale",
+        "attentionReason": "none",
+        "actionability": "viewOnly",
+        "evidenceQuality": "inferred",
+        "freshness": "stale",
+        "openResult": "notAttempted",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "No hook delivery within the antigravity stale window"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-exact-return-dispatch-unknown",
+      "agentId": "antigravity",
+      "capabilityStatus": "unknown",
+      "scenario": "`agy --conversation <id>` restores the conversation context, but the restored session is a new terminal rather than the user's original window.",
+      "captureSource": "local CLI observation",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "synthetic identity candidate with no verified return"
+      },
+      "expected": {
+        "executionState": "unknown",
+        "attentionReason": "none",
+        "actionability": "openExactNativeSession",
+        "evidenceQuality": "unknown",
+        "freshness": "unknown",
+        "openResult": "unknown",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "localObservation",
+          "reference": "agy --conversation <id> restored prior context in a new terminal session"
+        }
+      ],
+      "explicitUnknowns": [
+        "Returning to the user's original terminal window is not proven; resume opens a new session."
+      ]
+    },
+    {
+      "id": "antigravity-session-controls-unsupported",
+      "agentId": "antigravity",
+      "capabilityStatus": "unsupported",
+      "scenario": "Session mutation and cancellation are queried and reported as unavailable rather than guessed.",
+      "captureSource": "capability query",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "session control capability queried"
+      },
+      "expected": {
+        "executionState": "unknown",
+        "attentionReason": "unknown",
+        "actionability": "viewOnly",
+        "evidenceQuality": "unknown",
+        "freshness": "notApplicable",
+        "openResult": "unavailable",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "bundledDocumentation",
+          "reference": "hooks.json exposes no session mutation or cancellation entry point"
+        }
+      ],
+      "explicitUnknowns": []
+    },
+    {
+      "id": "antigravity-question-entry-unsupported",
+      "agentId": "antigravity",
+      "capabilityStatus": "unsupported",
+      "scenario": "In-app question answering is queried; agy has no hook event that surfaces a question to the panel.",
+      "captureSource": "capability query",
+      "capturedAt": "2026-08-30T14:40:00Z",
+      "observedAgentVersion": "1.1.22",
+      "input": {
+        "redacted": true,
+        "signal": "question capability queried"
+      },
+      "expected": {
+        "executionState": "unknown",
+        "attentionReason": "unknown",
+        "actionability": "viewOnly",
+        "evidenceQuality": "unknown",
+        "freshness": "notApplicable",
+        "openResult": "unavailable",
+        "interruptDecision": "nonInterrupt"
+      },
+      "evidence": [
+        {
+          "kind": "bundledDocumentation",
+          "reference": "hooks.json event list has no question or plan approval event"
+        }
+      ],
+      "explicitUnknowns": []
+    }
+  ]
+}

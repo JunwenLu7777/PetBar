@@ -582,6 +582,29 @@ func runClaudeQuotaSelfTest() -> Never {
         hasExistingRows: false,
         provider: .claudeCode
     )
+    // agy 1.1.22 的 `-p "/quota"` 真实输出，逐字节抄自本机实测：制表符
+    // 分隔，四列依次是模型组、窗口、**剩余**百分比、ISO8601 重置时刻。
+    let antigravityFixture = """
+    Gemini Models\tWeekly Limit Remaining\t84%\t2026-09-05T06:10:03Z
+    Gemini Models\tFive Hour Limit Remaining\t10%\t2026-08-30T14:56:07Z
+    Claude and GPT models\tWeekly Limit Remaining\t100%\t2026-09-06T14:44:52Z
+    Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-08-30T19:44:52Z
+    """
+    // 认不出的模型组要整行丢掉，而不是把英文原文透传进中文面板。
+    let antigravityUnknownGroupFixture = """
+    Some New Models\tWeekly Limit Remaining\t50%\t2026-09-05T06:10:03Z
+    Gemini Models\tFive Hour Limit Remaining\t10%\t2026-08-30T14:56:07Z
+    """
+    // 列数不对的行同样跳过：agy 会在额度前后打别的提示。
+    let antigravityNoiseFixture = """
+    Fetching quota…
+    Gemini Models\tFive Hour Limit Remaining\t10%\t2026-08-30T14:56:07Z
+    """
+    let antigravityAuthPresentation = quotaFailurePresentation(
+        for: AntigravityQuotaError.authenticationRequired,
+        hasExistingRows: false,
+        provider: .antigravity
+    )
     let codexTask = TaskProgressItem(
         title: "Codex task",
         kind: .running,
@@ -602,6 +625,16 @@ func runClaudeQuotaSelfTest() -> Never {
         claudeItems: [claudeTask],
         enabledAgentIDs: [.codex, .claudeCode]
     )
+    guard let antigravity = try? AntigravityQuotaParser
+        .parse(antigravityFixture),
+        let antigravityUnknownGroup = try? AntigravityQuotaParser
+            .parse(antigravityUnknownGroupFixture),
+        let antigravityNoise = try? AntigravityQuotaParser
+            .parse(antigravityNoiseFixture)
+    else {
+        fputs("antigravity quota self-test failed: parse\n", stderr)
+        exit(1)
+    }
     guard let remaining = try? ClaudeQuotaParser.parse(remainingFixture),
           let used = try? ClaudeQuotaParser.parse(usedFixture),
           let withoutFable = try? ClaudeQuotaParser.parse(withoutFableFixture),
@@ -616,9 +649,24 @@ func runClaudeQuotaSelfTest() -> Never {
           remaining.rows.allSatisfy({ $0.resetsAt != nil || $0.resetDescription != nil }),
           QuotaProvider.codex.displayName == "Codex",
           QuotaProvider.claudeCode.displayName == "Claude Code",
-          QuotaProvider.allCases == [.codex, .claudeCode],
-          quotaProviders(claudeCodeAvailable: false) == [.codex],
-          quotaProviders(claudeCodeAvailable: true) == [.codex, .claudeCode],
+          QuotaProvider.antigravity.displayName == "Antigravity",
+          QuotaProvider.allCases == [.codex, .claudeCode, .antigravity],
+          quotaProviders(
+              claudeCodeAvailable: false,
+              antigravityAvailable: false
+          ) == [.codex],
+          quotaProviders(
+              claudeCodeAvailable: true,
+              antigravityAvailable: false
+          ) == [.codex, .claudeCode],
+          quotaProviders(
+              claudeCodeAvailable: false,
+              antigravityAvailable: true
+          ) == [.codex, .antigravity],
+          quotaProviders(
+              claudeCodeAvailable: true,
+              antigravityAvailable: true
+          ) == [.codex, .claudeCode, .antigravity],
           resolvedQuotaProvider(
               preferred: .claudeCode,
               availableProviders: [.codex]
@@ -633,12 +681,26 @@ func runClaudeQuotaSelfTest() -> Never {
           customClaudeURL?.path == "/custom/bin/claude",
           missingClaudeURL == nil,
           codexOnlyTasks.map(\.source) == [.codex],
-          combinedTasks.map(\.source) == [.codex, .claudeCode]
+          combinedTasks.map(\.source) == [.codex, .claudeCode],
+          // 5 小时窗口排在前面：摘要位只取第一行，看的是当下压力。
+          antigravity.rows.map(\.name) == [
+              "Gemini 5 小时",
+              "Claude·GPT 5 小时",
+              "Gemini 周额度",
+              "Claude·GPT 周额度",
+          ],
+          // 剩余百分比原样取用，不做 100 - x 的换算。
+          antigravity.rows.map(\.remainingPercent) == [10, 100, 84, 100],
+          antigravity.rows.allSatisfy({ $0.resetsAt != nil }),
+          antigravityUnknownGroup.rows.map(\.name) == ["Gemini 5 小时"],
+          antigravityNoise.rows.map(\.name) == ["Gemini 5 小时"],
+          antigravityAuthPresentation.errorText == "请先登录 Antigravity",
+          antigravityAuthPresentation.statusText == "登录后点击刷新"
     else {
         fputs("claude quota self-test failed\n", stderr)
         exit(1)
     }
 
-    print("claude-quota-self-test: left-percent=3/3 used-percent=3/3 non-interactive=3/3 windows=5h+weekly+fable legacy-without-fable=pass provider-availability=installed+hidden fallback=pass auth-copy=pass locator=custom+desktop-bundled+missing task-filter=pass")
+    print("claude-quota-self-test: left-percent=3/3 used-percent=3/3 non-interactive=3/3 windows=5h+weekly+fable legacy-without-fable=pass provider-availability=installed+hidden fallback=pass auth-copy=pass locator=custom+desktop-bundled+missing task-filter=pass antigravity=tsv-4rows+unknown-group-dropped+noise-dropped+auth-copy")
     exit(0)
 }

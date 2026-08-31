@@ -123,6 +123,39 @@ func ompResumeCommand(
         + " --resume \(shellSingleQuoted(normalizedSessionID))"
 }
 
+/// 在终端里恢复一条 agy 会话。
+///
+/// `--conversation <id>` 实测能把上下文完整接回来（模型记得上一轮读到的
+/// 内容，不会重跑命令）。但恢复出来的是一个**新的**终端会话，不是用户
+/// 原来那个窗口——能力矩阵里 exactReturn 因此记 unknown。
+///
+/// 工作目录要显式 cd 过去：agy 认不出工作区时会把命令落到自己的 scratch
+/// 目录里执行，那与用户看到的会话不是一回事。
+func antigravityResumeCommand(
+    sessionID: String,
+    workingDirectory: String?,
+    executablePath: String
+) -> String? {
+    guard executablePath.hasPrefix("/"),
+          let normalizedSessionID = normalizedAntigravitySessionID(sessionID)
+    else { return nil }
+    let resume = "exec \(shellSingleQuoted(executablePath))"
+        + " --conversation \(shellSingleQuoted(normalizedSessionID))"
+    guard let workingDirectory, workingDirectory.hasPrefix("/") else {
+        return resume
+    }
+    return "cd -- \(shellSingleQuoted(workingDirectory)) && \(resume)"
+}
+
+/// agy 的 conversationId 实测就是标准 UUID，所以这里比 OMP 那条严得多：
+/// 直接要求能解析成 UUID。这个值会被拼进 shell 命令，宽松的字符集在这里
+/// 换不来任何好处。
+func normalizedAntigravitySessionID(_ sessionID: String) -> String? {
+    let normalized = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard UUID(uuidString: normalized) != nil else { return nil }
+    return normalized.lowercased()
+}
+
 func normalizedOMPSessionID(_ sessionID: String) -> String? {
     let normalized = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
     guard normalized != "omp-session-unknown",

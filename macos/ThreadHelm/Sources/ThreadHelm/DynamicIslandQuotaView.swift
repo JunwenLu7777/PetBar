@@ -256,7 +256,6 @@ final class DynamicIslandQuotaViewController: NSViewController {
             button.image = providerIconImage(for: provider)
             button.imagePosition = .imageLeading
             button.imageScaling = .scaleProportionallyDown
-            button.tag = provider == .codex ? 0 : 1
             button.font = .systemFont(ofSize: 13, weight: provider == selectedProvider ? .semibold : .regular)
             // Provider artwork carries its own brand color and is not a
             // template image, so AppKit must not apply the shared control tint.
@@ -315,7 +314,7 @@ final class DynamicIslandQuotaViewController: NSViewController {
             )
         case .unavailable:
             addStateCard(
-                title: provider == .claudeCode ? "未安装 Claude Code" : "未安装 Codex",
+                title: "未安装 \(provider.displayName)",
                 message: "安装或登录后点击刷新，额度卡会自动出现。",
                 symbolName: "exclamationmark.triangle",
                 color: DynamicIslandPalette.red
@@ -552,8 +551,16 @@ final class DynamicIslandQuotaViewController: NSViewController {
         }
     }
 
+    /// 按钮反查 provider，而不是把对应关系再编码进 tag。
+    ///
+    /// 旧写法是 `tag = provider == .codex ? 0 : 1` 配 `tag == 0 ? .codex
+    /// : .claudeCode`：只要提供方多过两个，第三个就会拿到 tag 1，点它等于
+    /// 点了 Claude。映射本来就在 providerButtons 里，存第二份就迟早对不上。
     @objc private func selectProvider(_ sender: NSButton) {
-        onSelectProvider?(sender.tag == 0 ? .codex : .claudeCode)
+        guard let provider = providerButtons.first(where: {
+            $0.value === sender
+        })?.key else { return }
+        onSelectProvider?(provider)
     }
 
     @objc private func refresh() {

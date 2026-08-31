@@ -2,7 +2,7 @@
 //  AgentModels.swift
 //  ThreadHelm
 //
-//  模块职责：五 Agent 共用的身份、能力、状态、注意力和返回结果模型。
+//  模块职责：六 Agent 共用的身份、能力、状态、注意力和返回结果模型。
 //
 
 import Foundation
@@ -22,6 +22,7 @@ struct AgentID: RawRepresentable, Hashable, Codable, Comparable,
     static let cursor = AgentID(rawValue: "cursor")
     static let zcode = AgentID(rawValue: "zcode")
     static let omp = AgentID(rawValue: "omp")
+    static let antigravity = AgentID(rawValue: "antigravity")
 
     static let builtInOrder: [AgentID] = [
         .codex,
@@ -29,6 +30,7 @@ struct AgentID: RawRepresentable, Hashable, Codable, Comparable,
         .cursor,
         .zcode,
         .omp,
+        .antigravity,
     ]
 
     var description: String { rawValue }

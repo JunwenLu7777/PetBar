@@ -72,5 +72,6 @@ func defaultAgentTaskProgressSources() -> [AgentTaskProgressSource] {
         AgentTaskProgressSource(agentID: .cursor) { [] },
         AgentTaskProgressSource(agentID: .zcode) { [] },
         AgentTaskProgressSource(agentID: .omp) { [] },
+        AgentTaskProgressSource(agentID: .antigravity) { [] },
     ]
 }

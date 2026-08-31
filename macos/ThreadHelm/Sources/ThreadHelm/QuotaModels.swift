@@ -191,6 +191,20 @@ struct RPCResponse: Decodable {
 enum QuotaProvider: String, CaseIterable {
     case codex
     case claudeCode
+    case antigravity
+
+    /// 对应的 Agent 身份。额度侧曾经与 Agent 侧各存一份图标名和品牌色，
+    /// 两边还漂移了（0.06 对 16/255）。新增的这家统一从这里取，不再抄。
+    var agentID: AgentID {
+        switch self {
+        case .codex:
+            return .codex
+        case .claudeCode:
+            return .claudeCode
+        case .antigravity:
+            return .antigravity
+        }
+    }
 
     var displayName: String {
         switch self {
@@ -198,6 +212,8 @@ enum QuotaProvider: String, CaseIterable {
             return "Codex"
         case .claudeCode:
             return "Claude Code"
+        case .antigravity:
+            return "Antigravity"
         }
     }
 
@@ -207,6 +223,23 @@ enum QuotaProvider: String, CaseIterable {
             return "周额度"
         case .claudeCode:
             return "5 小时"
+        case .antigravity:
+            // agy 同时给周与 5 小时两个窗口，且主力模型是 Gemini。
+            // 摘要位只放得下一行，取更能反映当下压力的 5 小时。
+            return "5 小时"
+        }
+    }
+
+    /// 收起态胶囊上的短标签。那里一格只有几十点宽，放不下 displayName，
+    /// 所以用各家最广为人知的那个短名。
+    var capsuleLabel: String {
+        switch self {
+        case .codex:
+            return "GPT"
+        case .claudeCode:
+            return "Claude"
+        case .antigravity:
+            return "Gemini"
         }
     }
 
@@ -215,6 +248,8 @@ enum QuotaProvider: String, CaseIterable {
         case .codex:
             return "周"
         case .claudeCode:
+            return "5h"
+        case .antigravity:
             return "5h"
         }
     }
@@ -225,6 +260,8 @@ enum QuotaProvider: String, CaseIterable {
             return "ProviderIcon-codex"
         case .claudeCode:
             return "ProviderIcon-claude"
+        case .antigravity:
+            return "ProviderIcon-antigravity"
         }
     }
 
@@ -234,6 +271,8 @@ enum QuotaProvider: String, CaseIterable {
             return "sparkles"
         case .claudeCode:
             return "terminal"
+        case .antigravity:
+            return "arrow.up.circle"
         }
     }
 
@@ -251,6 +290,13 @@ enum QuotaProvider: String, CaseIterable {
                 calibratedRed: 217.0 / 255.0,
                 green: 119.0 / 255.0,
                 blue: 87.0 / 255.0,
+                alpha: 1
+            )
+        case .antigravity:
+            return NSColor(
+                calibratedRed: 66.0 / 255.0,
+                green: 133.0 / 255.0,
+                blue: 244.0 / 255.0,
                 alpha: 1
             )
         }
@@ -283,8 +329,18 @@ func providerIconImage(
     return image
 }
 
-func quotaProviders(claudeCodeAvailable: Bool) -> [QuotaProvider] {
-    claudeCodeAvailable ? QuotaProvider.allCases : [.codex]
+/// 本机能查到额度的提供方，按 allCases 的顺序返回。
+///
+/// Codex 不做可用性判断——它是这块面板的默认落点，拿不到额度时由额度
+/// 视图自己显示失败原因，而不是整条从列表里消失。
+func quotaProviders(
+    claudeCodeAvailable: Bool,
+    antigravityAvailable: Bool
+) -> [QuotaProvider] {
+    var providers: [QuotaProvider] = [.codex]
+    if claudeCodeAvailable { providers.append(.claudeCode) }
+    if antigravityAvailable { providers.append(.antigravity) }
+    return providers
 }
 
 func resolvedQuotaProvider(

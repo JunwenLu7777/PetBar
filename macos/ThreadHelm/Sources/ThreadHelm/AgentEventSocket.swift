@@ -523,8 +523,10 @@ private enum AgentEventSocketEnvelopeValidator {
     static func validate(
         _ candidate: AgentTransportEnvelope
     ) -> AgentTransportEnvelope? {
+        // 与投影端共用同一份名单：两处各写一份的话，新接的 agent 只要漏改
+        // 一边，事件就会在这里被静默丢掉，而面板那侧看起来只是「没有事件」。
         guard candidate.schemaVersion == AgentTransportContract.schemaVersion,
-              [.cursor, .zcode, .omp].contains(candidate.agentID)
+              hookObservedAgentIDs.contains(candidate.agentID)
         else { return nil }
         let canonical = AgentTransportEnvelope(
             agentID: candidate.agentID,

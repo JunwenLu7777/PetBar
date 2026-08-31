@@ -60,6 +60,12 @@ struct AgentPermissionTokenStore {
         writeFailure: { OMPPermissionSettingsError.writeFailed($0) }
     )
 
+    static let antigravity = AgentPermissionTokenStore(
+        defaultDirectory: { antigravityConfigurationDirectoryURL() },
+        fileName: AntigravityPermissionHookConstants.tokenFileName,
+        writeFailure: { AntigravityHookConfigurationError.writeFailed($0) }
+    )
+
     func tokenURL(directory: URL? = nil) -> URL {
         (directory ?? defaultDirectory())
             .appendingPathComponent(fileName)
@@ -209,8 +215,33 @@ struct AgentPermissionHookTransport {
         )
     }
 
+    /// agy 的裁决体里 `{}` 等于拒绝，不是「无意见」——所以就地放行必须
+    /// 显式写 allow，兜底也必须显式写 ask，这两处都不能沿用 Cursor 那套
+    /// 返回空对象的写法。
+    ///
+    /// 兜底选 ask 而不是自己伪造拒绝：agy 的 hook 本身是 fail-closed 的
+    /// （命令非零退出就阻断工具），闸门够不着时不需要我们再补一刀，把
+    /// 决定权交回它自己的权限流程才不会把用户锁在工具外面。
+    static func antigravity() -> AgentPermissionHookTransport {
+        AgentPermissionHookTransport(
+            agentID: .antigravity,
+            flag: AntigravityPermissionHookConstants.flag,
+            url: AntigravityPermissionHookConstants.url,
+            resolveToken: { AgentPermissionTokenStore.antigravity.token() },
+            fallback: .handBackToVendor(
+                AntigravityPermissionHookConstants.handBackOutput
+            ),
+            deadline: AntigravityPermissionHookConstants.requestTimeoutSeconds,
+            shortCircuit: { body in
+                antigravityToolNameIsGuarded(in: body)
+                    ? nil
+                    : AntigravityPermissionHookConstants.passThroughOutput
+            }
+        )
+    }
+
     static func all() -> [AgentPermissionHookTransport] {
-        [.codex(), .zcode(), .cursor()]
+        [.codex(), .zcode(), .cursor(), .antigravity()]
     }
 }
 

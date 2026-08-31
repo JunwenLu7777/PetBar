@@ -1290,7 +1290,7 @@ private func assertDynamicIslandTaskWorkspace() {
           expandedHeader.visibleFrames.isNonOverlappingHorizontally,
           topLevelTabLabels == [
               "任务 \(collection.items.count)",
-              "Agents 5",
+              "Agents \(AgentID.builtInOrder.count)",
               "审批 0",
               "额度",
           ],
@@ -1459,6 +1459,14 @@ private func assertDynamicIslandTaskWorkspace() {
                     value: "17.3.5"
                 ),
             ]
+        case .antigravity:
+            components = [
+                AgentVersionComponent(
+                    key: "version",
+                    label: "Version",
+                    value: "1.1.22"
+                ),
+            ]
         default:
             components = []
         }
@@ -1491,7 +1499,7 @@ private func assertDynamicIslandTaskWorkspace() {
     let validationProfiles = builtInAgentValidationProfiles()
     guard workspace.sourceFilterIsHiddenForSelfTest(),
           workspace.selectedTopLevelTabForSelfTest() == 1,
-          agentHealthRows.count == 5,
+          agentHealthRows.count == AgentID.builtInOrder.count,
           zip(AgentID.builtInOrder, agentHealthRows).allSatisfy({
               agentID, summary in
               guard let profile = validationProfiles[agentID] else {
@@ -1537,6 +1545,7 @@ private func assertDynamicIslandTaskWorkspace() {
               "cursor|hidden",
               "zcode|hidden",
               "omp|hidden",
+              "antigravity|hidden",
           ]
     else {
         fputs("dynamic island agent health workspace self-test failed\n", stderr)
@@ -1958,7 +1967,7 @@ private func assertDynamicIslandAgentIntegrationActions(
     // 契约保护：按钮文案与临时状态一律不得进入无障碍行摘要。
     let rowSummaries = workspace.agentHealthRowSummariesForSelfTest()
     let forbidden = ["一键安装", "立即修复", "正在配置…", "版本未验证，已跳过", "配置失败"]
-    guard rowSummaries.count == 5,
+    guard rowSummaries.count == AgentID.builtInOrder.count,
           rowSummaries.allSatisfy({ summary in
               forbidden.allSatisfy { !summary.contains($0) }
           })
@@ -2040,7 +2049,8 @@ private func assertDynamicIslandQuotaWorkspace() {
     ))
 
     let codexSnapshot = controller.accessibilitySnapshotForSelfTest()
-    guard controller.providerNamesForSelfTest() == ["Codex", "Claude Code"],
+    guard controller.providerNamesForSelfTest()
+        == ["Codex", "Claude Code", "Antigravity"],
           controller.leftPaneWidthForSelfTest() == 228,
           controller.selectedProviderForSelfTest() == .codex,
           controller.providerButtonImagesAreConcreteForSelfTest(),

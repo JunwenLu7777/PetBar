@@ -772,15 +772,20 @@ func dynamicIslandCapsulePresentation(
     }
     if snapshot.codexDesktopRunning
         || snapshot.availableProviders.contains(.claudeCode)
+        || snapshot.availableProviders.contains(.antigravity)
     {
-        let quotaItems = [QuotaProvider.codex, .claudeCode].map { provider in
+        // 胶囊固定两格。Codex 占第一格——它是额度面板的默认落点，没装也
+        // 显示 `--`；第二格给本机真正可用的下一家，都不可用时仍回落
+        // Claude，保持「空闲时看得到两条额度」这个既有形态。
+        let secondary = snapshot.availableProviders.first { $0 != .codex }
+            ?? .claudeCode
+        let quotaItems = [QuotaProvider.codex, secondary].map { provider in
             let remaining = snapshot.quotaStates[provider]?.rows.first(where: {
                 $0.name == provider.summaryRowName
             })?.remainingPercent
-            let label = provider == .codex ? "GPT" : "Claude"
             return DynamicIslandCapsuleQuotaItem(
                 provider: provider,
-                label: label,
+                label: provider.capsuleLabel,
                 remainingPercent: remaining
             )
         }
@@ -1239,12 +1244,17 @@ final class DynamicIslandCapsuleQuotaSummaryView: NSView {
     }
 
     func apply(_ items: [DynamicIslandCapsuleQuotaItem]) {
-        let providers = [QuotaProvider.codex, .claudeCode]
+        // 胶囊是收起态的窄条，只有两个固定槽位，容纳不下第三家。额度
+        // 提供方多于两家时这里只显示前两个，其余在展开的额度页里看——
+        // 那一页按 availableProviders 动态生成，不受这个容量限制。
+        let providers = Array(
+            items.map(\.provider).prefix(iconViews.count)
+        )
         for (index, provider) in providers.enumerated() {
             let item = items.first { $0.provider == provider }
             iconViews[index].image = providerIconImage(for: provider)
             nameFields[index].stringValue = item?.label
-                ?? (provider == .codex ? "GPT" : "Claude")
+                ?? provider.capsuleLabel
             valueFields[index].stringValue = item?.valueText ?? "--"
             valueFields[index].textColor = item?.remainingPercent == nil
                 ? DynamicIslandPalette.tertiaryText

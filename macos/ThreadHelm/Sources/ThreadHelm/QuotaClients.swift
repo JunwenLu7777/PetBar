@@ -93,6 +93,23 @@ func quotaFailurePresentation(
         case .parseFailed:
             displayError = "无法识别 Claude 额度"
         }
+    } else if provider == .antigravity,
+              let quotaError = error as? AntigravityQuotaError
+    {
+        switch quotaError {
+        case .antigravityNotFound:
+            displayError = "未找到 Antigravity"
+            statusText = "安装后自动显示"
+        case .authenticationRequired:
+            displayError = "请先登录 Antigravity"
+            statusText = "登录后点击刷新"
+        case .launchFailed:
+            displayError = "Antigravity 启动失败"
+        case .captureFailed:
+            displayError = "Antigravity 额度读取失败"
+        case .parseFailed:
+            displayError = "无法识别 Antigravity 额度"
+        }
     } else if let quotaError = error as? QuotaClientError {
         switch quotaError {
         case .codexNotFound:

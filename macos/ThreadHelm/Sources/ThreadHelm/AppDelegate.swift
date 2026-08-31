@@ -222,6 +222,7 @@ final class AgentVersionSignatureCache {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let quotaClient = CodexQuotaClient()
     private let claudeQuotaClient = ClaudeQuotaClient()
+    private let antigravityQuotaClient = AntigravityQuotaClient()
     private let quotaProviderPreference = QuotaProviderPreference()
     private let healthWriter = RuntimeHealthWriter()
     private let dashboardStore = ActivityDashboardStore()
@@ -901,7 +902,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @discardableResult
     private func synchronizeQuotaProviderAvailability() -> [QuotaProvider] {
         let availableProviders = quotaProviders(
-            claudeCodeAvailable: locateClaudeExecutable() != nil
+            claudeCodeAvailable: locateClaudeExecutable() != nil,
+            antigravityAvailable: locateAntigravityExecutable() != nil
         )
         let preferredProvider = quotaProviderPreference.selectedProvider
         let resolvedProvider = resolvedQuotaProvider(
@@ -952,6 +954,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         case .claudeCode:
             claudeQuotaClient.fetch { [weak self] result in
+                let payloadResult = result.map {
+                    QuotaRefreshPayload(rows: $0.rows, resetCredits: nil)
+                }
+                DispatchQueue.main.async {
+                    self?.completeQuotaRefresh(
+                        provider: provider,
+                        result: payloadResult
+                    )
+                }
+            }
+        case .antigravity:
+            antigravityQuotaClient.fetch { [weak self] result in
                 let payloadResult = result.map {
                     QuotaRefreshPayload(rows: $0.rows, resetCredits: nil)
                 }

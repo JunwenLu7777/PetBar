@@ -127,14 +127,15 @@ func runAgentIntegrationManagerSelfTest() {
         guard status.operation == .status,
               status.backupID == nil,
               status.agents.map(\.agentID) == AgentID.builtInOrder,
-              // Codex 自接入审批闸门起也进入受管集合，五家再无例外。
+              // Codex 自接入审批闸门起也进入受管集合，六家再无例外。
               status.record(for: .codex)?.statusAfter == .notInstalled,
               status.record(for: .claudeCode)?.statusAfter == .notInstalled,
               status.record(for: .cursor)?.statusAfter == .notInstalled,
               status.record(for: .zcode)?.statusAfter == .notInstalled,
-              status.record(for: .omp)?.statusAfter == .notInstalled
+              status.record(for: .omp)?.statusAfter == .notInstalled,
+              status.record(for: .antigravity)?.statusAfter == .notInstalled
         else {
-            failIntegrationManagerSelfTest("five-agent status")
+            failIntegrationManagerSelfTest("six-agent status")
         }
 
         let installed = try manager.perform(.install, in: scope)
@@ -598,6 +599,11 @@ private func makeIntegrationManagerRegistry(
             executablePath: { "/tmp/ThreadHelm" },
             timeoutStore: InMemoryOMPToolCallTimeoutStore(value: 600_000)
         ),
+        AntigravityAgentAdapter(
+            discovery: installed,
+            executablePath: { "/tmp/ThreadHelm" },
+            resumeSession: { _, _ in false }
+        ),
     ])
 }
 
@@ -625,7 +631,7 @@ private func runIntegrationManagerInstallGateSelfTest(root: URL) throws {
     // 发版节奏都不受我们控制，稳定态就是谁都装不上、功能默认关闭。
     let driftedInstall = try driftedManager.perform(.install, in: scope)
     guard driftedInstall.backupID != nil,
-          driftedInstall.agents.count == 5,
+          driftedInstall.agents.count == AgentID.builtInOrder.count,
           driftedInstall.agents.allSatisfy({ $0.statusAfter == .installed }),
           fileManager.fileExists(atPath: fixtures.ompManagedDirectory.path)
     else {

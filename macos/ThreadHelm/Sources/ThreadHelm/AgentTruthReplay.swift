@@ -614,6 +614,7 @@ private struct AgentTruthSignalNormalizer {
         if signal.contains("bundle and cli executables present")
             || signal.contains("application bundle present")
             || signal.contains("executable and bundled documentation present")
+            || signal.contains("agy executable and hooks configuration present")
         {
             return .discovery
         }
@@ -715,7 +716,12 @@ private struct AgentTruthSignalNormalizer {
         case .appFallback, .workingDirectoryFallback, .unsupported:
             return true
         case .returnUnknown:
-            return agentID == .cursor || agentID == .zcode || agentID == .omp
+            // 这几家的「返回」都只到发起为止，落点没有独立确认，所以按
+            // 直接分类处理而不是合成一条生命周期事件。
+            return agentID == .cursor
+                || agentID == .zcode
+                || agentID == .omp
+                || agentID == .antigravity
         default:
             return false
         }
@@ -792,6 +798,13 @@ private struct AgentTruthSignalNormalizer {
             )
         case .omp:
             return try ompEvents(
+                semantic: semantic,
+                scenarioID: scenarioID,
+                signal: signal,
+                observedAt: observedAt
+            )
+        case .antigravity:
+            return try antigravityEvents(
                 semantic: semantic,
                 scenarioID: scenarioID,
                 signal: signal,
@@ -1054,6 +1067,74 @@ private struct AgentTruthSignalNormalizer {
         return [event]
     }
 
+    /// agy 只有四个观测事件，没有 session_start / session_end：一次调用
+    /// 就是一条会话的全部，Stop 是唯一的终态信号。
+    private func antigravityEvents(
+        semantic: TruthSignalSemantic,
+        scenarioID: String,
+        signal: String,
+        observedAt: Date
+    ) throws -> [AgentEvent] {
+        let eventType: String
+        let state: ExecutionState
+        switch semantic {
+        case .idle:
+            // 没有空闲事件可发。会话开始时能观测到的第一件事是模型被调用。
+            eventType = "pre_invocation"
+            state = .idle
+        case .taskFailure:
+            eventType = "stop"
+            state = .failed
+        case .completion:
+            eventType = "stop"
+            state = .completed
+        default:
+            if signal.contains("stop") {
+                eventType = "stop"
+            } else if signal.contains("post_tool_use")
+                || signal.contains("tool result")
+            {
+                eventType = "post_tool_use"
+            } else if signal.contains("pre_tool_use")
+                || signal.contains("tool call")
+            {
+                eventType = "pre_tool_use"
+            } else {
+                eventType = "pre_invocation"
+            }
+            state = .running
+        }
+        let missingIdentity = signal.contains("identity")
+            && signal.contains("absent")
+        let evidence = evidenceQuality(semantic: semantic, signal: signal)
+        let envelope = AgentTransportEnvelope(
+            agentID: .antigravity,
+            adapterVersion: adapterVersion,
+            nativeSessionCandidate: missingIdentity ? nil : Self.nativeSessionID,
+            eventID: "\(scenarioID)-event",
+            sequence: 1,
+            eventType: eventType,
+            monotonicNanoseconds: 1,
+            redactedPayload: [
+                "state": state.rawValue,
+                "attentionReason": state == .failed
+                    ? AttentionReason.taskFailure.rawValue
+                    : AttentionReason.none.rawValue,
+                "evidenceQuality": evidence.rawValue,
+                "freshness": "fresh",
+            ]
+        )
+        guard let event = antigravityAgentEvent(
+            from: envelope,
+            observedAt: observedAt
+        ) else {
+            throw AgentTruthReplayError.invalidFixture(
+                "\(scenarioID) 不能归一化 Antigravity 事件"
+            )
+        }
+        return [event]
+    }
+
     private func manualEvent(
         semantic: TruthSignalSemantic,
         scenarioID: String,
@@ -1135,7 +1216,8 @@ private struct AgentTruthSignalNormalizer {
             switch agentID {
             case .codex, .cursor, .zcode: return .openNativeApp
             case .claudeCode: return .openWorkingDirectory
-            case .omp: return .viewOnly
+            // 这两家都靠会话 ID 恢复，拿不到 ID 就没有可跳转的落点。
+            case .omp, .antigravity: return .viewOnly
             default: return .viewOnly
             }
         }
@@ -1149,7 +1231,7 @@ private struct AgentTruthSignalNormalizer {
             return .openExactNativeSession
         case .cursor, .zcode:
             return .openNativeApp
-        case .omp:
+        case .omp, .antigravity:
             return .openExactNativeSession
         default:
             return .viewOnly
@@ -1214,7 +1296,7 @@ private struct AgentTruthSignalNormalizer {
             switch agentID {
             case .codex: return .nativeState
             case .claudeCode: return .officialAPI
-            case .cursor, .zcode, .omp: return .officialHook
+            case .cursor, .zcode, .omp, .antigravity: return .officialHook
             default: return .unknown
             }
         case .discovery, .stale, .offline:
@@ -1236,9 +1318,11 @@ private struct AgentTruthSignalNormalizer {
             confirmed = true
         case .returnUnknown:
             result = .unknown
+            // 这几家都指名了目标会话再发起恢复，只是落点没能独立确认。
             invokedExactTarget = agentID == .codex
                 || agentID == .claudeCode
                 || agentID == .omp
+                || agentID == .antigravity
             confirmed = false
         case .appFallback:
             result = .appFocused
@@ -1257,7 +1341,9 @@ private struct AgentTruthSignalNormalizer {
             switch agentID {
             case .claudeCode: result = .workingDirectoryFallback
             case .codex, .cursor, .zcode: result = .appFocused
-            case .omp: result = .unavailable
+            // agy 没有可回落的独立应用：CLI 会话不在 Antigravity IDE 里，
+            // 没有会话 ID 就真的无处可去。
+            case .omp, .antigravity: result = .unavailable
             default: result = .unavailable
             }
             invokedExactTarget = false

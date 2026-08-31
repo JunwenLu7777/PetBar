@@ -16,7 +16,12 @@ enum AgentLiveEventPolicy {
     static let terminalFreshness: TimeInterval = 24 * 60 * 60
 }
 
-let hookObservedAgentIDs: Set<AgentID> = [.cursor, .zcode, .omp]
+let hookObservedAgentIDs: Set<AgentID> = [
+    .cursor,
+    .zcode,
+    .omp,
+    .antigravity,
+]
 
 enum AgentTransportEnvelopeProjection {
     static func event(
@@ -96,6 +101,12 @@ enum AgentTransportEnvelopeProjection {
                 ? .openExactNativeSession
                 : .viewOnly
         }
+        if agentID == .antigravity {
+            return nativeSessionCandidate
+                .flatMap(normalizedAntigravitySessionID) != nil
+                ? .openExactNativeSession
+                : .viewOnly
+        }
         return metadata.capabilities.supports(.nativeNavigation)
             ? .openNativeApp
             : .viewOnly
@@ -137,6 +148,16 @@ enum AgentTransportEnvelopeProjection {
             }
             actionability = nativeSessionCandidate
                 .flatMap(normalizedOMPSessionID) != nil
+                ? .openExactNativeSession
+                : .viewOnly
+        case .antigravity:
+            // agy 只有工具与收尾类事件，没有能表达「等你回答」的 hook——
+            // 越过这三种注意力就是我们自己编的，收敛掉。
+            if ![.taskFailure, .reviewReady, .none].contains(reason) {
+                reason = .none
+            }
+            actionability = nativeSessionCandidate
+                .flatMap(normalizedAntigravitySessionID) != nil
                 ? .openExactNativeSession
                 : .viewOnly
         case .codex, .claudeCode:

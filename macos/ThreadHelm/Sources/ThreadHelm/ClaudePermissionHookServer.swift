@@ -98,6 +98,25 @@ struct PermissionHookRoute {
             }
         )
     }
+
+    /// Antigravity 是唯一一家负载字段名对不上的：agy 走 protojson 的
+    /// camelCase（conversationId / toolCall.name / toolCall.args），入向
+    /// 必须用自己的解析器；出向也换成它的 decision 四态。
+    static func antigravity(
+        token: @escaping () -> String? = {
+            AgentPermissionTokenStore.antigravity.token()
+        }
+    ) -> PermissionHookRoute {
+        PermissionHookRoute(
+            agentID: .antigravity,
+            path: AntigravityPermissionHookConstants.path,
+            expectedToken: token,
+            decode: { try AntigravityPermissionProtocol.decodePrompt(from: $0) },
+            encode: {
+                AntigravityPermissionProtocol.responseBody(for: $0, prompt: $1)
+            }
+        )
+    }
 }
 
 final class ClaudePermissionHookServer {
@@ -132,7 +151,7 @@ final class ClaudePermissionHookServer {
 
     init(
         routes: [PermissionHookRoute] = [
-            .claude(), .codex(), .zcode(), .omp(), .cursor(),
+            .claude(), .codex(), .zcode(), .omp(), .cursor(), .antigravity(),
         ],
         liveness: PermissionGateLivenessStore? = nil
     ) {

@@ -53,7 +53,9 @@ func runAgentHookCommandIfRequested(
     ) else { return false }
     guard arguments.indices.contains(flagIndex + 2) else { return true }
     let agentID = AgentID(rawValue: arguments[flagIndex + 1])
-    guard [.cursor, .zcode, .omp].contains(agentID) else { return true }
+    guard [.cursor, .zcode, .omp, .antigravity].contains(agentID) else {
+        return true
+    }
     let eventType = arguments[flagIndex + 2]
     guard let envelope = agentHookEnvelope(
         agentID: agentID,
@@ -165,7 +167,7 @@ func agentHookEnvelope(
     input: AgentHookInput,
     monotonicNanoseconds: UInt64 = DispatchTime.now().uptimeNanoseconds
 ) -> AgentTransportEnvelope? {
-    guard [.cursor, .zcode, .omp].contains(agentID),
+    guard [.cursor, .zcode, .omp, .antigravity].contains(agentID),
           let safeEventType = agentHookToken(eventType, maximumLength: 96)
     else { return nil }
 
@@ -173,7 +175,9 @@ func agentHookEnvelope(
     case .malformed:
         return nil
     case .oversized(let byteCount):
-        let nativeAction: Actionability = agentID == .omp
+        // 按会话精确跳转的两家在这条路径上都拿不到会话 ID——负载超限时
+        // 我们只保留元数据，跳转落点无从谈起，只能降到仅查看。
+        let nativeAction: Actionability = agentHookResumesExactSession(agentID)
             ? .viewOnly
             : .openNativeApp
         return AgentTransportEnvelope(
@@ -206,7 +210,8 @@ func agentHookEnvelope(
             keys: ["session_id", "sessionId", "conversation_id", "conversationId"],
             maximumLength: 192
         )
-        let actionability = agentID == .omp && sessionID == nil
+        let actionability = agentHookResumesExactSession(agentID)
+            && sessionID == nil
             ? Actionability.viewOnly
             : mapping.actionability
         let eventID = agentHookFirstToken(
@@ -257,6 +262,14 @@ func agentEventSocketURL(
     return candidate
 }
 
+/// 这家的跳转是不是按会话 ID 精确恢复，而不是把应用带到前台。
+///
+/// OMP 走 resume，Antigravity 走 `agy --conversation <id>`——两者都需要
+/// 事件里带上会话 ID 才谈得上落点，拿不到就得降级成仅查看。
+private func agentHookResumesExactSession(_ agentID: AgentID) -> Bool {
+    agentID == .omp || agentID == .antigravity
+}
+
 private func agentHookStateMapping(
     agentID: AgentID,
     eventType: String,
@@ -270,9 +283,29 @@ private func agentHookStateMapping(
 )? {
     let normalized = eventType.lowercased()
     let taskFailed = agentHookTerminalFailureIsExplicit(object)
-    let nativeAction: Actionability = agentID == .omp
+    let nativeAction: Actionability = agentHookResumesExactSession(agentID)
         ? .openExactNativeSession
         : .openNativeApp
+
+    if agentID == .antigravity {
+        switch normalized {
+        case "pre_invocation", "post_invocation", "pre_tool_use",
+             "post_tool_use":
+            return (.running, .none, nativeAction, .officialHook, "fresh")
+        case "stop":
+            // agy 没有 session_start / session_end：一次 `agy -p` 就是一
+            // 条会话的全部，Stop 是唯一的终态信号。fullyIdle 为假说明还
+            // 有后台任务在跑，这时收不了尾，仍按运行中记。
+            if let fullyIdle = object["fullyIdle"] as? Bool, !fullyIdle {
+                return (.running, .none, nativeAction, .officialHook, "fresh")
+            }
+            return antigravityStopIsFailure(object)
+                ? (.failed, .taskFailure, nativeAction, .officialHook, "fresh")
+                : (.completed, .reviewReady, nativeAction, .officialHook, "fresh")
+        default:
+            return nil
+        }
+    }
 
     if agentID == .cursor {
         switch normalized {
@@ -332,6 +365,24 @@ private func agentHookContinuationIsExplicit(
         .compactMap { object[$0] as? String }
         .map { $0.lowercased() }
     return values.contains("continuing")
+}
+
+/// agy 的 Stop 负载自成一套：失败写在 `error`（空串表示没出错）与
+/// `terminationReason` 上，没有别家那个 outcome/terminal_status 字段。
+///
+/// 判据保持保守——只有明确说了出错才记失败。实测正常收尾时
+/// terminationReason 是 "NO_TOOL_CALL"，把「不认识的收尾理由」一律当成
+/// 失败会把绝大多数正常会话染红。
+private func antigravityStopIsFailure(_ object: [String: Any]) -> Bool {
+    if let error = object["error"] as? String,
+       !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
+        return true
+    }
+    let reason = (object["terminationReason"] as? String)?
+        .lowercased()
+        .filter { $0.isLetter }
+    return reason == "error"
 }
 
 private func agentHookTerminalFailureIsExplicit(

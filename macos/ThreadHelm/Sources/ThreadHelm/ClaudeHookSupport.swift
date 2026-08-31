@@ -347,7 +347,9 @@ enum ClaudePermissionProtocol {
         return "应用 Claude 权限建议 \(index + 1)"
     }
 
-    private static func promptPresentation(
+    /// 非 private：Antigravity 的负载字段名与这里不同、要另写解析器，但
+    /// 确认框的文案该与其他几家逐字一致，所以共用这一份而不是再抄一遍。
+    static func promptPresentation(
         kind: ClaudePermissionInteractionKind,
         toolName: String,
         description: String?,
@@ -380,8 +382,12 @@ enum ClaudePermissionProtocol {
 /// 工具名的展示文案。白名单外的名字只留字母、数字、下划线与连字符：
 /// 这行字会进确认框，厂商传来的工具名不能当成可信文本直接渲染。
 ///
-/// 五家的负载里工具名都来自同一批工具，这张表也就只该有一份——Claude 与
+/// 各家的负载里工具名大体来自同一批工具，这张表也就只该有一份——Claude 与
 /// Codex 曾各存一份逐字相同的副本，加一个工具就要记得改两处。
+///
+/// Antigravity 是例外：它的步骤类型自成一套命名（小写下划线，由
+/// CORTEX_STEP_TYPE_ 前缀去掉后小写而来），所以下面按同一张表补齐，
+/// 而不是让它们统统掉进 filter 分支显示成生名字。
 func hookToolDisplayName(_ toolName: String) -> String {
     let approvedNames: [String: String] = [
         "Bash": "终端命令",
@@ -390,6 +396,24 @@ func hookToolDisplayName(_ toolName: String) -> String {
         "Read": "文件读取",
         "WebFetch": "网页读取",
         "WebSearch": "网页搜索",
+        "run_command": "终端命令",
+        "shell_exec": "终端命令",
+        "send_command_input": "向命令输入",
+        "file_change": "文件编辑",
+        "propose_code": "代码修改",
+        "write_blob": "文件写入",
+        "view_file": "文件读取",
+        "delete_directory": "删除目录",
+        "move": "移动文件",
+        "git_commit": "提交代码",
+        "edit_notebook": "笔记本编辑",
+        "execute_notebook": "运行笔记本",
+        "execute_browser_javascript": "执行网页脚本",
+        "run_extension_code": "运行扩展代码",
+        "restart_dev_server": "重启开发服务",
+        "deploy_firebase": "部署 Firebase",
+        "cloud_sql_execute_sql": "执行 SQL",
+        "cloud_sql_update_schema": "变更数据库结构",
     ]
     if let displayName = approvedNames[toolName] {
         return displayName

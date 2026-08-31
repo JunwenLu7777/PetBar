@@ -2,7 +2,7 @@
 //  AgentIntegrationSelfTest.swift
 //  ThreadHelm
 //
-//  模块职责：锁定五 Agent 公共核心、确定性事件归并和本地传输边界。
+//  模块职责：锁定六 Agent 公共核心、确定性事件归并和本地传输边界。
 //
 
 import Foundation
@@ -39,10 +39,11 @@ func runAgentIntegrationSelfTest() {
         .cursor,
         .zcode,
         .omp,
+        .antigravity,
     ]
     guard AgentID.builtInOrder == expectedBuiltIns,
           expectedBuiltIns.map(\.rawValue) == [
-              "codex", "claudeCode", "cursor", "zcode", "omp",
+              "codex", "claudeCode", "cursor", "zcode", "omp", "antigravity",
           ]
     else {
         failAgentIntegrationSelfTest("built-in IDs/order")
@@ -56,7 +57,7 @@ func runAgentIntegrationSelfTest() {
     guard registry.agentIDs == expectedBuiltIns + [mock.metadata.id],
           registry.adapter(for: mock.metadata.id)?.metadata.displayName
               == "Mock Sixth",
-          registry.count == 6
+          registry.count == expectedBuiltIns.count + 1
     else {
         failAgentIntegrationSelfTest("registry extension/deduplication")
     }
@@ -190,7 +191,7 @@ func runAgentIntegrationSelfTest() {
           Set(
               [
                   PermissionHookRoute.claude(), .codex(), .zcode(),
-                  .omp(), .cursor(),
+                  .omp(), .cursor(), .antigravity(),
               ].map(\.agentID)
           ) == Set(AgentID.builtInOrder),
           // Cursor 也没有问题回答的 hook 事件，不能顺势标上。
@@ -220,7 +221,24 @@ func runAgentIntegrationSelfTest() {
           registry.metadata(for: .zcode)?.capabilities.status(
               for: .exactReturn
           ) == .unknown,
-          // Codex 接入审批闸门后也开始写受管配置，五家都必须是 supported。
+          // Antigravity 的 hooks.json 只有工具与收尾类事件，没有问题回答
+          // 与计划审批的入口，不能顺势标上。
+          [AgentCapability.inAppQuestion, .inAppPlanApproval]
+              .allSatisfy({ capability in
+                  registry.metadata(for: .antigravity)?.capabilities.status(
+                      for: capability
+                  ) == .unknown
+              }),
+          // `--conversation` 能恢复上下文，但落点是新开的终端会话，
+          // 回到用户原窗口没验证过。
+          registry.metadata(for: .antigravity)?.capabilities.status(
+              for: .exactReturn
+          ) == .unknown,
+          // conversationId 实测跨恢复保持一致，这条才敢标 supported。
+          registry.metadata(for: .antigravity)?.capabilities.status(
+              for: .stableIdentity
+          ) == .supported,
+          // Codex 接入审批闸门后也开始写受管配置，六家都必须是 supported。
           AgentID.builtInOrder.allSatisfy({ agentID in
               registry.metadata(for: agentID)?.capabilities.status(
                   for: .managedIntegration
@@ -230,13 +248,24 @@ func runAgentIntegrationSelfTest() {
         failAgentIntegrationSelfTest("navigation/control capability boundary")
     }
 
-    guard QuotaProvider.allCases.map(\.rawValue) == ["codex", "claudeCode"]
+    // 额度提供方是 Agent 的真子集：接入一家 Agent 不等于它就有额度可读。
+    // Cursor / ZCode / OMP 至今没有可查的额度接口，这条断言就是防止有人
+    // 顺手把它们也加进来、然后在面板上显示一个查不出数的空条目。
+    guard QuotaProvider.allCases.map(\.rawValue)
+        == ["codex", "claudeCode", "antigravity"],
+        QuotaProvider.allCases.allSatisfy({
+            AgentID.builtInOrder.contains($0.agentID)
+        }),
+        QuotaProvider.allCases.count < AgentID.builtInOrder.count
     else {
         failAgentIntegrationSelfTest("quota providers remain independent")
     }
 
     guard TaskSourceFilter.options(for: AgentID.builtInOrder).map(\.rawValue)
-        == ["all", "codex", "claudeCode", "cursor", "zcode", "omp"],
+        == [
+            "all", "codex", "claudeCode", "cursor", "zcode", "omp",
+            "antigravity",
+        ],
           TaskSourceFilter(agentID: mock.metadata.id).agentID == mock.metadata.id
     else {
         failAgentIntegrationSelfTest("source-agnostic filters")

@@ -2,7 +2,7 @@
 //  AgentValidationProfile.swift
 //  ThreadHelm
 //
-//  模块职责：描述五个固定版本的本机真值档案，并在版本缺失或漂移时
+//  模块职责：描述六个固定版本的本机真值档案，并在版本缺失或漂移时
 //  将尚未重新验证的能力降级为 unknown。
 //
 
@@ -139,6 +139,14 @@ func builtInAgentValidationProfiles() -> [AgentID: AgentValidationProfile] {
                 "支持：状态、权限确认、原生会话跳转、受管集成",
             knownLimitation:
                 "限制：跳转通过 resume 发起，精确落点未独立确认；handler 超时默认 30 秒且按墙钟计，安装时会抬到 600 秒并在卸载时还原；扩展加载失败时闸门不存在而 OMP 只打一行告警；OMP 真机发起的审批尚未在本机端到端验证，契约取自其 settings schema 与 emitToolCall 实现"
+        ),
+        AgentValidationProfile(
+            agentID: .antigravity,
+            testedVersion: "1.1.22",
+            supportedCapabilitiesSummary:
+                "支持：状态、权限确认、原生会话恢复、额度、受管集成",
+            knownLimitation:
+                "限制：--conversation 恢复的是新终端会话，回到用户原终端窗口未验证；agy 只有 PreToolUse/PostToolUse/PreInvocation/PostInvocation/Stop 五个 hook 事件，没有问题回答与计划审批入口；hook 同步阻塞 agent 循环且默认超时 30 秒；PostToolUse 实测带完整 toolCall，与官方文档只列 stepIdx/error 不符，解析按实测负载兜底；只注册用户级 hooks.json，项目级 .agents/hooks.json 受工作区信任门控"
         ),
     ]
     return Dictionary(uniqueKeysWithValues: profiles.map {

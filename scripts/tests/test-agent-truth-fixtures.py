@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the owner-only five-agent truth fixture contract."""
+"""Validate the owner-only six-agent truth fixture contract."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_ROOT = ROOT / "macos/ThreadHelm/Tests/Fixtures/Agents"
 SCENARIO_ROOT = FIXTURE_ROOT / "scenarios"
-AGENTS = ("codex", "claudeCode", "cursor", "zcode", "omp")
+AGENTS = ("codex", "claudeCode", "cursor", "zcode", "omp", "antigravity")
 BASELINE_COMMIT = "8a0792ded390272977e4183ee8596bfbf0633f68"
 PREVIEW_STATES = (
     "capsule-confirmation",
@@ -40,6 +40,7 @@ EXPECTED_SCENARIO_COUNTS = {
     "cursor": 16,
     "zcode": 16,
     "omp": 16,
+    "antigravity": 17,
 }
 
 EXPECTED_ENUMS = {
@@ -198,14 +199,16 @@ for agent_id in AGENTS:
             assert scenario["expected"]["evidenceQuality"] in {
                 "inferred", "unknown",
             }, f"{scenario['id']} overstates synthetic evidence quality"
-        if agent_id == "omp":
+        # OMP 与 Antigravity 都只有 resume 一条路：没有可聚焦的独立应用，
+        # 也没有工作目录回落，拿不到会话 ID 就只能仅查看。
+        if agent_id in {"omp", "antigravity"}:
             assert scenario["expected"]["actionability"] not in {
                 "inApp", "openNativeApp", "openWorkingDirectory",
-            }, f"{scenario['id']} violates the OMP resume-only boundary"
+            }, f"{scenario['id']} violates the {agent_id} resume-only boundary"
             assert scenario["expected"]["openResult"] not in {
                 "exactSession", "appFocused", "workingDirectoryFallback",
-            }, f"{scenario['id']} overstates OMP resume navigation"
-        if agent_id in {"codex", "cursor", "zcode", "omp"}:
+            }, f"{scenario['id']} overstates {agent_id} resume navigation"
+        if agent_id in {"codex", "cursor", "zcode", "omp", "antigravity"}:
             assert scenario["expected"]["openResult"] != "exactSession", (
                 f"{scenario['id']} lacks independent exact-return confirmation"
             )
@@ -222,7 +225,7 @@ for agent_id in AGENTS:
             per_agent_negatives[agent_id] += 1
         all_scenarios.append(scenario)
 
-assert len(all_scenarios) == 81
+assert len(all_scenarios) == 98
 for agent_id in AGENTS:
     assert per_agent_counts[agent_id] == EXPECTED_SCENARIO_COUNTS[agent_id]
     assert per_agent_interrupts[agent_id] >= 5
@@ -287,7 +290,7 @@ for term in (
     assert term in spec
 
 print(
-    "five-agent truth fixtures passed: "
+    "six-agent truth fixtures passed: "
     f"agents={len(AGENTS)} scenarios={len(all_scenarios)} "
     f"previews={len(PREVIEW_STATES)}"
 )

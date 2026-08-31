@@ -81,7 +81,7 @@ BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 
 这会读取 81 条脱敏场景，经生产 Swift 归一化和真实 `AgentEventReducer` 比较 7 个 expected 字段。duplicate 和 out-of-order 场景也走真实 reducer。输出的 miss、false alert、duplicate、exact return 分子分母只说明这 81 条固定夹具，没有测量实际使用、延迟或主观体验；回放过程不写持久化用户状态。
 
-该基线里 Codex 精确返回仍是 `unknown`；Claude Code 只有同时匹配会话、活进程和 process-start identity 才可能是 exact，否则降为 `unknown`；Cursor 与 ZCode 不宣称 exact；OMP 可发起 `--resume`，但未独立确认落点，因此打开结果仍是 `unknown`，不能宣称 exact。发布脚本会执行同一回放，并把真值夹具纳入 release 输入时间；夹具更新后旧 ZIP 会被判为 stale。
+该基线里 Codex 精确返回仍是 `unknown`；Claude Code 只有同时匹配会话、活进程和 process-start identity 才可能是 exact，否则降为 `unknown`；Cursor 与 ZCode 不宣称 exact；OMP 可发起 `--resume`、Antigravity 可发起 `agy --conversation <id>`（实测能接回上下文，但落点是新开的终端而非用户原窗口），两者未独立确认落点，因此打开结果仍是 `unknown`，不能宣称 exact。发布脚本会执行同一回放，并把真值夹具纳入 release 输入时间；夹具更新后旧 ZIP 会被判为 stale。
 
 受管集成的逻辑契约可以单独验证，不受其他适配器自测影响：
 
@@ -139,7 +139,7 @@ ZCode 的“完整安装”不会要求额外确认：如果 `~/.zcode/cli/confi
 任何一步失败时，安装器会：
 
 1. 停止失败的新 LaunchAgent；
-2. 用 `backupID` 恢复 Claude、Cursor、ZCode 和 OMP 配置；
+2. 用 `backupID` 恢复 Claude、Cursor、ZCode、OMP 和 Antigravity 配置；
 3. 恢复旧 App、旧 LaunchAgent 和 Codex 气泡状态；
 4. 重新启动原来的 LaunchAgent。
 
@@ -155,7 +155,7 @@ ZCode 的“完整安装”不会要求额外确认：如果 `~/.zcode/cli/confi
 ./macos/ThreadHelm/scripts/uninstall.sh
 ```
 
-卸载器先语义化移除四个 ThreadHelm 受管集成，再恢复 Codex 气泡设置，最后删除 App 和 LaunchAgent。非 ThreadHelm 配置会保留；移除 App 后，五个 Agent 都继续按自己的原生行为运行。
+卸载器先语义化移除各家 ThreadHelm 受管集成，再恢复 Codex 气泡设置，最后删除 App 和 LaunchAgent。非 ThreadHelm 配置会保留；移除 App 后，六个 Agent 都继续按自己的原生行为运行。
 
 ## 快速核验
 

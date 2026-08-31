@@ -597,6 +597,7 @@ func builtInAgentAdapters() -> [any AgentAdapter] {
         CursorAgentAdapter(metadata: indexed[.cursor]!),
         ZCodeAgentAdapter(metadata: indexed[.zcode]!),
         OMPAgentAdapter(metadata: indexed[.omp]!),
+        AntigravityAgentAdapter(metadata: indexed[.antigravity]!),
     ]
 }
 
@@ -1419,6 +1420,37 @@ func builtInAgentMetadata() -> [AgentMetadata] {
                     .stableIdentity,
                     .exactReturn,
                     .inAppQuestion,
+                ]
+            )
+        ),
+        AgentMetadata(
+            id: .antigravity,
+            displayName: "Antigravity",
+            shortName: "Antigravity",
+            iconResourceName: "ProviderIcon-antigravity",
+            fallbackSymbolName: "arrow.up.circle",
+            brandColor: AgentColorComponents(red: 0.26, green: 0.52, blue: 0.96),
+            versionSource: "agy --version",
+            identityPolicy: "native conversation ID; resume verified",
+            capabilities: AgentCapabilitySet(
+                supported: [
+                    .lifecycleObservation,
+                    .stableIdentity,
+                    .nativeNavigation,
+                    .quota,
+                    .managedIntegration,
+                    .inAppPermission,
+                ],
+                // agy 的 hooks.json 只有 PreToolUse/PostToolUse/PreInvocation/
+                // PostInvocation/Stop 五个事件，没有问题回答与计划审批的入口；
+                // --mode plan 存在但不经 hook 暴露审批点。精确返回同理：
+                // --conversation <id> 实测能恢复上下文，但恢复出的是新终端
+                // 会话，回到用户原本那个终端窗口没验证过。都记 unknown 而非
+                // unsupported，后者等于对用户断言平台做不到。
+                unknown: [
+                    .exactReturn,
+                    .inAppQuestion,
+                    .inAppPlanApproval,
                 ]
             )
         ),
