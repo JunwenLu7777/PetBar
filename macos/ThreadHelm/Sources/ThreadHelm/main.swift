@@ -151,6 +151,10 @@ if CommandLine.arguments.contains("--self-test-cursor-permission") {
     runCursorPermissionSelfTest()
 }
 
+if CommandLine.arguments.contains("--self-test-antigravity-permission") {
+    runAntigravityPermissionSelfTest()
+}
+
 if CommandLine.arguments.contains("--self-test-dynamic-island") {
     runDynamicIslandSelfTest()
 }

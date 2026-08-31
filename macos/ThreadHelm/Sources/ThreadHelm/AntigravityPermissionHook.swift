@@ -22,6 +22,7 @@
 //  基线：agy 1.1.22，契约由本机实测确定（见 AgentValidationProfile）。
 //
 
+import Darwin
 import Foundation
 
 enum AntigravityPermissionHookConstants {
@@ -59,6 +60,9 @@ enum AntigravityPermissionHookConstants {
     /// 判据是「跑一百次和跑零次对机器与外部世界没有区别」。浏览器的点击、
     /// 输入、执行 JS 都不在此列——它们能在页面上产生真实副作用。
     static let readOnlyToolNames: Set<String> = [
+        // 实测（1.1.22）列目录的真实工具名是 list_dir，不是文档里的
+        // list_directory；两个都留着，哪个来了都放行。
+        "list_dir",
         "view_file",
         "view_file_outline",
         "view_code_item",
@@ -95,11 +99,12 @@ enum AntigravityPermissionHookConstants {
     ]
 }
 
-/// agy 的用户级 customization root。
+/// agy CLI 的用户级 app-data 目录。只放我们的令牌文件。
 ///
-/// 刻意选 `antigravity-cli/` 而不是通用的 `config/`：两处实测都会被加载，
-/// 但 `config/` 是跨产品的，装在那里 IDE 会话也会触发我们的 hook，而
-/// ThreadHelm 这条线只认 CLI 会话——多出来的事件没有归属，只会变成噪音。
+/// hooks.json **不在**这里：这个目录里的 hook 只会被 agy 计入加载日志、
+/// 从不执行（1.1.22 本机探针实测），受管配置实际写在跨产品共享的
+/// `~/.gemini/config/hooks.json`（见 AntigravityHookConfiguration）。
+/// 共享位置带来的非 CLI 触发由 antigravityHookPayloadIsCLISession 过滤。
 ///
 /// 与受管集成写入的位置一致：那条路径由 AgentIntegrationScope 决定，
 /// 固定挂在 home 下，不看环境变量。
@@ -109,6 +114,116 @@ func antigravityConfigurationDirectoryURL(
     homeDirectory
         .appendingPathComponent(".gemini", isDirectory: true)
         .appendingPathComponent("antigravity-cli", isDirectory: true)
+}
+
+/// 这份 hook 负载来自 agy 的 CLI 会话，还是共享 hooks.json 捎带触发的
+/// 其它 Antigravity 产品（IDE、Antigravity 2.0）。
+///
+/// 判据是 common fields 里的 `transcriptPath`：产品各自的 app-data 目录
+/// 名不同——CLI 是 `antigravity-cli`、IDE 是 `antigravity-ide`、2.0 是
+/// `antigravity`（本机实测 CLI 形如
+/// `~/.gemini/antigravity-cli/brain/<会话>/…/transcript_full.jsonl`）。
+/// 缺字段或认不出产品目录时按 CLI 宽容处理：宁可多收一条事件，也不能
+/// 把真 CLI 会话滤成静默失联。
+func antigravityHookPayloadIsCLISession(_ payload: [String: Any]) -> Bool {
+    guard let transcriptPath = payload["transcriptPath"] as? String else {
+        return true
+    }
+    guard let product = URL(fileURLWithPath: transcriptPath)
+        .pathComponents
+        .first(where: { $0.hasPrefix("antigravity") })
+    else { return true }
+    return product == "antigravity-cli"
+}
+
+/// Data 版：解析不动的负载同样按 CLI 处理，后续环节自会按「需要把关」
+/// 的保守方向兜底。
+func antigravityHookBodyIsCLISession(_ body: Data) -> Bool {
+    guard let object = try? JSONSerialization.jsonObject(with: body),
+          let payload = object as? [String: Any]
+    else { return true }
+    return antigravityHookPayloadIsCLISession(payload)
+}
+
+/// 拉起这个 hook 的 agy 会话是否带着 `--dangerously-skip-permissions`。
+///
+/// 用户在 agy 侧选了全量放行时，agy 自己一次都不问；这时闸门再逐条弹
+/// 确认，等于比被守护的对象还严——只剩打扰。PreToolUse 负载里没有任何
+/// 权限模式字段（YOLO 与普通会话的 payload 逐字段实测相同），所以只能
+/// 沿父进程链找到拉起我们的那个 agy 进程，读它的启动参数。hook 由所属
+/// 会话的 agy 经 `sh -c` 拉起，父链天然指向正确的会话——同机混跑
+/// YOLO 与普通会话也不会互相串。
+///
+/// 链上任何一环取不到（进程已退、读不了 argv）一律按「没跳过」处理：
+/// 保守方向是多弹一次确认，不是放行。
+func antigravityInvokerSkipsPermissions(
+    startingFrom pid: pid_t = getppid(),
+    maximumDepth: Int = 8
+) -> Bool {
+    var current = pid
+    for _ in 0..<maximumDepth {
+        guard current > 1 else { return false }
+        if let arguments = processCommandLineArguments(of: current),
+           let executable = arguments.first
+        {
+            let name = URL(fileURLWithPath: executable).lastPathComponent
+            if name == "agy" || name.hasPrefix("antigravity") {
+                // 精确匹配整个参数项。在拼接后的命令行字符串里搜子串
+                // 会被 prompt 文本骗到（用户问一句「--dangerously-…是
+                // 什么」就成了 YOLO 会话）。
+                return arguments.dropFirst()
+                    .contains("--dangerously-skip-permissions")
+            }
+        }
+        guard let parent = processParentPID(of: current),
+              parent != current
+        else { return false }
+        current = parent
+    }
+    return false
+}
+
+func processParentPID(of pid: pid_t) -> pid_t? {
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+    guard sysctl(&mib, 4, &info, &size, nil, 0) == 0,
+          size >= MemoryLayout<kinfo_proc>.stride
+    else { return nil }
+    return info.kp_eproc.e_ppid
+}
+
+/// KERN_PROCARGS2 的布局是 `argc + 可执行路径 + NUL 填充 + argv 各项`，
+/// 必须按 argc 把 argv 一项项切出来，不能在整块 buffer 里搜字符串——
+/// 后半段还跟着环境变量。同 uid 的进程可读，hook 与 agy 同属当前用户。
+func processCommandLineArguments(of pid: pid_t) -> [String]? {
+    var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+    var size = 0
+    guard sysctl(&mib, 3, nil, &size, nil, 0) == 0,
+          size > MemoryLayout<Int32>.size
+    else { return nil }
+    var buffer = [UInt8](repeating: 0, count: size)
+    guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0,
+          size > MemoryLayout<Int32>.size
+    else { return nil }
+    let argc = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
+    guard argc > 0 else { return nil }
+    var index = MemoryLayout<Int32>.size
+    // 跳过可执行路径及其后的 NUL 填充。
+    while index < size, buffer[index] != 0 { index += 1 }
+    while index < size, buffer[index] == 0 { index += 1 }
+    var arguments: [String] = []
+    var start = index
+    while index < size, arguments.count < Int(argc) {
+        if buffer[index] == 0 {
+            arguments.append(
+                String(decoding: buffer[start..<index], as: UTF8.self)
+            )
+            start = index + 1
+        }
+        index += 1
+    }
+    return arguments.isEmpty ? nil : arguments
 }
 
 enum AntigravityHookConfigurationError: LocalizedError {

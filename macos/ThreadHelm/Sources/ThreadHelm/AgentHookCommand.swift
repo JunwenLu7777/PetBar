@@ -288,6 +288,11 @@ private func agentHookStateMapping(
         : .openNativeApp
 
     if agentID == .antigravity {
+        // 共享的 config/hooks.json 会被 IDE 与 Antigravity 2.0 一并加载，
+        // 它们的会话不归 ThreadHelm 管——事件进面板只会变成无法跳转的
+        // 噪音，就地丢弃。oversized 负载走不到这里，无从判断产品，那条
+        // 路径上的漏网按可容忍的边角处理。
+        guard antigravityHookPayloadIsCLISession(object) else { return nil }
         switch normalized {
         case "pre_invocation", "post_invocation", "pre_tool_use",
              "post_tool_use":

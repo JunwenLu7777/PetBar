@@ -5,10 +5,18 @@
 //  模块职责：Antigravity CLI（agy）的本地发现、hooks.json 生命周期、
 //  状态归一化和会话恢复。
 //
-//  受管对象是用户级的 `~/.gemini/antigravity-cli/hooks.json`。这份文件的
+//  受管对象是跨产品共享的 `~/.gemini/config/hooks.json`。这份文件的
 //  顶层是一张「具名 hook」表，ThreadHelm 只占其中一个键，用户自己的条目
 //  与我们互不相干——比 Codex 那种要在事件数组里逐条挑出自家 handler 的
 //  结构干净得多。
+//
+//  位置为什么是 `config/` 而不是 CLI 专属的 `antigravity-cli/`：后者
+//  只会被 hooks_manager 计入加载日志，里面的 hook 却一次也不会执行
+//  （agy 1.1.22，2026-08-31 本机探针实测；agy 自己的 changelog 也把
+//  「/hooks 写进 antigravity-cli」称为已修复的 bug）。代价是 `config/`
+//  被 IDE 与 Antigravity 2.0 共享，非 CLI 会话也会拉起我们的 hook——
+//  由 hook 进程按 transcriptPath 就地过滤，见
+//  antigravityHookPayloadIsCLISession。
 //
 //  基线：agy 1.1.22，契约由本机实测确定。
 //
@@ -37,6 +45,7 @@ struct AntigravityAgentAdapter: AgentAdapter {
     var managedIntegrationRelativePaths: [String] {
         [
             AntigravityHookConfiguration.hooksRelativePath,
+            AntigravityHookConfiguration.legacyHooksRelativePath,
             AntigravityHookConfiguration.tokenRelativePath,
         ]
     }
@@ -196,11 +205,18 @@ struct AntigravityAgentAdapter: AgentAdapter {
 // MARK: - hooks.json 管理
 
 enum AntigravityHookConfiguration {
-    /// 相对 home 的受管路径。与 antigravityConfigurationDirectoryURL 指向
-    /// 同一处——那条走 URL、这条走 AgentIntegrationScope，两边必须一致，
-    /// 否则备份覆盖不到真正被写的文件。
+    /// 令牌所在目录，相对 home。与 antigravityConfigurationDirectoryURL
+    /// 指向同一处——那条走 URL、这条走 AgentIntegrationScope，两边必须
+    /// 一致，否则备份覆盖不到真正被写的文件。hooks.json 不在这里，
+    /// 见 hooksRelativePath。
     static let configurationRelativePath = ".gemini/antigravity-cli"
-    static let hooksRelativePath = "\(configurationRelativePath)/hooks.json"
+    /// hooks.json 的受管路径：唯一会被 agy 真正执行的位置（见文件头）。
+    static let hooksRelativePath = ".gemini/config/hooks.json"
+    /// 早期版本写过的旧位置。agy 只把它计入加载日志、从不执行里面的
+    /// hook，留着一份受管键会让状态检测谎报「已安装」。安装、修复、
+    /// 卸载都要顺带清掉这里的残留。
+    static let legacyHooksRelativePath =
+        "\(configurationRelativePath)/hooks.json"
     static let tokenRelativePath =
         "\(configurationRelativePath)/"
             + AntigravityPermissionHookConstants.tokenFileName
@@ -210,6 +226,18 @@ enum AntigravityHookConfiguration {
         executablePath: String,
         fileManager: FileManager = .default
     ) throws -> AgentIntegrationStatus {
+        // 旧位置的残留键必须先看：那里的 hook 从不执行，真正危险的不是
+        // 它本身，而是它曾让检测谎报「已安装」。只要还在就报 needsRepair，
+        // 让修复流程把它清掉。
+        let legacyURL = try scope.managedURL(
+            relativePath: legacyHooksRelativePath,
+            for: .read
+        )
+        let legacyLingers = fileManager.fileExists(atPath: legacyURL.path)
+            && (try? loadConfiguration(at: legacyURL))?[
+                AntigravityAgentDefaults.managedHookName
+            ] != nil
+
         let url = try scope.managedURL(
             relativePath: hooksRelativePath,
             for: .read
@@ -227,7 +255,8 @@ enum AntigravityHookConfiguration {
         // 逐字比对整份 spec。命令里带着可执行文件的绝对路径，ThreadHelm
         // 被挪过位置后这份配置就指向一个不存在的二进制——那时 agy 的
         // fail-closed 会把用户的每一次工具调用都拦死，必须报出来让人修。
-        return equivalentJSON(owned, desired) ? .installed : .needsRepair
+        guard equivalentJSON(owned, desired) else { return .needsRepair }
+        return legacyLingers ? .needsRepair : .installed
     }
 
     @discardableResult
@@ -236,13 +265,21 @@ enum AntigravityHookConfiguration {
         executablePath: String,
         fileManager: FileManager = .default
     ) throws -> Bool {
+        // 顺带清掉旧位置的残留。清不动（比如用户手上有一份坏 JSON）就
+        // 算了——那份文件 agy 同样读不了，不该拦住正确位置的安装。
+        let migrated = (try? scope.managedURL(
+            relativePath: legacyHooksRelativePath
+        )).flatMap {
+            try? removeManagedHook(at: $0, fileManager: fileManager)
+        } ?? false
+
         let url = try scope.managedURL(relativePath: hooksRelativePath)
         var configuration = try loadConfiguration(at: url)
         let desired = managedHookSpec(executablePath: executablePath)
         if let existing = configuration[AntigravityAgentDefaults.managedHookName],
            equivalentJSON(existing, desired)
         {
-            return false
+            return migrated
         }
         configuration[AntigravityAgentDefaults.managedHookName] = desired
         try writeConfiguration(configuration, to: url, fileManager: fileManager)
@@ -254,15 +291,29 @@ enum AntigravityHookConfiguration {
         in scope: AgentIntegrationScope,
         fileManager: FileManager = .default
     ) throws -> Bool {
+        let legacyRemoved = (try? scope.managedURL(
+            relativePath: legacyHooksRelativePath
+        )).flatMap {
+            try? removeManagedHook(at: $0, fileManager: fileManager)
+        } ?? false
         let url = try scope.managedURL(relativePath: hooksRelativePath)
+        let removed = try removeManagedHook(at: url, fileManager: fileManager)
+        return removed || legacyRemoved
+    }
+
+    /// 从一份具名 hook 表里摘掉我们那个键。整份只剩空对象时连文件一起
+    /// 删——留一个 `{}` 就是卸载没卸干净；用户自己写过的条目会让它非空，
+    /// 走不到删除文件那步。
+    private static func removeManagedHook(
+        at url: URL,
+        fileManager: FileManager
+    ) throws -> Bool {
         guard fileManager.fileExists(atPath: url.path) else { return false }
         var configuration = try loadConfiguration(at: url)
         guard configuration
             .removeValue(forKey: AntigravityAgentDefaults.managedHookName) != nil
         else { return false }
         if configuration.isEmpty {
-            // 整份只剩一个空对象说明里面再没有别人的 hook。留一个 `{}`
-            // 就是卸载没卸干净；用户自己写过的条目会让它非空，走不到这里。
             try? fileManager.removeItem(at: url)
         } else {
             try writeConfiguration(

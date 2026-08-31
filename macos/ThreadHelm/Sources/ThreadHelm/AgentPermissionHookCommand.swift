@@ -222,7 +222,11 @@ struct AgentPermissionHookTransport {
     /// 兜底选 ask 而不是自己伪造拒绝：agy 的 hook 本身是 fail-closed 的
     /// （命令非零退出就阻断工具），闸门够不着时不需要我们再补一刀，把
     /// 决定权交回它自己的权限流程才不会把用户锁在工具外面。
-    static func antigravity() -> AgentPermissionHookTransport {
+    static func antigravity(
+        invokerSkipsPermissions: @escaping () -> Bool = {
+            antigravityInvokerSkipsPermissions()
+        }
+    ) -> AgentPermissionHookTransport {
         AgentPermissionHookTransport(
             agentID: .antigravity,
             flag: AntigravityPermissionHookConstants.flag,
@@ -233,9 +237,21 @@ struct AgentPermissionHookTransport {
             ),
             deadline: AntigravityPermissionHookConstants.requestTimeoutSeconds,
             shortCircuit: { body in
-                antigravityToolNameIsGuarded(in: body)
-                    ? nil
-                    : AntigravityPermissionHookConstants.passThroughOutput
+                // 共享 hooks.json 也会被 IDE 与 Antigravity 2.0 拉起。
+                // 别家的会话不归这道闸门管，交回产品自己的权限流程——
+                // 不能 allow（替人放行）也不能拦（把人卡在我们的面板上）。
+                guard antigravityHookBodyIsCLISession(body) else {
+                    return AntigravityPermissionHookConstants.handBackOutput
+                }
+                guard antigravityToolNameIsGuarded(in: body) else {
+                    return AntigravityPermissionHookConstants.passThroughOutput
+                }
+                // 会话本身带 --dangerously-skip-permissions 时 agy 自己
+                // 一次都不问，闸门再逐条弹只剩打扰——用户已经做过的
+                // 决定不该由我们替他反悔。
+                return invokerSkipsPermissions()
+                    ? AntigravityPermissionHookConstants.passThroughOutput
+                    : nil
             }
         )
     }
