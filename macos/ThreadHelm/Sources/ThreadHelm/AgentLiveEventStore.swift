@@ -235,6 +235,11 @@ func agentDashboardProjection(
         Thread.isMainThread
             ? OMPLocalSession.cachedContent(sessionID: $0)
             : OMPLocalSession.content(sessionID: $0)
+    },
+    antigravitySessionContent: (String) -> AntigravityLocalSessionContent? = {
+        Thread.isMainThread
+            ? AntigravityLocalSession.cachedContent(sessionID: $0)
+            : AntigravityLocalSession.content(sessionID: $0)
     }
 ) -> AgentDashboardProjection {
     let polledCollection = collection
@@ -295,7 +300,8 @@ func agentDashboardProjection(
                 events: events,
                 cursorWorkingDirectory: { _ in nil },
                 cursorSessionContent: { _ in nil },
-                ompSessionContent: ompSessionContent
+                ompSessionContent: ompSessionContent,
+                antigravitySessionContent: antigravitySessionContent
             )
         }
         return taskProgressItem(
@@ -303,7 +309,8 @@ func agentDashboardProjection(
             events: events,
             cursorWorkingDirectory: cursorWorkingDirectory,
             cursorSessionContent: cursorSessionContent,
-            ompSessionContent: ompSessionContent
+            ompSessionContent: ompSessionContent,
+            antigravitySessionContent: antigravitySessionContent
         )
     }
     return AgentDashboardProjection(
@@ -367,6 +374,11 @@ func taskProgressItem(
         Thread.isMainThread
             ? OMPLocalSession.cachedContent(sessionID: $0)
             : OMPLocalSession.content(sessionID: $0)
+    },
+    antigravitySessionContent: (String) -> AntigravityLocalSessionContent? = {
+        Thread.isMainThread
+            ? AntigravityLocalSession.cachedContent(sessionID: $0)
+            : AntigravityLocalSession.content(sessionID: $0)
     }
 ) -> TaskProgressItem {
     let kind: TaskProgressKind
@@ -410,6 +422,9 @@ func taskProgressItem(
     let localOMPContent = snapshot.identity.agentID == .omp
         ? ompSessionContent(snapshot.identity.nativeID)
         : nil
+    let localAntigravityContent = snapshot.identity.agentID == .antigravity
+        ? antigravitySessionContent(snapshot.identity.nativeID)
+        : nil
     let hookEvents = CursorLocalWorkspace.activityEvents(from: sessionEvents)
     let hookProjection = liveHookProjection(
         from: sessionEvents,
@@ -422,6 +437,9 @@ func taskProgressItem(
         localProjection = localContent?.projection
     } else if snapshot.identity.agentID == .omp, localOMPContent != nil {
         localProjection = localOMPContent?.projection
+    } else if snapshot.identity.agentID == .antigravity,
+              localAntigravityContent != nil {
+        localProjection = localAntigravityContent?.projection
     } else {
         localProjection = nil
     }
@@ -437,6 +455,8 @@ func taskProgressItem(
         resolvedDirectory = cursorWorkingDirectory(snapshot.identity.nativeID)
     } else if snapshot.identity.agentID == .omp {
         resolvedDirectory = localOMPContent?.workingDirectory
+    } else if snapshot.identity.agentID == .antigravity {
+        resolvedDirectory = localAntigravityContent?.workingDirectory
     } else {
         resolvedDirectory = nil
     }

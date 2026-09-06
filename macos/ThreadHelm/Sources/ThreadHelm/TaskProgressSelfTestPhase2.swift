@@ -885,3 +885,123 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
         exit(1)
     }
 }
+
+
+func runAntigravityLocalSessionSelfTest() {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory
+        .appendingPathComponent(
+            "threadhelm-aggy-local-\(UUID().uuidString)",
+            isDirectory: true
+        )
+    // 大写会话号顺带覆盖归一化路径。
+    let sessionID = "C7A9B2D1-4E5F-4A6B-8C9D-0E1F2A3B4C5D"
+    let transcriptDirectory = root
+        .appendingPathComponent(sessionID.lowercased(), isDirectory: true)
+        .appendingPathComponent(".system_generated/logs", isDirectory: true)
+    let transcriptURL = transcriptDirectory
+        .appendingPathComponent("transcript_full.jsonl")
+    defer { try? fileManager.removeItem(at: root) }
+    do {
+        try fileManager.createDirectory(
+            at: transcriptDirectory,
+            withIntermediateDirectories: true
+        )
+    } catch {
+        fputs("antigravity local fixture mkdir failed\n", stderr)
+        exit(1)
+    }
+    func writeTranscript(_ lines: [String]) {
+        try? Data(lines.joined(separator: "\n").appending("\n").utf8)
+            .write(to: transcriptURL)
+    }
+
+    // 真实格式脱敏夹具:GENERIC 是工具输出,USER_INPUT 是用户输入,
+    // 两者都绝不进预览;凭据文本必须被共享脱敏器打码。
+    let toolOutput =
+        #"{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-09-06T08:00:10Z","content":"The command exited with code 0. Output: secret-tool-output"}"#
+    let userPrompt =
+        #"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-09-06T08:00:00Z","content":"<USER_REQUEST>用户输入绝不显示</USER_REQUEST>"}"#
+    let publicText1 =
+        #"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-06T08:00:05Z","content":"已开始整理公开状态，第一条叙述。"}"#
+    let credentialText =
+        #"{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-06T08:00:20Z","content":"client_secret=agy-client-secret-123456 已脱敏。"}"#
+    writeTranscript([userPrompt, publicText1, toolOutput, credentialText])
+
+    guard let first = AntigravityLocalSession.content(
+        sessionID: sessionID,
+        brainRoot: root
+    ), first.projection.publicMessages.count == 2,
+        first.projection.publicMessages.map(\.text) == [
+            "已开始整理公开状态，第一条叙述。",
+            "client_secret=[已隐藏] 已脱敏。",
+        ],
+        first.projection.publicMessages.allSatisfy({
+            !$0.text.contains("secret-tool-output")
+                && !$0.text.contains("用户输入")
+                && !$0.text.contains("agy-client-secret-123456")
+        })
+    else {
+        fputs("antigravity local public output extraction failed\n", stderr)
+        exit(1)
+    }
+    guard AntigravityLocalSession.cachedContent(sessionID: sessionID) != nil
+    else {
+        fputs("antigravity local cached read failed\n", stderr)
+        exit(1)
+    }
+
+    // 追加一条新叙述:缓存按 mtime+size 失效,新条目出现,旧条目保留。
+    let appendedText =
+        #"{"step_index":4,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-06T08:01:00Z","content":"追加的第二条叙述。"}"#
+    writeTranscript([userPrompt, publicText1, toolOutput, credentialText, appendedText])
+    guard let second = AntigravityLocalSession.content(
+        sessionID: sessionID,
+        brainRoot: root
+    ), second.projection.publicMessages.count == 3,
+        second.projection.publicMessages.last?.text == "追加的第二条叙述。",
+        second.projection.publicMessages.first?.id.stableSourceKey
+            == first.projection.publicMessages.first?.id.stableSourceKey
+    else {
+        fputs("antigravity local incremental append failed\n", stderr)
+        exit(1)
+    }
+
+    // 预算:超过 32 条时只保留最近 32 条。
+    var flood = [String]()
+    for index in 0..<40 {
+        let minute = String(format: "%02d", index % 60)
+        flood.append(
+            #"{"step_index":\#(index + 10),"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-06T09:\#(minute):00Z","content":"洪水条目 \#(index)。"}"#
+        )
+    }
+    writeTranscript([userPrompt] + flood)
+    guard let flooded = AntigravityLocalSession.content(
+        sessionID: sessionID,
+        brainRoot: root
+    ), flooded.projection.publicMessages.count == 32,
+        flooded.projection.publicMessages.last?.text == "洪水条目 39。",
+        !flooded.projection.publicMessages.contains(where: {
+            $0.text.contains("洪水条目 7。")
+        })
+    else {
+        fputs("antigravity local visible-event budget failed\n", stderr)
+        exit(1)
+    }
+
+    // 不存在的会话返回 nil,绝不编造内容。
+    guard AntigravityLocalSession.content(
+        sessionID: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+        brainRoot: root
+    ) == nil else {
+        fputs("antigravity local missing session must be nil\n", stderr)
+        exit(1)
+    }
+
+    print(
+        "antigravity-local-session-self-test: "
+            + "planner-only=tool-output-and-user-input-excluded "
+            + "sanitize=credential-redacted append=stable-key "
+            + "budget=32+newest-kept missing-session=nil"
+    )
+}
