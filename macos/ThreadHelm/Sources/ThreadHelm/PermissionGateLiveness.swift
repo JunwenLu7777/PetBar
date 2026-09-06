@@ -15,6 +15,7 @@
 //  就证明「厂商加载了 hook → hook 找到了令牌 → 端到端连通」整条链路成立。
 //
 
+import Darwin
 import Foundation
 
 struct PermissionGateLivenessRecord: Equatable {
@@ -385,12 +386,28 @@ final class PermissionGateLivenessStore {
         guard let data = try? JSONSerialization.data(
             withJSONObject: payload,
             options: [.sortedKeys]
-        ) else { return }
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try? data.write(to: url, options: .atomic)
+        ) else {
+            fputs("permission-gate-liveness: 记录序列化失败\n", stderr)
+            return
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            // 该文件是「闸门是否连通」判定的唯一持久证据,以 0600 落盘;
+            // 写盘失败必须留痕——静默丢记录会让闸门状态无声回退。
+            try data.write(
+                to: url,
+                options: [.atomic]
+            )
+            _ = chmod(url.path, S_IRUSR | S_IWUSR)
+        } catch {
+            fputs(
+                "permission-gate-liveness: 记录写盘失败：\(error.localizedDescription)\n",
+                stderr
+            )
+        }
     }
 }
 

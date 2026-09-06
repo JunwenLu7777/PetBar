@@ -2,7 +2,7 @@
 //  AgentOpenMeasurement.swift
 //  ThreadHelm
 //
-//  模块职责：在本机记录五 Agent 的打开结果计数；不保存标题、路径、
+//  模块职责：在本机记录六 Agent 的打开结果计数；不保存标题、路径、
 //  session/thread ID、时间线或时间戳。
 //
 

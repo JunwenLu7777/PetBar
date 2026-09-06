@@ -273,6 +273,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var isTaskRepositoryEvidenceRefreshing = false
     private var isPanelHiddenByUser = false
     private var cachedCodexDesktopRunning = false
+    /// Codex 原生气泡同步的全部状态（generation/probe/attemptCount）都
+    /// 必须只在这条串行队列上访问：check 与外部状态变更共用一条队列。
+    private let codexOverlaySyncQueue = DispatchQueue(
+        label: "\(threadHelmBundleIdentifier).overlay-sync",
+        qos: .utility
+    )
     private lazy var codexOverlayNotificationSynchronizer: CodexOverlayNotificationSynchronizer = {
         let paths = CodexOverlayNotificationPaths.current()
         return CodexOverlayNotificationSynchronizer(
@@ -287,8 +293,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self?.cachedCodexDesktopRunning == false
                 }
             },
-            schedule: { delay, check in
-                DispatchQueue.main.asyncAfter(
+            schedule: { [weak self] delay, check in
+                // runCheck 在主线程做全量 JSON 读盘+解析+写盘（每 0.25s
+                // 一轮、Codex 退出后最长 20 秒），会把灵动岛动画和确认
+                // UI 一起拖卡。落到专用串行队列，与 codexRunningState-
+                // DidChange/stop 的入口共用同一条队列串行化状态。
+                self?.codexOverlaySyncQueue.asyncAfter(
                     deadline: .now() + delay,
                     execute: check
                 )
@@ -409,7 +419,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         nativeActivityPillSuppressionMonitor.stop()
-        codexOverlayNotificationSynchronizer.stop()
+        codexOverlaySyncQueue.sync {
+            codexOverlayNotificationSynchronizer.stop()
+        }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         if let screenParametersObserver {
             NotificationCenter.default.removeObserver(screenParametersObserver)
@@ -568,9 +580,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         cachedCodexDesktopRunning = isCodexDesktopRunning()
         dashboardStore.update { $0.codexDesktopRunning = cachedCodexDesktopRunning }
-        codexOverlayNotificationSynchronizer.codexRunningStateDidChange(
-            cachedCodexDesktopRunning
-        )
+        codexOverlaySyncQueue.async { [weak self] in
+            self?.codexOverlayNotificationSynchronizer
+                .codexRunningStateDidChange(self?.cachedCodexDesktopRunning ?? true)
+        }
     }
 
     @objc private func codexDesktopApplicationStateDidChange(
@@ -601,9 +614,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard isRunning != cachedCodexDesktopRunning else { return }
         cachedCodexDesktopRunning = isRunning
         dashboardStore.update { $0.codexDesktopRunning = isRunning }
-        codexOverlayNotificationSynchronizer.codexRunningStateDidChange(
-            isRunning
-        )
+        codexOverlaySyncQueue.async { [weak self] in
+            self?.codexOverlayNotificationSynchronizer
+                .codexRunningStateDidChange(isRunning)
+        }
         if !isRunning {
             claudePermissionCoordinator?.cancelAll()
         }
@@ -672,8 +686,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         permissionGateLiveness.setVersionSignatureProvider { agentID in
             versionSignatures.signature(for: agentID)
         }
+        // 签名私钥必须在 server 开始接请求前就绪:先落公钥再开监听,
+        // hook 端看到的「公钥存在」永远对应一个会签名的面板。
+        let gateSigningKey = GateDecisionSigning.ensureSigningKey()
         let server = ClaudePermissionHookServer(
-            liveness: permissionGateLiveness
+            liveness: permissionGateLiveness,
+            signingPrivateKey: gateSigningKey
         )
         server.onPrompt = { [weak self] prompt, completion in
             guard let self else {
@@ -854,6 +872,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func hidePanelByUser() {
         isPanelHiddenByUser = true
+        // 用户显式隐藏后，新到达的确认请求只进队列、不呈现：present 的
+        // onExpand 没有经过 dynamicIslandVisibilityAction 的单一决策点，
+        // 不停掉呈现器就会把用户藏起来的岛重新弹出来，问答类请求还会
+        // 借 NSApp.activate 抢走全局焦点。请求本身不丢——重新显示时
+        // showCurrentPresentation 会按队列当前状态恢复工作区。
+        dynamicIslandConfirmationPresenter?.setPresentationActive(false)
         dynamicIslandController?.hide()
         updateRecoveryActivationPolicy()
         updateStatusMenu()
@@ -867,6 +891,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showPanelFromStatusItem() {
         isPanelHiddenByUser = false
+        dynamicIslandConfirmationPresenter?.setPresentationActive(true)
         updateRecoveryActivationPolicy()
         updateStatusMenu()
         showCurrentPresentation()

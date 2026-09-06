@@ -587,9 +587,7 @@ func taskElapsedText(from startedAt: Date, to now: Date) -> String {
 }
 
 func taskStartAndDurationText(from startedAt: Date, now: Date) -> String {
-    let formatter = DateFormatter()
-    formatter.dateFormat = "HH:mm"
-    let started = formatter.string(from: startedAt)
+    let started = taskStartClockFormatter.string(from: startedAt)
     return "\(started) · \(taskElapsedText(from: startedAt, to: now))"
 }
 
@@ -725,7 +723,11 @@ func dynamicIslandCapsulePresentation(
         case .exitPlanMode: typeText = "计划待审批"
         case nil: typeText = "请求待确认"
         }
-        let title = current?.title ?? "Claude 等待确认"
+        // 来源跟随队列当前请求的真实 agent,不再硬编码 Claude Code——
+        // 队列里是 Codex/ZCode 的请求时,胶囊却写着"Claude Code"是误导。
+        let confirmationProviderID = current?.agentID ?? .claudeCode
+        let confirmationProviderName = agentPresentation(for: confirmationProviderID).displayName
+        let title = current?.title ?? "\(confirmationProviderName) 等待确认"
         let elapsed = current.map { taskStartAndDurationText(from: $0.arrivedAt, now: now) }
         let badge = "\(snapshot.permissionQueue.count)"
         return DynamicIslandCapsulePresentation(
@@ -733,8 +735,8 @@ func dynamicIslandCapsulePresentation(
             statusText: "待确认",
             activityText: typeText,
             elapsedText: elapsed,
-            provider: .claudeCode,
-            providerText: "Claude Code",
+            provider: confirmationProviderID,
+            providerText: confirmationProviderName,
             badgeText: badge,
             quotaItems: [],
             progressStyle: .waiting,

@@ -1309,9 +1309,7 @@ final class DynamicIslandTaskViewController:
     }
 
     private var eventTimeFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter
+        taskEventClockFormatter
     }
 
     func visibleTaskKeysForSelfTest() -> [String] {

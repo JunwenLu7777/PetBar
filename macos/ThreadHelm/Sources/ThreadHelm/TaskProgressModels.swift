@@ -160,6 +160,11 @@ struct TaskProgressItem: Equatable {
         if source == .omp {
             return sessionID.flatMap(normalizedOMPSessionID) != nil
         }
+        if source == .antigravity {
+            // 与 OMP 同构：conversationId 能通过 UUID 归一化才可打开，
+            // 对应 `agy --conversation <id>` 的打开链路。
+            return sessionID.flatMap(normalizedAntigravitySessionID) != nil
+        }
         return false
     }
 

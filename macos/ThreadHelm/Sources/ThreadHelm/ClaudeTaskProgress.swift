@@ -1283,7 +1283,10 @@ final class ClaudeTaskProgressReader {
             homeDirectory: homeDirectory,
             fileManager: fileManager
         ).map {
-            TranscriptRoot(url: $0, allowsAgentOpen: true)
+            // Desktop 会话只读：`claude --resume` 只对 CLI 会话有意义，
+            // 对 Desktop 会话执行恢复是把一次错误恢复冒充成精确返回
+            //（79e1d24 的设计决定，不许在重构里翻转）。
+            TranscriptRoot(url: $0, allowsAgentOpen: false)
         })
 
         var byPath: [String: TranscriptCandidate] = [:]

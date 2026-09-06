@@ -90,6 +90,7 @@ final class AgentEventSocketServer {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw AgentEventSocketError.socketCreationFailed }
         AgentEventSocketOptions.disableSIGPIPE(on: fd)
+        var didBind = false
 
         do {
             try AgentEventSocketAddress.withSockAddr(
@@ -98,6 +99,7 @@ final class AgentEventSocketServer {
                 guard bind(fd, pointer, length) == 0 else {
                     throw AgentEventSocketError.bindFailed
                 }
+                didBind = true
             }
             guard chmod(configuration.socketURL.path, S_IRUSR | S_IWUSR) == 0,
                   AgentEventSocketFileSystem.socketIsOwnerOnly(
@@ -112,7 +114,11 @@ final class AgentEventSocketServer {
             }
         } catch {
             close(fd)
-            unlink(configuration.socketURL.path)
+            // 只清理自己 bind 成功后留下的 socket 文件;bind 之前的失败
+            // (权限校验失败等)不该删掉可能是别人的同路径文件。
+            if didBind {
+                unlink(configuration.socketURL.path)
+            }
             throw error
         }
 
@@ -703,7 +709,15 @@ private func fdSet(_ fd: CInt, _ set: inout fd_set) {
     let mask = Int32(bitPattern: UInt32(1) << UInt32(bitOffset))
     let bitsetCapacity = MemoryLayout.size(ofValue: set.fds_bits)
         / MemoryLayout<Int32>.size
-    guard intOffset >= 0, intOffset < bitsetCapacity else { return }
+    guard intOffset >= 0, intOffset < bitsetCapacity else {
+        // 静默跳过会让该 fd 永远不被 select 监听,直到 deadline 才失败,
+        // 排查时毫无线索。留一行 stderr 再返回。
+        fputs(
+            "agent-event-socket: fd \(fd) exceeds select() capacity\n",
+            stderr
+        )
+        return
+    }
     withUnsafeMutablePointer(to: &set.fds_bits) { pointer in
         pointer.withMemoryRebound(
             to: Int32.self,

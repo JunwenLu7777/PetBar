@@ -298,12 +298,24 @@ func runOttyCLI(arguments: [String]) -> Data? {
     process.standardError = FileHandle.nullDevice
     do {
         try process.run()
-        process.waitUntilExit()
     } catch {
         return nil
     }
-    guard process.terminationStatus == 0 else { return nil }
-    return output.fileHandleForReading.readDataToEndOfFile()
+    // 必须走有界捕获：先 waitUntilExit 再读管道，在 otty 挂住（等
+    // daemon/锁）或输出超过管道缓冲时是经典死锁，而这是常驻进程，
+    // 卡住即功能永久失效。其余所有子进程调用都走 captureProcessOutput，
+    // 这里不应当是唯一的例外。
+    let result = captureProcessOutput(
+        process: process,
+        output: output.fileHandleForReading,
+        timeout: 10,
+        maximumOutputBytes: 4 * 1_048_576
+    )
+    // 只认进程正常退出：outputClosed 说明管道关了但进程还挂着，
+    // 此时 terminationStatus 与输出完整性都不可信。
+    guard result.termination == .exited, process.terminationStatus == 0
+    else { return nil }
+    return result.data
 }
 
 func normalizedAbsolutePath(_ value: String) -> String? {

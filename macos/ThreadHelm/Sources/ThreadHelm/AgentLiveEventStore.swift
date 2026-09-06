@@ -314,13 +314,21 @@ func agentDashboardProjection(
 }
 
 private func isDisplayableLiveSnapshot(_ snapshot: AgentSessionSnapshot) -> Bool {
-    guard snapshot.identity.agentID == .cursor else { return true }
     let nativeID = snapshot.identity.nativeID
         .trimmingCharacters(in: .whitespacesAndNewlines)
-    return nativeID.count >= 8
-        && nativeID != "unidentified"
-        && nativeID != "unknown-session"
-        && !nativeID.hasPrefix("unknown-")
+    if snapshot.identity.agentID == .cursor {
+        return nativeID.count >= 8
+            && nativeID != "unidentified"
+            && nativeID != "unknown-session"
+            && !nativeID.hasPrefix("unknown-")
+    }
+    if snapshot.identity.agentID == .zcode {
+        // ZCode 缺 sessionID 时适配器会按 eventID 合成一次性会话身份，
+        // 每个事件出一张假卡、互相挤占保留预算。同一种防御不能只修
+        // Cursor 一家。
+        return !nativeID.hasPrefix("zcode-event-")
+    }
+    return true
 }
 
 struct AgentLiveReductionUpdate {
@@ -614,10 +622,16 @@ private func liveHookStableSourceKey(_ event: AgentEvent) -> String {
 }
 
 final class AgentLiveEventStore {
+    private struct SequenceTracker {
+        var maxSequence: Int
+        var observedAt: Date
+    }
+
     private let lock = NSLock()
     private let maximumEventsPerAgent: Int
     private let maximumBytesPerAgent: Int
     private var eventsByAgentID: [AgentID: [String: RetainedAgentLiveEvent]] = [:]
+    private var sequenceTrackers: [String: SequenceTracker] = [:]
     private var revision: UInt64 = 0
 
     init(
@@ -671,6 +685,36 @@ final class AgentLiveEventStore {
 
         lock.lock()
         var indexed = eventsByAgentID[event.identity.agentID] ?? [:]
+        // 扩展热加载/重装后，进程内的 sequence 计数器会归零重来。若不
+        // 处理，旧代的高 sequence 事件会永远压过新一代事件，会话卡被
+        // 冻结在旧终态直到被容量淘汰。判据有三条，缺一不可：sequence
+        // 严格小于该会话已见最大值、observedAt 更新、且 eventID 是没见
+        // 过的新事件——同 eventID 的重复投递不在此列，仍由既有的
+        // replace 规则裁决（低 sequence 副本不该顶掉高 sequence 原件）。
+        if let sequence = event.sequence {
+            var tracker = sequenceTrackers[event.identity.key]
+                ?? SequenceTracker(maxSequence: Int.min, observedAt: .distantPast)
+            if sequence >= tracker.maxSequence {
+                tracker.maxSequence = sequence
+                tracker.observedAt = event.observedAt
+                sequenceTrackers[event.identity.key] = tracker
+            } else {
+                let eventIDAlreadyStored = indexed.values.contains {
+                    $0.event.identity.key == event.identity.key
+                        && $0.event.eventID == event.eventID
+                }
+                if !eventIDAlreadyStored,
+                   event.observedAt > tracker.observedAt
+                {
+                    indexed = indexed.filter {
+                        $0.value.event.identity.key != event.identity.key
+                    }
+                    tracker.maxSequence = sequence
+                    tracker.observedAt = event.observedAt
+                    sequenceTrackers[event.identity.key] = tracker
+                }
+            }
+        }
         let storageKey = agentLiveEventStorageKey(event)
         let retained = RetainedAgentLiveEvent(
             event: event,

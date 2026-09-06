@@ -2,7 +2,7 @@
 //  AgentIntegrationManager.swift
 //  ThreadHelm
 //
-//  模块职责：为五个本地 Agent 提供统一、显式的 status/install/repair/
+//  模块职责：为六个本地 Agent 提供统一、显式的 status/install/repair/
 //  uninstall/restore 入口，并用 owner-only 备份包围整次配置变更。
 //
 
@@ -98,6 +98,32 @@ struct AgentIntegrationManager {
                 didRollback: false
             )
         }
+
+        // 串行化配置变更：备份/回滚的正确性隐含「串行执行」假设，而
+        // 面板触发的 repair 与安装脚本可能并发进入。两个实例同时跑会
+        // 互相覆盖写入，先写者的失败回滚还会把后写者的成功条目一并
+        // 抹掉。锁文件挂在 scope 根目录，隔离测试与真实安装互不干扰。
+        let lockURL = scope.rootDirectory
+            .appendingPathComponent(".threadhelm-integration.lock")
+        let lockFD = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        guard lockFD >= 0 else {
+            throw AgentIntegrationManagerError(
+                operation: operation,
+                agentID: targetAgentID,
+                reason: "无法打开集成互斥锁文件：\(lockURL.path)",
+                didRollback: false
+            )
+        }
+        defer { close(lockFD) }
+        guard flock(lockFD, LOCK_EX) == 0 else {
+            throw AgentIntegrationManagerError(
+                operation: operation,
+                agentID: targetAgentID,
+                reason: "无法锁定集成互斥锁：\(lockURL.path)",
+                didRollback: false
+            )
+        }
+        defer { flock(lockFD, LOCK_UN) }
 
         let backupStore = AgentIntegrationBackupStore(scope: scope)
         let relativePaths = managedRelativePaths(

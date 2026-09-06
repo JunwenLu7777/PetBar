@@ -11,7 +11,7 @@ import Foundation
 let refreshInterval: TimeInterval = 60
 let taskProgressRefreshInterval: TimeInterval = 2
 let codexTaskProgressRescanInterval: TimeInterval = 5
-let panelVersion = "1.1.0"
+let panelVersion = "1.1.1"
 let panelEdition = "threadhelm"
 let threadHelmProductID = "threadhelm"
 let overlayStateRefreshInterval: TimeInterval = 0.25
@@ -40,6 +40,24 @@ func quotaLevel(for remainingPercent: Int) -> QuotaLevel {
         return .exhausted
     }
 }
+
+/// 确认队列与任务详情共用的时间戳 formatter。DateFormatter 的创建
+/// 开销很大,快照每 2 秒刷新、逐行调用时不应每次新建。
+let taskEventClockFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "zh_CN")
+    formatter.timeZone = .current
+    formatter.dateFormat = "HH:mm:ss"
+    return formatter
+}()
+
+let taskStartClockFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "zh_CN")
+    formatter.timeZone = .current
+    formatter.dateFormat = "HH:mm"
+    return formatter
+}()
 
 let quotaResetClockFormatter: DateFormatter = {
     let formatter = DateFormatter()

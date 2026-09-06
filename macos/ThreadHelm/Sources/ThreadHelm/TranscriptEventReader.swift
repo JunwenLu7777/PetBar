@@ -283,6 +283,7 @@ final class TranscriptEventReader {
         }
         defer { try? handle.close() }
         let passStart = clock.nowNanoseconds()
+        var lastChunkEndNanoseconds = passStart
         var produced: [TranscriptRecordRange] = []
         var consumed = 0
         var wallExceeded = false
@@ -307,10 +308,16 @@ final class TranscriptEventReader {
                 diagnostics.rawChunksRead += 1
                 workingFramer.feed(chunk, chunkStart: chunkStart)
                 postChunkReadHook?()
-                wallExceeded = clock.nowNanoseconds() - passStart > wallClockNs
+                let nowNanoseconds = clock.nowNanoseconds()
+                wallExceeded = nowNanoseconds - passStart > wallClockNs
                 if wallExceeded {
-                    diagnostics.wallTimeMs += budget.softWallTime * 1_000
+                    // 记实际墙钟增量,别固定加 softWallTime——诊断值要与
+                    // 真实耗时对得上,基于诊断的告警才有意义。
+                    diagnostics.wallTimeMs += Double(
+                        nowNanoseconds &- lastChunkEndNanoseconds
+                    ) / 1_000_000
                 }
+                lastChunkEndNanoseconds = nowNanoseconds
             }
         } catch {
             return .failure(.ioFailed)
@@ -394,8 +401,9 @@ final class TranscriptEventReader {
         defer { try? handle.close() }
         do {
             let passStart = clock.nowNanoseconds()
+            var lastChunkEndNanoseconds = passStart
             var cursor = endOffset
-            var data = Data()
+            var collectedChunks: [Data] = []
             while cursor > plannedLowerBound {
                 if isCancelled() { break }
                 let chunkStart: UInt64
@@ -408,18 +416,26 @@ final class TranscriptEventReader {
                 try handle.seek(toOffset: chunkStart)
                 let chunk = try handle.read(upToCount: chunkSize) ?? Data()
                 guard !chunk.isEmpty else { break }
-                var combined = Data(capacity: chunk.count + data.count)
-                combined.append(chunk)
-                combined.append(data)
-                data = combined
+                // 前插 chunk 不能每轮全量重拼——8 MiB 窗口按 1 MiB chunk
+                // 累计拷贝约 36 MiB。先收集,循环外一次性拼接。
+                collectedChunks.append(chunk)
                 diagnostics.bytesRead += chunk.count
                 diagnostics.rawChunksRead += 1
                 cursor = chunkStart
                 postChunkReadHook?()
-                if clock.nowNanoseconds() - passStart > wallClockNs {
-                    diagnostics.wallTimeMs += budget.softWallTime * 1_000
+                let nowNanoseconds = clock.nowNanoseconds()
+                if nowNanoseconds - passStart > wallClockNs {
+                    diagnostics.wallTimeMs += Double(
+                        nowNanoseconds &- lastChunkEndNanoseconds
+                    ) / 1_000_000
                     break
                 }
+            }
+            // 收集完再一次性拼接：chunks按读取顺序是自后向前的。
+            var data = Data()
+            data.reserveCapacity(collectedChunks.reduce(0) { $0 + $1.count })
+            for chunk in collectedChunks.reversed() {
+                data.append(chunk)
             }
             let lowerBound = cursor
             guard !data.isEmpty else {

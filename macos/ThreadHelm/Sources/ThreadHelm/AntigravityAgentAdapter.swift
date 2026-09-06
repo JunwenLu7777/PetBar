@@ -233,10 +233,12 @@ enum AntigravityHookConfiguration {
             relativePath: legacyHooksRelativePath,
             for: .read
         )
+        // 读不出配置(损坏/格式变了)同样算残留：注释承诺的是「只要还在
+        // 就报 needsRepair」，损坏的 legacy 文件恰好最需要修复流程清理。
         let legacyLingers = fileManager.fileExists(atPath: legacyURL.path)
-            && (try? loadConfiguration(at: legacyURL))?[
+            && ((try? loadConfiguration(at: legacyURL))?[
                 AntigravityAgentDefaults.managedHookName
-            ] != nil
+            ] != nil || (try? loadConfiguration(at: legacyURL)) == nil)
 
         let url = try scope.managedURL(
             relativePath: hooksRelativePath,

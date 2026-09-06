@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Network
 
@@ -141,6 +142,10 @@ final class ClaudePermissionHookServer {
     /// 请求送达并解析成功。hook 进程自己记不了这件事——它连不上的时候
     /// 恰恰就是最需要如实记录「没连通」的时候。
     private let liveness: PermissionGateLivenessStore?
+    /// 裁决响应签名私钥（nil = 不签名）。hook 端只在公钥文件存在时
+    /// 强制校验；两端在同一个二进制里，正常部署不会出现「公钥在而
+    /// 这里签不了」的组合——ensureSigningKey 失败时会撤掉公钥。
+    private let signingPrivateKey: Curve25519.Signing.PrivateKey?
     private let queue = DispatchQueue(
         label: "dev.threadhelm.claude-permission-hook",
         qos: .userInitiated
@@ -153,13 +158,15 @@ final class ClaudePermissionHookServer {
         routes: [PermissionHookRoute] = [
             .claude(), .codex(), .zcode(), .omp(), .cursor(), .antigravity(),
         ],
-        liveness: PermissionGateLivenessStore? = nil
+        liveness: PermissionGateLivenessStore? = nil,
+        signingPrivateKey: Curve25519.Signing.PrivateKey? = nil
     ) {
         self.routes = Dictionary(
             routes.map { ($0.path, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         self.liveness = liveness
+        self.signingPrivateKey = signingPrivateKey
     }
 
     static func isAuthenticated(
@@ -374,6 +381,10 @@ final class ClaudePermissionHookServer {
                     reason: "OK",
                     body: body,
                     contentType: "application/json",
+                    signature: GateDecisionSigning.sign(
+                        body,
+                        privateKey: self.signingPrivateKey
+                    ),
                     connection: pending.connection
                 )
             } else {
@@ -442,6 +453,7 @@ final class ClaudePermissionHookServer {
         reason: String,
         body: Data,
         contentType: String? = nil,
+        signature: String? = nil,
         connection: NWConnection
     ) {
         var header = "HTTP/1.1 \(status) \(reason)\r\n"
@@ -450,6 +462,9 @@ final class ClaudePermissionHookServer {
         header += "X-ThreadHelm-Hook: claude-permission-v1\r\n"
         if let contentType {
             header += "Content-Type: \(contentType)\r\n"
+        }
+        if let signature {
+            header += "\(GateDecisionSigning.signatureHeader): \(signature)\r\n"
         }
         header += "\r\n"
         var response = Data(header.utf8)

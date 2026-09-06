@@ -13,6 +13,11 @@ import CoreGraphics
 import Darwin
 import Foundation
 
+// 常驻进程要对 SIGPIPE 免疫：向已关闭的管道写数据（codex app-server 在
+// initialize 应答后立即退出、osascript 提前死掉等时序）默认会直接终止
+// 进程。忽略后写操作返回 EPIPE，由各自的 do/catch 走正常失败路径。
+signal(SIGPIPE, SIG_IGN)
+
 // Agent hooks are synchronous vendor callbacks. Handle them before AppKit is
 // initialized, keep stdout empty, and always fail open even if ThreadHelm is
 // stopped or its local endpoint is unhealthy.

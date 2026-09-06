@@ -13,6 +13,7 @@ final class DynamicIslandWindowController {
     private(set) var state: DynamicIslandPresentationState = .hidden
     private(set) var targetDisplayID: CGDirectDisplayID?
     private(set) var isAnimating = false
+    private var pendingExpand: (tab: DynamicIslandTab, selectedTaskKey: String?)?
 
     var onOpenTask: ((TaskProgressItem) -> OpenResult)?
     var onRequestHide: (() -> Void)?
@@ -156,6 +157,7 @@ final class DynamicIslandWindowController {
 
     func showCapsule() {
         state = .capsule
+        pendingExpand = nil
         panel.allowsKeyWindow = false
         panel.level = panelDefaultWindowLevel
         removeInteractionMonitors()
@@ -170,7 +172,14 @@ final class DynamicIslandWindowController {
     }
 
     func expand(_ tab: DynamicIslandTab, selectedTaskKey: String?) {
-        guard !isAnimating else { return }
+        guard !isAnimating else {
+            // 动画期间的展开请求不能静默丢掉：确认工作区的 present 已经
+            // 把内容应用到视图并置位 isPresenting，窗口却停在胶囊态，
+            // 呈现层与数据层就此脱节。记下来，动画 completion 里补上。
+            pendingExpand = (tab, selectedTaskKey)
+            return
+        }
+        pendingExpand = nil
         state = .expanded(tab)
         self.selectedTaskKey = selectedTaskKey
         panel.allowsKeyWindow = true
@@ -184,6 +193,7 @@ final class DynamicIslandWindowController {
 
     func collapse() {
         state = .capsule
+        pendingExpand = nil
         releaseKeyFocus()
         panel.allowsKeyWindow = false
         removeInteractionMonitors()
@@ -195,6 +205,7 @@ final class DynamicIslandWindowController {
 
     func hide() {
         state = .hidden
+        pendingExpand = nil
         pendingConfirmationFocus = false
         releaseKeyFocus()
         panel.allowsKeyWindow = false
@@ -333,6 +344,7 @@ final class DynamicIslandWindowController {
             rememberedExpandedSize = panel.frame.size
         }
         panel.invalidateShadow()
+        flushPendingExpand()
     }
 
     func visibleFrameForSelfTest() -> NSRect {
@@ -517,6 +529,13 @@ final class DynamicIslandWindowController {
         }
         lockCapsuleSizeIfNeeded(for: state)
         panel.invalidateShadow()
+        flushPendingExpand()
+    }
+
+    private func flushPendingExpand() {
+        guard !isAnimating, let pending = pendingExpand else { return }
+        pendingExpand = nil
+        expand(pending.tab, selectedTaskKey: pending.selectedTaskKey)
     }
 
     private func installInteractionMonitors() {

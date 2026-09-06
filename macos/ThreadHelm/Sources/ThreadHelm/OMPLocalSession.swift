@@ -54,6 +54,12 @@ enum OMPLocalSession {
     private static var contentCache: [String: CachedContent] = [:]
     private static var sessionContentCache: [String: OMPLocalSessionContent] = [:]
     private static var sessionStateCache: [String: SessionState] = [:]
+    /// 常驻面板的生命周期里会遍历到任意多的历史会话，这些缓存只进不出
+    /// 就是无界内存增长。按「最近触碰」淘汰，容量按会话数计。
+    private static let maximumCachedSessions = 64
+    private static var pathCacheTouchStamps: [String: Date] = [:]
+    private static var idCacheTouchStamps: [String: Date] = [:]
+    private static var sessionLocks: [String: NSLock] = [:]
 
     static func resetInMemoryStateForTesting() {
         cacheLock.lock()
@@ -61,7 +67,63 @@ enum OMPLocalSession {
         contentCache.removeAll()
         sessionContentCache.removeAll()
         sessionStateCache.removeAll()
+        pathCacheTouchStamps.removeAll()
+        idCacheTouchStamps.removeAll()
+        sessionLocks.removeAll()
         cacheLock.unlock()
+    }
+
+    /// 同一会话的读-改-写必须串行：SessionState 持有可变的
+    /// TranscriptEventReader，两个线程并发进入会互相踩掉扫描进度、后
+    /// 写回者覆盖前者。锁按 sessionKey 取，跨会话仍然并行。锁字典不
+    /// 参与淘汰——淘汰一把可能正被持有的锁会重新打开并发窗口，而
+    /// NSLock 本身只有几十字节。
+    private static func sessionSerializationLock(
+        forKey key: String
+    ) -> NSLock {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let existing = sessionLocks[key] { return existing }
+        let lock = NSLock()
+        sessionLocks[key] = lock
+        return lock
+    }
+
+    // 以下 touch/prune 都要求调用方已持有 cacheLock（NSLock 不可重入）。
+    private static func touchPathCacheLocked(_ key: String) {
+        pathCacheTouchStamps[key] = Date()
+        prunePathCacheLocked()
+    }
+
+    private static func touchIDCacheLocked(_ key: String) {
+        idCacheTouchStamps[key] = Date()
+        pruneIDCacheLocked()
+    }
+
+    private static func prunePathCacheLocked() {
+        guard pathCacheTouchStamps.count > maximumCachedSessions else { return }
+        let evictions = pathCacheTouchStamps
+            .sorted { $0.value < $1.value }
+            .prefix(pathCacheTouchStamps.count - maximumCachedSessions)
+            .map(\.key)
+        for key in evictions {
+            pathCacheTouchStamps.removeValue(forKey: key)
+            sessionURLCache.removeValue(forKey: key)
+            sessionStateCache.removeValue(forKey: key)
+            contentCache.removeValue(forKey: key)
+        }
+    }
+
+    private static func pruneIDCacheLocked() {
+        guard idCacheTouchStamps.count > maximumCachedSessions else { return }
+        let evictions = idCacheTouchStamps
+            .sorted { $0.value < $1.value }
+            .prefix(idCacheTouchStamps.count - maximumCachedSessions)
+            .map(\.key)
+        for key in evictions {
+            idCacheTouchStamps.removeValue(forKey: key)
+            sessionContentCache.removeValue(forKey: key)
+        }
     }
 
     static func content(sessionID: String) -> OMPLocalSessionContent? {
@@ -92,6 +154,26 @@ enum OMPLocalSession {
         }
         guard let normalizedSessionID = normalizedOMPSessionID(sessionID)
         else { return nil }
+        let serializationLock = sessionSerializationLock(
+            forKey: "omp-content:\(normalizedSessionID)"
+        )
+        serializationLock.lock()
+        defer { serializationLock.unlock() }
+        return refreshedContent(
+            sessionID: normalizedSessionID,
+            sessionsRoot: sessionsRoot,
+            fileManager: fileManager,
+            indexRootDirectory: indexRootDirectory
+        )
+    }
+
+    /// 实际的读-改-写。调用方必须已持有该会话的串行锁。
+    private static func refreshedContent(
+        sessionID normalizedSessionID: String,
+        sessionsRoot: URL,
+        fileManager: FileManager,
+        indexRootDirectory: URL?
+    ) -> OMPLocalSessionContent? {
         let indexRoot = indexRootDirectory
             ?? TranscriptIndexStore.defaultRootDirectory
         let maximumRefreshBytes = TranscriptReadBudget.transcriptEvents
@@ -138,6 +220,7 @@ enum OMPLocalSession {
         {
             sessionStateCache[cacheKey] = nil
             contentCache[cacheKey] = nil
+            pathCacheTouchStamps.removeValue(forKey: cacheKey)
             needsColdStart = true
         }
         cacheLock.unlock()
@@ -156,6 +239,7 @@ enum OMPLocalSession {
             let forwardCaughtUp = (state?.forwardReader.scanHead ?? 0)
                 >= fileSize64
             if backscanDone && forwardCaughtUp {
+                touchPathCacheLocked(cacheKey)
                 cacheLock.unlock()
                 return cached.content
             }
@@ -447,6 +531,7 @@ enum OMPLocalSession {
                 || !parsed.projection.publicMessages.isEmpty else {
             cacheLock.lock()
             sessionStateCache[cacheKey] = state
+            touchPathCacheLocked(cacheKey)
             cacheLock.unlock()
             return nil
         }
@@ -459,6 +544,8 @@ enum OMPLocalSession {
             fileSize: fileSize,
             content: parsed
         )
+        touchPathCacheLocked(cacheKey)
+        touchIDCacheLocked(normalizedSessionID)
         cacheLock.unlock()
         return parsed
     }
@@ -635,7 +722,11 @@ enum OMPLocalSession {
         else { return nil }
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        return sessionContentCache[normalizedSessionID]
+        if let content = sessionContentCache[normalizedSessionID] {
+            touchIDCacheLocked(normalizedSessionID)
+            return content
+        }
+        return nil
     }
 
     private static func locateTranscript(
@@ -648,8 +739,11 @@ enum OMPLocalSession {
         cacheLock.lock()
         let cachedURL = sessionURLCache[cacheKey]
         cacheLock.unlock()
-        if let cachedURL, fileManager.fileExists(atPath: cachedURL.path) {
-            return cachedURL
+        if let cachedURL {
+            touchPathCacheLocked(cacheKey)
+            if fileManager.fileExists(atPath: cachedURL.path) {
+                return cachedURL
+            }
         }
 
         guard let enumerator = fileManager.enumerator(
@@ -670,6 +764,7 @@ enum OMPLocalSession {
             guard resolved.path.hasPrefix(rootPrefix) else { continue }
             cacheLock.lock()
             sessionURLCache[cacheKey] = resolved
+            touchPathCacheLocked(cacheKey)
             cacheLock.unlock()
             return resolved
         }

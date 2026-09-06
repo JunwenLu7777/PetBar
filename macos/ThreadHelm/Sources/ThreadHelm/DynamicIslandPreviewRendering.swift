@@ -181,7 +181,7 @@ private func dynamicIslandPreviewPresentationState(
 }
 
 /// 覆盖 Agents 页每一条渲染分支的固定夹具。
-/// 刻意让五行落在五种不同的控件形态上，任何一种回归都能一眼看出来。
+/// 刻意让六行落在六种不同的控件形态上，任何一种回归都能一眼看出来。
 private func dynamicIslandPreviewAgentStatuses() -> [AgentRuntimeStatus] {
     func status(
         _ agentID: AgentID,
@@ -263,6 +263,17 @@ private func dynamicIslandPreviewAgentStatuses() -> [AgentRuntimeStatus] {
             version: "17.3.5",
             health: .healthy,
             summary: "本机可用"
+        ),
+        // 检测到 legacy 残留 → [ 立即修复 ]（Antigravity 特有形态：
+        // hooks 装到了从不执行的旧位置，检测必须把这条单独亮出来）
+        status(
+            .antigravity,
+            installed: true,
+            compatibility: .validated,
+            integrationStatus: .needsRepair,
+            version: "1.1.22",
+            health: .healthy,
+            summary: "旧位置残留受管 Hook"
         ),
     ].compactMap { $0 }
 }

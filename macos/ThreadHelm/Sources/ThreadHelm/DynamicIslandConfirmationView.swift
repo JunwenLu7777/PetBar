@@ -1144,9 +1144,7 @@ final class DynamicIslandConfirmationViewController:
     }
 
     private func timeText(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
+        taskEventClockFormatter.string(from: date)
     }
 
     private func compactQueueAgeText(_ date: Date) -> String {

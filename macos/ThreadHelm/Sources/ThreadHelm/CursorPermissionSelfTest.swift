@@ -149,7 +149,7 @@ func runCursorPermissionSelfTest() -> Never {
         let handled = runAgentPermissionHookCommandIfRequested(
             arguments: arguments,
             transports: [AgentPermissionHookTransport.cursor()],
-            readInput: { input },
+            readInput: { _ in input },
             postDecision: { _, _, _ in outcome },
             writeOutput: { written += $0 }
         )
@@ -162,7 +162,7 @@ func runCursorPermissionSelfTest() -> Never {
     _ = runAgentPermissionHookCommandIfRequested(
         arguments: ["ThreadHelm", CursorPermissionHookConstants.flag],
         transports: [AgentPermissionHookTransport.cursor()],
-        readInput: { payload(toolName: "Read") },
+        readInput: { _ in payload(toolName: "Read") },
         postDecision: { _, _, _ in
             reachedPanel = true
             return .noDecision
@@ -294,11 +294,17 @@ func runCursorPermissionSelfTest() -> Never {
     else {
         fail("观测命令丢了 --agent-hook 前缀")
     }
-    // 观测那条必须原样保留自己的形状：1 秒预算、无 matcher。被审批的
-    // 形状污染会让它在每次工具调用上多花 600 秒的等待预算。
+    // 观测那条必须原样保留自己的形状：观测短预算（而非审批的 600 秒）、
+    // 无 matcher。被审批的形状污染会让它在每次工具调用上多花 600 秒
+    // 的等待预算。
+    let observationTimeout = preToolUse.first(where: {
+        ($0["threadhelmKind"] as? String) != "permission"
+    })?["timeout"] as? Int
     guard let observationEntry = preToolUse.first(where: {
         ($0["threadhelmKind"] as? String) != "permission"
-    }), observationEntry["timeout"] as? Int == 1,
+    }), observationTimeout
+        == AgentHookCommandContract.observationHookTimeoutMilliseconds / 1_000,
+    observationTimeout ?? 0 < 300,
     observationEntry["matcher"] == nil,
     observationEntry["failClosed"] == nil
     else {

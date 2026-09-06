@@ -137,10 +137,13 @@ struct CursorAgentAdapter: AgentAdapter {
         in scope: AgentIntegrationScope
     ) throws -> AgentIntegrationOperationResult {
         let url = try cursorHooksURL(in: scope)
+        // 令牌删除放在配置卸载成功之后：先删令牌再卸配置，中途抛错会
+        // 把用户留在「hook 还注册着、令牌已没了」的坏闸门状态——
+        // Cursor 按 failClosed 判 deny，所有工具调用都会被拦。
+        let changed = try CursorHookConfiguration.uninstall(at: url)
         AgentPermissionTokenStore.cursor.removeToken(
             directory: url.deletingLastPathComponent()
         )
-        let changed = try CursorHookConfiguration.uninstall(at: url)
         return changed ? .uninstalled : .unchanged
     }
 
@@ -190,9 +193,10 @@ struct CursorAgentAdapter: AgentAdapter {
         let appResult = openCursorApp()
         let result: OpenResult
         switch appResult {
-        case .appFocused, .unknown:
-            result = appResult
-        case .exactSession, .workingDirectoryFallback:
+        // app 层只会返回 appFocused/unknown/unavailable/failed/notAttempted;
+        // exactSession/workingDirectoryFallback 是会话层概念,此处不可达,
+        // 并进来只为穷尽 switch,不改变语义。
+        case .appFocused, .unknown, .exactSession, .workingDirectoryFallback:
             result = appResult
         case .unavailable, .failed, .notAttempted:
             if let path = session.workingDirectory,
@@ -492,7 +496,8 @@ private enum CursorHookConfiguration {
     ) -> [String: Any] {
         [
             "command": "\(command) \(event)",
-            "timeout": 1,
+            "timeout": AgentHookCommandContract
+                .observationHookTimeoutMilliseconds / 1_000,
             "threadhelmOwner": markerOwner,
             "threadhelmAgent": markerAgent,
             "threadhelmEvent": event,
@@ -549,8 +554,12 @@ private enum CursorHookConfiguration {
         event: String,
         command: String
     ) -> Bool {
+        // timeout 必须与 expectedEntry 用同一个常量：这里曾硬编码 1，
+        // 生成器抬到 2 之后状态判定立刻漂移成 needsRepair。
         (entry["command"] as? String) == "\(command) \(event)"
-            && (entry["timeout"] as? Int) == 1
+            && (entry["timeout"] as? Int)
+                == AgentHookCommandContract
+                    .observationHookTimeoutMilliseconds / 1_000
             && (entry["threadhelmOwner"] as? String) == markerOwner
             && (entry["threadhelmAgent"] as? String) == markerAgent
             && (entry["threadhelmEvent"] as? String) == event

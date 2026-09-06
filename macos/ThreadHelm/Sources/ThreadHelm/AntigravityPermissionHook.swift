@@ -129,8 +129,12 @@ func antigravityHookPayloadIsCLISession(_ payload: [String: Any]) -> Bool {
     guard let transcriptPath = payload["transcriptPath"] as? String else {
         return true
     }
+    // 从后往前找第一个 antigravity* 组件并要求精确匹配产品目录名。
+    // 从前往后取第一个前缀命中会被路径里更早的同前缀目录（比如恰好
+    // 叫 antigravity2 的工作区）劫持，把真 CLI 会话误判成产品会话。
     guard let product = URL(fileURLWithPath: transcriptPath)
         .pathComponents
+        .reversed()
         .first(where: { $0.hasPrefix("antigravity") })
     else { return true }
     return product == "antigravity-cli"

@@ -331,8 +331,18 @@ enum CodexHookConfiguration {
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try Data(token.utf8).write(to: url, options: .atomic)
+            // 以 0600 直接创建，杜绝「先 0644 落盘再 chmod」的窗口；
+            // 收紧失败时立刻删除，不留全局可读的令牌。
+            try? FileManager.default.removeItem(at: url)
+            guard FileManager.default.createFile(
+                atPath: url.path,
+                contents: Data(token.utf8),
+                attributes: [.posixPermissions: 0o600]
+            ) else {
+                throw CodexHookConfigurationError.writeFailed("无法写入令牌文件")
+            }
             guard chmod(url.path, S_IRUSR | S_IWUSR) == 0 else {
+                try? FileManager.default.removeItem(at: url)
                 throw CodexHookConfigurationError.writeFailed("无法收紧令牌文件权限")
             }
         } catch let error as CodexHookConfigurationError {

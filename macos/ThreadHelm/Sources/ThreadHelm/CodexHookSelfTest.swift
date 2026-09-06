@@ -347,7 +347,7 @@ func runCodexHookSelfTest() -> Never {
                 ),
                 deadline: 1
             )],
-            readInput: { input },
+            readInput: { _ in input },
             postDecision: { _, _, _ in outcome },
             writeOutput: { written += $0 }
         )
@@ -363,14 +363,31 @@ func runCodexHookSelfTest() -> Never {
         fail("没有旗标时不应接管进程")
     }
 
+    // 面板的真实裁决形状（与 CodexPermissionProtocol.responseBody 对应）。
+    let codexDecisionBody =
+        #"{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}"#
     let decided = runHook(
+        arguments: ["ThreadHelm", CodexHookConstants.hookCommandFlag],
+        input: Data(permissionFixture.utf8),
+        token: "t",
+        outcome: .decision(Data(codexDecisionBody.utf8))
+    )
+    guard decided.handled, decided.output == codexDecisionBody else {
+        fail("裁决应原样写回 stdout")
+    }
+
+    // 端口被别的进程抢答时，非协议形状的 200 响应体不能写回 Codex，
+    // 必须按兜底处理——任意字节对 Codex 等于裁决不可解析。
+    let garbageDecision = runHook(
         arguments: ["ThreadHelm", CodexHookConstants.hookCommandFlag],
         input: Data(permissionFixture.utf8),
         token: "t",
         outcome: .decision(Data("{\"ok\":1}".utf8))
     )
-    guard decided.handled, decided.output == "{\"ok\":1}" else {
-        fail("裁决应原样写回 stdout")
+    guard garbageDecision.handled,
+          garbageDecision.output == CodexHookConstants.noDecisionOutput
+    else {
+        fail("非协议形状的裁决体应走兜底输出")
     }
 
     // 闸门连不上时输出空裁决而不是空字符串：Codex 需要一份可解析的
@@ -405,10 +422,14 @@ func runCodexHookSelfTest() -> Never {
             fallback: .handBackToVendor(CodexHookConstants.noDecisionOutput),
             deadline: 1
         )],
-        readInput: { Data(permissionFixture.utf8) },
+        readInput: { _ in Data(permissionFixture.utf8) },
         postDecision: { _, token, _ in
             postWasAttempted = true
-            return token == nil ? .noDecision : .decision(Data("{}".utf8))
+            return token == nil
+                ? .noDecision
+                : .decision(Data(
+                    #"{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}"#.utf8
+                ))
         },
         writeOutput: { _ in }
     )

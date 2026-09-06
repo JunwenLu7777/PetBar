@@ -177,10 +177,23 @@ struct OMPAgentAdapter: AgentAdapter {
             currentValue: current
         ) else { return false }
         guard timeoutStore.write(to, profile: profile) else { return false }
-        try? OMPManagedSettingsRecord.write(
-            previousTimeout: from,
-            directory: directory
-        )
+        do {
+            try OMPManagedSettingsRecord.write(
+                previousTimeout: from,
+                directory: directory
+            )
+        } catch {
+            // 记录写不进去就必须回滚刚抬高的超时：否则超时已被改而原值
+            // 未记，卸载时 restoreToolCallTimeout 拿不到 previousTimeout，
+            // 用户的配置永远还原不回去。改之前没设过这个键时，回滚就是
+            // 把它清掉，与 restoreToolCallTimeout 的语义一致。
+            if let from {
+                _ = timeoutStore.write(from, profile: profile)
+            } else {
+                _ = timeoutStore.reset(profile: profile)
+            }
+            return false
+        }
         return true
     }
 

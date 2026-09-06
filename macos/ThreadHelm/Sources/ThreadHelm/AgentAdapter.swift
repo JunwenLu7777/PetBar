@@ -1098,7 +1098,7 @@ private func localAgentDiscovery(
 /// 发现结果缓存的默认存活时间。
 ///
 /// 必须**严格小于** `agentHealthRefreshInterval`（300 秒）：时间戳记在探测发生的
-/// 时刻，比定时器唤醒晚一个派发延迟加前序 Agent 的探测耗时（5 个 Agent 顺序探测，
+/// 时刻，比定时器唤醒晚一个派发延迟加前序 Agent 的探测耗时（6 个 Agent 顺序探测，
 /// 每个最坏 2 秒子进程超时）。若两者相等，下一轮唤醒时缓存往往刚好还差几秒才
 /// 过期，本轮探测直接落空，该 Agent 的实际刷新间隔退化成 600 秒。
 let agentDiscoveryCacheTTL: TimeInterval = 240
@@ -1143,17 +1143,24 @@ final class LocalAgentDiscoveryCache {
 
     func read() -> AgentDiscovery {
         lock.lock()
-        defer { lock.unlock() }
+        let cachedDiscovery = cached
+        let cachedTime = cachedTimestamp
+        lock.unlock()
         let currentTime = now()
-        if let cached,
-           let cachedTimestamp,
-           currentTime.timeIntervalSince(cachedTimestamp) < ttl
+        if let cachedDiscovery,
+           let cachedTime,
+           currentTime.timeIntervalSince(cachedTime) < ttl
         {
-            return cached
+            return cachedDiscovery
         }
+        // 子进程探测（--version，最长 8 秒）绝不能在锁内执行：否则任何
+        // 并发的 discover() 都会被拖着陪跑整个超时。先放锁探测，再短锁
+        // 写回；并发未命中最多是重复探测一次，语义不变。
         let discovery = discoverBlock()
+        lock.lock()
+        defer { lock.unlock() }
         cached = discovery
-        cachedTimestamp = currentTime
+        cachedTimestamp = now()
         return discovery
     }
 

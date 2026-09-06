@@ -7,6 +7,7 @@
 //  snake_case 兼容键），裁决格式取自同一 bundle 的运行时 schema。
 //
 
+import CryptoKit
 import Foundation
 
 func runZCodePermissionSelfTest() -> Never {
@@ -184,7 +185,7 @@ func runZCodePermissionSelfTest() -> Never {
                 fallback: zcodeTransport.fallback,
                 deadline: 1
             )],
-            readInput: { input },
+            readInput: { _ in input },
             postDecision: { _, _, _ in outcome },
             writeOutput: { written += $0 }
         )
@@ -199,13 +200,29 @@ func runZCodePermissionSelfTest() -> Never {
         fail("没有旗标时不应接管进程")
     }
 
+    // 面板的真实裁决形状（与 ClaudePermissionProtocol.responseBody 对应）。
+    let zcodeDecisionBody =
+        #"{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}"#
     let decided = runHook(
+        arguments: ["ThreadHelm", ZCodePermissionHookConstants.flag],
+        input: Data(fixture.utf8),
+        outcome: .decision(Data(zcodeDecisionBody.utf8))
+    )
+    guard decided.handled, decided.output == zcodeDecisionBody else {
+        fail("裁决应原样写回 stdout")
+    }
+
+    // ZCode 对 hook 输出零容忍：非协议形状的响应体若原样写回，等于
+    // hook 失败、工具被直接放行。端口被抢答时必须落回主动拒绝。
+    let garbageDecision = runHook(
         arguments: ["ThreadHelm", ZCodePermissionHookConstants.flag],
         input: Data(fixture.utf8),
         outcome: .decision(Data("{\"ok\":1}".utf8))
     )
-    guard decided.handled, decided.output == "{\"ok\":1}" else {
-        fail("裁决应原样写回 stdout")
+    guard garbageDecision.handled,
+          garbageDecision.output == zcodeTransport.fallbackOutput
+    else {
+        fail("非协议形状的裁决体应落回拒绝兜底")
     }
 
     for (label, input, outcome) in [
@@ -309,6 +326,64 @@ func runZCodePermissionSelfTest() -> Never {
     AgentPermissionTokenStore.zcode.removeToken(directory: root)
     guard AgentPermissionTokenStore.zcode.token(directory: root) == nil else {
         fail("卸载后应清除令牌")
+    }
+
+    // MARK: 裁决响应签名（Ed25519）
+
+    // 端口被抢答时,对方拿得到令牌却拿不到私钥。私钥签、公钥验的
+    // 往返必须闭合,且篡改体/缺头必须被拒;公钥不在时按旧面板兼容态
+    // 接受无签名响应。
+    do {
+        let signingRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("threadhelm-gate-signing-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: signingRoot) }
+        guard let signingKey = GateDecisionSigning.ensureSigningKey(
+            directory: signingRoot
+        ) else {
+            fail("签名密钥未能建立")
+        }
+        let decisionBody = zcodeDecisionBody.data(using: .utf8) ?? Data()
+        guard let signature = GateDecisionSigning.sign(
+            decisionBody,
+            privateKey: signingKey
+        ) else {
+            fail("签名失败")
+        }
+        guard let publishedKey = try? Data(
+            contentsOf: GateDecisionSigning.publicKeyURL(directory: signingRoot)
+        ), let verifierKey = try? Curve25519.Signing.PublicKey(
+            rawRepresentation: publishedKey
+        ) else {
+            fail("公钥未发布或不可解析")
+        }
+        guard GateDecisionSignatureVerifier.isAuthentic(
+            body: decisionBody,
+            signatureHeaderValue: signature,
+            publicKey: verifierKey
+        ) else {
+            fail("有效签名应通过校验")
+        }
+        guard !GateDecisionSignatureVerifier.isAuthentic(
+            body: Data(decisionBody.prefix(decisionBody.count - 1)),
+            signatureHeaderValue: signature,
+            publicKey: verifierKey
+        ) else {
+            fail("篡改后的响应体不应通过校验")
+        }
+        guard !GateDecisionSignatureVerifier.isAuthentic(
+            body: decisionBody,
+            signatureHeaderValue: nil,
+            publicKey: verifierKey
+        ) else {
+            fail("公钥在而签名缺失时应拒收")
+        }
+        guard GateDecisionSignatureVerifier.isAuthentic(
+            body: decisionBody,
+            signatureHeaderValue: nil,
+            publicKey: nil
+        ) else {
+            fail("公钥不在时应按兼容态接受无签名响应")
+        }
     }
 
     print("zcode-permission-self-test ok")

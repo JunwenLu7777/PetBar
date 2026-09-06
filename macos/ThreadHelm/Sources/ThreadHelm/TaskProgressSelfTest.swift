@@ -1057,8 +1057,10 @@ private func runClaudeDesktopTaskDiscoverySelfTest() {
     guard item?.title == "Desktop 会话识别回归",
           item?.kind == .running,
           item?.activityText == "正在运行命令",
-          item?.allowsAgentOpen == true,
-          item?.canOpen == true
+          // Desktop 会话只读（79e1d24）：`claude --resume` 只对 CLI 会话
+          // 有意义。2f097c6 曾在重构中把这行翻转成 true，这里钉死正确契约。
+          item?.allowsAgentOpen == false,
+          item?.canOpen == false
     else {
         fputs("Claude Desktop local session was not discovered safely\n", stderr)
         exit(1)

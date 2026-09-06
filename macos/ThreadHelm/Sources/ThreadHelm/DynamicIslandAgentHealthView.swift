@@ -2,7 +2,7 @@
 //  DynamicIslandAgentHealthView.swift
 //  ThreadHelm
 //
-//  模块职责：展示五个本地 Agent 的发现、观察、集成健康与任务筛选配置。
+//  模块职责：展示六个本地 Agent 的发现、观察、集成健康与任务筛选配置。
 //
 
 import AppKit

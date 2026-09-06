@@ -316,10 +316,20 @@ enum ZCodeHookConfiguration {
 
     @discardableResult
     static func uninstall(at configURL: URL) throws -> Bool {
-        let manager = FileManager.default
+        // 令牌删除放在配置卸载成功之后：先删令牌再卸配置，中途抛错会
+        // 把用户留在「hook 还注册着、令牌已没了」的状态——ZCode 在
+        // hook 失败时直接执行工具，闸门静默失效。
+        let changed = try uninstallConfiguration(at: configURL)
         AgentPermissionTokenStore.zcode.removeToken(
             directory: configURL.deletingLastPathComponent()
         )
+        return changed
+    }
+
+    private static func uninstallConfiguration(
+        at configURL: URL
+    ) throws -> Bool {
+        let manager = FileManager.default
         let ownershipURL = configOwnershipURL(for: configURL)
         let marker = configOwnershipMarker(at: ownershipURL)
         let markerExists = marker.exists
@@ -818,9 +828,9 @@ struct ZCodeAgentAdapter: AgentAdapter {
         let appResult = activateApplication()
         let result: OpenResult
         switch appResult {
-        case .appFocused, .unknown:
-            result = appResult
-        case .exactSession, .workingDirectoryFallback:
+        // app 层不会返回 exactSession/workingDirectoryFallback(那是会话层
+        // 概念),并进来只为穷尽 switch;原先是两段等值的复制粘贴分支。
+        case .appFocused, .unknown, .exactSession, .workingDirectoryFallback:
             result = appResult
         case .unavailable, .failed, .notAttempted:
             if let workingDirectory = session.workingDirectory,
@@ -950,7 +960,11 @@ private func normalizedZCodeStateAndReason(
         case "success", "succeeded", "completed", "complete":
             return (.completed, .reviewReady, .openNativeApp, .officialHook)
         default:
-            return (.running, .none, .openNativeApp, .inferred)
+            // outcome 在词表外：Stop 已到，会话确实结束了，但我们不知道
+            // 成败。落 idle 而不是 running——把已结束的会话继续显示成
+            // 「正在执行」直到 freshness 过期是最误导的选择；也不能替
+            // 厂商宣称 completed/failed。
+            return (.idle, .none, .openNativeApp, .inferred)
         }
     default:
         return (.running, .none, .openNativeApp, .inferred)

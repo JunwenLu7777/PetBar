@@ -2,7 +2,7 @@
 //  AgentAttentionFeedback.swift
 //  ThreadHelm
 //
-//  模块职责：在本机保存五 Agent 的注意力评价计数；只允许四种固定分类，
+//  模块职责：在本机保存六 Agent 的注意力评价计数；只允许四种固定分类，
 //  不保存标题、提示词、命令、路径、session ID、时间戳或时间线。
 //
 

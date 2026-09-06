@@ -276,29 +276,33 @@ enum ClaudeQuotaParser {
         return Range(match.range, in: text)
     }
 
+    private static let quotaPercentageExpression = try? NSRegularExpression(
+        // 四种形态合成一条，used 前缀/后缀都要反转成剩余，其余限定词
+        // 表示 N 本身就是剩余。分组：1=used 前缀，2=N（N% 形态的值），
+        // 3=used 后缀，4=剩余类限定词前缀，5=N（限定词前缀形态的值）。
+        // 「used N%」必须整体先于裸 N% 判定，否则解析"成功"但数字是
+        // 反的（把已用当剩余），比明确报失败更难排查。
+        pattern: #"(?i)(?:(used)\s+)?([0-9]{1,3}(?:\.[0-9]+)?)\s*%"#
+            + #"(?:\s*(used))?|(left|remaining|available)\s+([0-9]{1,3}(?:\.[0-9]+)?)\s*%"#,
+        options: []
+    )
+
     private static func percentage(from text: String) -> Int? {
-        let patterns = [
-            #"([0-9]{1,3}(?:\.[0-9]+)?)\s*%\s*(left|remaining|available|used)?"#,
-            #"(left|remaining|available|used)\s*([0-9]{1,3}(?:\.[0-9]+)?)\s*%"#,
-        ]
-        for (index, pattern) in patterns.enumerated() {
-            guard let expression = try? NSRegularExpression(
-                pattern: pattern,
-                options: [.caseInsensitive]
-            ) else { continue }
-            let range = NSRange(text.startIndex..<text.endIndex, in: text)
-            guard let match = expression.firstMatch(in: text, range: range) else {
-                continue
-            }
-            let valueGroup = index == 0 ? 1 : 2
-            let qualifierGroup = index == 0 ? 2 : 1
-            guard let valueRange = Range(match.range(at: valueGroup), in: text),
+        guard let expression = quotaPercentageExpression else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = expression.firstMatch(in: text, range: range)
+        else { return nil }
+        // 值可能落在第 2 组（N% 形态）或第 5 组（限定词前缀形态）。
+        for valueGroup in [2, 5] {
+            guard match.range(at: valueGroup).location != NSNotFound,
+                  let valueRange = Range(match.range(at: valueGroup), in: text),
                   let value = Double(text[valueRange])
             else { continue }
-            let qualifier = Range(match.range(at: qualifierGroup), in: text)
-                .map { String(text[$0]).lowercased() } ?? ""
+            let used = [1, 3].contains {
+                match.range(at: $0).location != NSNotFound
+            }
             let rounded = Int(value.rounded())
-            let remaining = qualifier == "used" ? 100 - rounded : rounded
+            let remaining = used ? 100 - rounded : rounded
             return max(0, min(100, remaining))
         }
         return nil
