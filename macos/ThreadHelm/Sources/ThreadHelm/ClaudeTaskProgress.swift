@@ -522,8 +522,18 @@ final class ClaudeTaskProgressReader {
         ) -> TaskProgressItem? {
             // 有真实内容时间就用它：mtime 可能被无对话的尾部元数据刷新。
             let effectiveUpdatedAt = lastContentUpdatedAt ?? fileTouchedAt
+            // 进程侧的状态与文案只在「进程确认存活」或「内容仍新鲜」时
+            // 才可信。claude agents --json 的会话注册表会一直保留早已
+            // 退出的 background 会话最后的状态（实测无 pid、state=
+            // blocked），无条件采信会让几周前死掉的会话永远顶着「已阻塞」
+            // 挂在面板上、持续时间一直涨。interactive 会话有 PID+启动
+            // 身份可校验；background 会话没有 PID，用内容新鲜度兜底。
+            let processSideStatusIsTrustworthy = processID != nil
+                || now.timeIntervalSince(effectiveUpdatedAt)
+                    <= completedTaskPanelRetention
             // 上游状态文案跟随 kind：kind 被改写时它必须一起失效。
-            var overriddenStatusText = statusOverride
+            var overriddenStatusText =
+                processSideStatusIsTrustworthy ? statusOverride : nil
             // 无匹配进程时 startedAt 会退化成文件 mtime，而 mtime 可能晚于
             // 最后一条内容，算出来的持续时间就成了 0。这种情况改用内容起点。
             let effectiveStartedAt: Date
@@ -544,7 +554,7 @@ final class ClaudeTaskProgressReader {
                 // 一直显示为阻塞，且持续时间无限增长。
                 // 进程侧报出的 activeKind 不受此限制——那是真的在等用户。
                 kind = .waitingForInput
-            } else if let activeKind {
+            } else if let activeKind, processSideStatusIsTrustworthy {
                 if activeKind == .waitingForInput,
                    lastStopReason == "end_turn",
                    lastMeaningfulRole == "assistant" {

@@ -1623,8 +1623,8 @@ private func runCodexClaudeTranscriptProviderRegressionSelfTest(
         sessionID: claudeSessionID,
         fallbackTitle: "Claude 会话",
         workingDirectory: "/tmp/claude",
-        processID: nil,
-        processStartIdentity: nil,
+        processID: 57_704,
+        processStartIdentity: "Sun Jul 26 18:20:00 2026",
         activeKind: .running,
         startedAt: now,
         modificationDate: now,
@@ -2049,6 +2049,10 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         sessionID: claudeSessionID,
         fallbackTitle: "Claude 会话",
         workingDirectory: "/tmp/claude-project",
+        // 进程侧状态只对存活进程可信：这里的转写时间戳是陈旧的，
+        // 必须给出存活进程，running 才不会被当成僵尸会话丢弃。
+        processID: 57_704,
+        processStartIdentity: "Sun Jul 26 18:20:00 2026",
         activeKind: .running,
         startedAt: now.addingTimeInterval(-30),
         modificationDate: now
@@ -2078,6 +2082,9 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         sessionID: claudeSessionID,
         fallbackTitle: "Claude 会话",
         workingDirectory: "/tmp/claude-project",
+        // 转写时间戳是陈旧的:进程侧状态必须挂在一个存活进程上才可信。
+        processID: 57_704,
+        processStartIdentity: "Sun Jul 26 18:20:00 2026",
         activeKind: .waitingForInput,
         startedAt: now.addingTimeInterval(-30),
         modificationDate: now
@@ -2100,6 +2107,8 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         sessionID: claudeSessionID,
         fallbackTitle: "Claude 会话",
         workingDirectory: "/tmp/claude-project",
+        processID: 57_704,
+        processStartIdentity: "Sun Jul 26 18:20:00 2026",
         activeKind: .running,
         startedAt: now.addingTimeInterval(-30),
         modificationDate: now
@@ -2109,6 +2118,8 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         sessionID: claudeSessionID,
         fallbackTitle: "Claude 会话",
         workingDirectory: "/tmp/claude-project",
+        processID: 57_704,
+        processStartIdentity: "Sun Jul 26 18:20:00 2026",
         activeKind: .running,
         startedAt: now.addingTimeInterval(-30),
         modificationDate: now
@@ -2127,6 +2138,8 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         sessionID: claudeSessionID,
         fallbackTitle: "Claude 会话",
         workingDirectory: "/tmp/claude-project",
+        processID: 57_704,
+        processStartIdentity: "Sun Jul 26 18:20:00 2026",
         activeKind: .running,
         startedAt: now.addingTimeInterval(-30),
         modificationDate: now
@@ -2173,8 +2186,10 @@ private func runTaskProgressSelfTestPhase1(now: Date, started: String) {
         sessionID: claudeSessionID,
         fallbackTitle: "Claude 会话",
         workingDirectory: "/tmp/claude-project",
-        processID: nil,
-        processStartIdentity: nil,
+        // buildItem 的 processID 语义是「调用方已验证存活」;
+        // 内容时间戳陈旧,无进程的 running 现在会被正确丢弃。
+        processID: 57_704,
+        processStartIdentity: "Sun Jul 26 18:20:00 2026",
         activeKind: .running,
         startedAt: now.addingTimeInterval(-30),
         modificationDate: now,

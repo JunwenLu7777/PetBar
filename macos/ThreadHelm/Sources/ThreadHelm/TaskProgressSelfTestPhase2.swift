@@ -339,6 +339,69 @@ func runTaskProgressSelfTestPhase2(now: Date, started: String) {
         exit(1)
     }
 
+    // MARK: 僵尸阻塞会话清理
+    // claude agents --json 的注册表会一直保留早已退出的 background
+    // 会话的 blocked 状态(无 pid 可校验)。进程侧状态只在「存活进程」
+    // 或「内容仍新鲜」时可信,否则几周前死掉的会话会永远顶着「已阻塞」
+    // 挂在面板上、持续时间一直涨。
+    let zombieBlockedInput =
+        #"{"type":"assistant","timestamp":"2026-07-25T10:08:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-zombie","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#
+    guard ClaudeTaskProgressReader.parseTranscript(
+        lines: [zombieBlockedInput],
+        sessionID: staleClaudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/shared-project",
+        activeKind: .waitingForInput,
+        startedAt: now.addingTimeInterval(-980 * 3_600),
+        modificationDate: now.addingTimeInterval(-980 * 3_600),
+        statusOverride: "已阻塞",
+        now: now
+    ) == nil else {
+        fputs("stale blocked session without live process must be dropped\n", stderr)
+        exit(1)
+    }
+    let freshBlockedTimestamp = ISO8601DateFormatter().string(
+        from: now.addingTimeInterval(-60)
+    )
+    let freshBlockedInput =
+        #"{"type":"assistant","timestamp":"\#(freshBlockedTimestamp)","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-zombie","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#
+    let freshBlockedItem = ClaudeTaskProgressReader.parseTranscript(
+        lines: [freshBlockedInput],
+        sessionID: staleClaudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/shared-project",
+        activeKind: .waitingForInput,
+        startedAt: now.addingTimeInterval(-980 * 3_600),
+        modificationDate: now,
+        statusOverride: "已阻塞",
+        now: now
+    )
+    guard freshBlockedItem?.kind == .waitingForInput,
+          freshBlockedItem?.statusText == "已阻塞"
+    else {
+        fputs("fresh blocked session without pid must stay blocked\n", stderr)
+        exit(1)
+    }
+    let liveBlockedItem = ClaudeTaskProgressReader.parseTranscript(
+        lines: [zombieBlockedInput],
+        sessionID: staleClaudeSessionID,
+        fallbackTitle: "Claude 会话",
+        workingDirectory: "/tmp/shared-project",
+        processID: 57_704,
+        processStartIdentity: liveClaudeProcessStartIdentity,
+        activeKind: .waitingForInput,
+        startedAt: now.addingTimeInterval(-980 * 3_600),
+        modificationDate: now.addingTimeInterval(-980 * 3_600),
+        statusOverride: "已阻塞",
+        now: now
+    )
+    guard liveBlockedItem?.kind == .waitingForInput,
+          liveBlockedItem?.statusText == "已阻塞"
+    else {
+        fputs("live process blocked session must stay blocked\n", stderr)
+        exit(1)
+    }
+
     let permissionPrompt = ClaudePermissionPrompt(
         requestID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
         interactionKind: .toolApproval,
