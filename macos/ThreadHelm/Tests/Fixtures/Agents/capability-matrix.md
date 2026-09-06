@@ -1,6 +1,6 @@
 # ThreadHelm six-agent capability matrix
 
-Captured against baseline `f7cb4843eea3aa5aae9ee6045092c007f7cd9452` on 2026-08-12. This is an owner-only, version-pinned description of the locally installed tools. “Unknown” is deliberate: it means the behavior was not proven end to end on this Mac and must not be advertised.
+Captured against baseline `8a0792ded390272977e4183ee8596bfbf0633f68` on 2026-08-26 (per versions.json); the Antigravity rows and the hooks-location note carry probe records from 2026-08-31. This is an owner-only, version-pinned description of the locally installed tools. “Unknown” is deliberate: it means the behavior was not proven end to end on this Mac and must not be advertised.
 
 | Agent | Installed version | Installation discovery | Lifecycle events | Stable identity |
 | --- | --- | --- | --- | --- |

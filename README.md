@@ -1,9 +1,9 @@
 # ThreadHelm macOS
 
-ThreadHelm 是一个独立运行的 macOS App。当前发行版本为 **1.1.0**，输出文件名为：
+ThreadHelm 是一个独立运行的 macOS App。当前发行版本为 **1.1.1**，输出文件名为：
 
 ```text
-ThreadHelm-macOS-arm64-1.1.0.zip
+ThreadHelm-macOS-arm64-1.1.1.zip
 ```
 
 该发行只面向 macOS 12.3+ 的 Apple 芯片（arm64），暂不支持 Intel Mac。包内包含 `ThreadHelm.app`、LaunchAgent 模板、三个安装检查命令、本机事务脚本、License、隐私说明和资产说明。
@@ -37,7 +37,7 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 
 ## 安装
 
-1. 完整解压 `ThreadHelm-macOS-arm64-1.1.0.zip`。
+1. 完整解压 `ThreadHelm-macOS-arm64-1.1.1.zip`。
 2. 双击 `安装ThreadHelm.command`。
 3. 如果 macOS 提示无法验证开发者，点“完成”，不要移到废纸篓。
 4. 打开“系统设置”里的“隐私与安全”，选择“仍要打开”或 “Open Anyway”，输入 Mac 登录密码确认。
@@ -75,16 +75,16 @@ macOS 需要 Xcode Command Line Tools：
 ./scripts/build-macos-release.sh --verify-only
 ```
 
-开发构建可直接把 81 条脱敏真值夹具送进生产 Swift 归一化和真实 reducer：
+开发构建可直接把 98 条脱敏真值夹具送进生产 Swift 归一化和真实 reducer：
 
 ```bash
 BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 "$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents
 ```
 
-输出里的 miss、false alert、duplicate 和 exact return 只描述这 81 条固定夹具窗口，不代表实际使用指标。OMP 的精确返回能力在该基线中是 `unsupported`，实际打开结果只能是 `unavailable`。发布校验会执行同一回放；夹具比旧 ZIP 更新时，旧 ZIP 会被判为 stale。
+输出里的 miss、false alert、duplicate 和 exact return 只描述这 98 条固定夹具窗口，不代表实际使用指标。OMP 与 Antigravity 的精确返回在该基线中记录为 Unknown：分别可发起 `--resume` 与 `agy --conversation <id>`，但未独立确认落点。发布校验会执行同一回放；夹具比旧 ZIP 更新时，旧 ZIP 会被判为 stale。
 
-构建成功后会生成 `dist/ThreadHelm-macOS-arm64-1.1.0.zip`，并在 staging 目录内生成 `CHECKSUMS-SHA256.txt`。
+构建成功后会生成 `dist/ThreadHelm-macOS-arm64-1.1.1.zip`，并在 staging 目录内生成 `CHECKSUMS-SHA256.txt`。
 
 ## 源码目录
 

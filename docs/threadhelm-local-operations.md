@@ -59,17 +59,18 @@ BIN="$HOME/Applications/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 
 如果遇到重复提醒，也归到 `unnecessary`；这样统计口径始终只有上述四类，不会为了备注而写入自由文本。
 
-## 固定版本和 81 场景真值回放
+## 固定版本和 98 场景真值回放
 
 Agents 页面里的 `validated` 不是“看起来能用”，而是本机发现到的所有版本分量都与固定真值版本逐项相等：
 
-- Codex `0.145.0`
+- Codex `0.150.1`
 - Claude Code `2.1.226`
-- Cursor Desktop `3.15.19` 和 Agent CLI `2026.04.15-dccdccd`
-- ZCode `3.7.6` 和 build `3.7.6.4691`
-- OMP `17.3.2`
+- Cursor Desktop `3.17.21` 和 Agent CLI `2026.04.14-ee4b43a`
+- ZCode `3.9.1` 和 build `3.9.1.5853`
+- OMP `17.3.5`
+- Antigravity `1.1.22`
 
-只要版本没读到、少一个分量或有任意漂移，就显示 `unvalidated`，并隐藏只在固定版本上验证过的能力文案。例如本机 Cursor Desktop 即使再升到 `3.16.0`，也不能沿用 `3.15.19` 的验证结论。版本漂移只限制能力声明、自动交互和打断提醒，不会把已经观测到的 `waitingForInput` 改写成 `running`，也不会禁用已有的原生跳转。发现过程只读；`unvalidated` Agent 的安装和修复会跳过，不会改厂商配置，卸载仍可只移除已确认属于 ThreadHelm 的条目。
+只要版本没读到、少一个分量或有任意漂移，就显示 `unvalidated`，并隐藏只在固定版本上验证过的能力文案。例如本机 Cursor Desktop 即使再升到 `3.18.0`，也不能沿用 `3.17.21` 的验证结论。版本漂移只限制能力声明、自动交互和打断提醒，不会把已经观测到的 `waitingForInput` 改写成 `running`，也不会禁用已有的原生跳转。发现过程只读；`unvalidated` Agent 的安装和修复会跳过，不会改厂商配置，卸载仍可只移除已确认属于 ThreadHelm 的条目。
 
 在源码目录构建后，可以运行生产回放器：
 
@@ -79,7 +80,7 @@ BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 "$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents
 ```
 
-这会读取 81 条脱敏场景，经生产 Swift 归一化和真实 `AgentEventReducer` 比较 7 个 expected 字段。duplicate 和 out-of-order 场景也走真实 reducer。输出的 miss、false alert、duplicate、exact return 分子分母只说明这 81 条固定夹具，没有测量实际使用、延迟或主观体验；回放过程不写持久化用户状态。
+这会读取 98 条脱敏场景，经生产 Swift 归一化和真实 `AgentEventReducer` 比较 7 个 expected 字段。duplicate 和 out-of-order 场景也走真实 reducer。输出的 miss、false alert、duplicate、exact return 分子分母只说明这 98 条固定夹具，没有测量实际使用、延迟或主观体验；回放过程不写持久化用户状态。
 
 该基线里 Codex 精确返回仍是 `unknown`；Claude Code 只有同时匹配会话、活进程和 process-start identity 才可能是 exact，否则降为 `unknown`；Cursor 与 ZCode 不宣称 exact；OMP 可发起 `--resume`、Antigravity 可发起 `agy --conversation <id>`（实测能接回上下文，但落点是新开的终端而非用户原窗口），两者未独立确认落点，因此打开结果仍是 `unknown`，不能宣称 exact。发布脚本会执行同一回放，并把真值夹具纳入 release 输入时间；夹具更新后旧 ZIP 会被判为 stale。
 
@@ -166,4 +167,4 @@ ZCode 的“完整安装”不会要求额外确认：如果 `~/.zcode/cli/confi
 "$BIN" --agent-integrations status --live
 ```
 
-安装包的“检查ThreadHelm.command”也会执行签名检查并打印五 Agent 集成状态。
+安装包的“检查ThreadHelm.command”也会执行签名检查并打印六 Agent 集成状态。
