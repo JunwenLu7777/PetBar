@@ -64,7 +64,7 @@ verify_inputs() {
   require_file "$AGENT_TRUTH_ROOT/index.json"
   require_file "$AGENT_TRUTH_ROOT/versions.json"
   local agent_id
-  for agent_id in codex claudeCode cursor zcode omp; do
+  for agent_id in codex claudeCode cursor zcode omp antigravity; do
     require_file "$AGENT_TRUTH_ROOT/scenarios/$agent_id.json"
   done
   /usr/bin/plutil -lint "$PLIST_TEMPLATE" >/dev/null
@@ -78,10 +78,10 @@ verify_agent_truth_replay() {
   local output agent_id
   [[ -x "$binary" ]] || fail "ThreadHelm binary is not executable: $binary"
   output="$("$binary" --verify-agent-truth "$AGENT_TRUTH_ROOT")" \
-    || fail "five-agent truth replay failed: $binary"
-  [[ "$output" == *"agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged"* ]] \
-    || fail "five-agent truth replay summary is incomplete"
-  for agent_id in codex claudeCode cursor zcode omp; do
+    || fail "six-agent truth replay failed: $binary"
+  [[ "$output" == *"agent-truth-replay: agents=6 scenarios=98 persistent-state=unchanged"* ]] \
+    || fail "six-agent truth replay summary is incomplete"
+  for agent_id in codex claudeCode cursor zcode omp antigravity; do
     [[ "$output" == *"agent-truth-metric: agent=$agent_id "* ]] \
       || fail "missing truth metric for $agent_id"
   done

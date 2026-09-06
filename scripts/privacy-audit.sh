@@ -18,19 +18,15 @@ fi
 
 typeset -i findings=0
 
-audit_candidates() {
-  # Root-level local QA files are not release inputs. Audit every tracked file,
-  # plus untracked files from directories copied or compiled into the package.
-  git -C "$ROOT" ls-files -z
-  git -C "$ROOT" ls-files --others --exclude-standard -z -- \
-    macos/ThreadHelm \
-    macos/package
-}
+candidates=(
+  "${(@0)$(git -C "$ROOT" ls-files -z)}"
+  "${(@0)$(git -C "$ROOT" ls-files --others --exclude-standard -z -- macos/ThreadHelm macos/package)}"
+)
 
-while IFS= read -r -d '' file; do
-  [[ -f "$ROOT/$file" ]] || continue
+for file in "${candidates[@]}"; do
+  [[ -n "$file" && -f "$ROOT/$file" ]] || continue
   case "$file" in
-    scripts/privacy-audit.sh|*.png|*.gif|*.webp|*.jpg|*.icns|*.zip) continue ;;
+    scripts/privacy-audit.sh|*.png|*.gif|*.webp|*.jpg|*.icns|*.zip|*/MacOS/*) continue ;;
   esac
   audit_pattern="$PATTERN"
   if [[ "$file" == "$HISTORICAL_LOCAL_PATH_RECORD" ]]; then
@@ -41,17 +37,19 @@ while IFS= read -r -d '' file; do
   if rg -n -i "$audit_pattern" "$ROOT/$file"; then
     findings=1
   fi
-done < <(audit_candidates)
+done
 
 for release in "$ROOT"/build/release/ThreadHelm-macOS-arm64-*(N); do
-  while IFS= read -r -d '' file; do
+  release_files=("${(@0)$(find "$release" -type f -print0)}")
+  for file in "${release_files[@]}"; do
+    [[ -n "$file" && -f "$file" ]] || continue
     case "$file" in
-      *.png|*.gif|*.webp|*.jpg|*.icns|*.zip) continue ;;
+      *.png|*.gif|*.webp|*.jpg|*.icns|*.zip|*/MacOS/*) continue ;;
     esac
     if rg -n -i "$PATTERN" "$file"; then
       findings=1
     fi
-  done < <(find "$release" -type f -print0)
+  done
 done
 
 if (( findings > 0 )); then
