@@ -110,7 +110,9 @@ cleanup_legacy_products() {
 }
 
 wait_for_panel_health() {
-  for _ in {1..80}; do
+  # 30 秒:首次冷启动可能被 Gatekeeper/XProtect 扫描拖慢,80×0.1s 曾
+  # 在忙碌的机器上不够用,造成升级偶发失败(实测 2026-09-06)。
+  for _ in {1..300}; do
     if [[ -s "$HEALTH" ]] \
       && /usr/bin/grep -q '"edition":"threadhelm"' "$HEALTH" \
       && /usr/bin/grep -q '"productID":"threadhelm"' "$HEALTH" \
@@ -193,11 +195,17 @@ if ! /bin/launchctl bootstrap "$DOMAIN" "$PLIST"; then
   /bin/sleep 1
   /bin/launchctl bootstrap "$DOMAIN" "$PLIST"
 fi
+# 超时后再 kickstart 重试一轮:LaunchAgent 的 bootout→bootstrap 偶发
+# 时序竞态(实测 2026-09-06,回滚正常但升级被迫跑两次)值得用一次
+# 幂等的重启换掉。
 /bin/launchctl kickstart -k "$DOMAIN/$LABEL"
 
 if ! wait_for_panel_health; then
-  echo "ThreadHelm 未能从独立安装路径启动" >&2
-  exit 1
+  /bin/launchctl kickstart -k "$DOMAIN/$LABEL"
+  if ! wait_for_panel_health; then
+    echo "ThreadHelm 未能从独立安装路径启动" >&2
+    exit 1
+  fi
 fi
 
 threadhelm_commit_install_transaction
