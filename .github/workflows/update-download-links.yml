@@ -71,10 +71,6 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         shell: bash
         run: |
-          # main 可能在 checkout 之后又被别的提交前移(比如并发跑过的
-          # validate 机器人);push 前先 rebase 到最新 origin/main。
-          git fetch origin main
-          git rebase origin/main
           if git diff --quiet -- README.md macos/README.md; then
             echo "README 已经指向 ThreadHelm Release $VERSION"
             exit 0
@@ -87,4 +83,9 @@ jobs:
             -m "Confidence: high" \
             -m "Scope-risk: narrow" \
             -m "Tested: verified GitHub release asset names before updating README"
+          # rebase 必须在本步骤提交之后、push 之前:此时 README 改动已
+          # 入提交,rebase 才不会撞上未暂存变更。main 可能在 checkout
+          # 之后又被别的提交前移(比如并发跑过的 validate 机器人)。
+          git fetch origin main
+          git rebase origin/main
           git push origin HEAD:main
