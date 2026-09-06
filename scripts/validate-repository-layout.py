@@ -243,16 +243,24 @@ def validate(paths: set[str]) -> list[str]:
     missing = sorted(REQUIRED_FILES - paths)
     violations.extend(f"{path}: required ThreadHelm source is missing" for path in missing)
 
+    # dist 允许为空:发布产物由 GitHub Releases 承载,仓库里不再跟踪
+    # 每个版本 4.5MB 的 zip(历史会随版本数无限膨胀)。一旦有任何 dist
+    # 路径被跟踪,仍强制"恰好一对 zip+sha256 且名字匹配"。
     archives = sorted(path for path in paths if path.startswith("dist/") and path.endswith(".zip"))
     checksums = sorted(
         path for path in paths if path.startswith("dist/") and path.endswith(".zip.sha256")
     )
-    if len(archives) != 1:
-        violations.append(f"dist: expected exactly one ThreadHelm archive, found {len(archives)}")
-    if len(checksums) != 1:
-        violations.append(f"dist: expected exactly one ThreadHelm checksum, found {len(checksums)}")
-    if len(archives) == 1 and checksums != [f"{archives[0]}.sha256"]:
-        violations.append("dist: checksum must match the single ThreadHelm archive")
+    if archives or checksums:
+        if len(archives) != 1:
+            violations.append(
+                f"dist: expected exactly one ThreadHelm archive, found {len(archives)}"
+            )
+        if len(checksums) != 1:
+            violations.append(
+                f"dist: expected exactly one ThreadHelm checksum, found {len(checksums)}"
+            )
+        if len(archives) == 1 and checksums != [f"{archives[0]}.sha256"]:
+            violations.append("dist: checksum must match the single ThreadHelm archive")
 
     return violations
 
