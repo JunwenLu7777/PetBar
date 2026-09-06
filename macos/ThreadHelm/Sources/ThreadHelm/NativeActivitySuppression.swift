@@ -133,7 +133,45 @@ func nativeActivitySuppressionStrategy(
 }
 
 final class NativeActivityPillSuppressor {
+    /// 全树扫描(最多 3000 个 AX 元素)的节流间隔:药丸窗口内没有按钮
+    /// 是稳态(静音后按钮就消失了),不能每 2 秒白跑一次最贵的 IPC。
+    static let fallbackScanInterval: TimeInterval = 20
+
+    /// 全树扫描是否到期:从未扫过、Codex 窗口列表变化(可能有新窗口,
+    /// 立即扫)或距上次扫描超过间隔。纯函数,自测直接覆盖。
+    static func fallbackScanIsDue(
+        lastFingerprint: String?,
+        lastScanAt: Date?,
+        currentFingerprint: String,
+        now: Date,
+        interval: TimeInterval = NativeActivityPillSuppressor.fallbackScanInterval
+    ) -> Bool {
+        guard let lastFingerprint, let lastScanAt else { return true }
+        return lastFingerprint != currentFingerprint
+            || now.timeIntervalSince(lastScanAt) >= interval
+    }
+
+    /// Codex 进程在屏窗口号的廉价指纹:一次 CGWindowList 系统调用,
+    /// 不做任何 AX IPC。新角标窗口/任务气泡出现会改变窗口集合。
+    static func windowListFingerprint(pid: pid_t) -> String {
+        let windowList = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly], kCGNullWindowID
+        ) as? [[String: Any]] ?? []
+        let numbers = windowList.compactMap { window -> Int? in
+            guard let ownerPID = window[kCGWindowOwnerPID as String] as? Int,
+                  ownerPID == pid,
+                  let windowNumber = window[kCGWindowNumber as String] as? Int
+            else { return nil }
+            return windowNumber
+        }.sorted()
+        return numbers.map(String.init).joined(separator: ",")
+    }
+
     private var didRequestAccess = false
+    /// 每个 Codex 进程最近一次全树扫描的指纹与时间。suppress 只在
+    /// 监视器的串行队列上运行,锁是防御性的。
+    private var fallbackScanStateByPID: [pid_t: (fingerprint: String, at: Date)] = [:]
+    private let fallbackScanLock = NSLock()
 
     var isTrusted: Bool {
         AXIsProcessTrusted()
@@ -206,10 +244,31 @@ final class NativeActivityPillSuppressor {
                 activityNotificationButtons(in: $0)
             }
             if notificationButtons.isEmpty {
-                notificationButtons = activityNotificationButtons(
-                    in: applicationElement,
-                    maximumElements: 3_000
+                let fingerprint = Self.windowListFingerprint(
+                    pid: application.processIdentifier
                 )
+                let now = Date()
+                fallbackScanLock.lock()
+                let lastScan = fallbackScanStateByPID[
+                    application.processIdentifier
+                ]
+                let isDue = Self.fallbackScanIsDue(
+                    lastFingerprint: lastScan?.fingerprint,
+                    lastScanAt: lastScan?.at,
+                    currentFingerprint: fingerprint,
+                    now: now
+                )
+                if isDue {
+                    fallbackScanStateByPID[application.processIdentifier] =
+                        (fingerprint, now)
+                }
+                fallbackScanLock.unlock()
+                if isDue {
+                    notificationButtons = activityNotificationButtons(
+                        in: applicationElement,
+                        maximumElements: 3_000
+                    )
+                }
             }
 
             guard nativeActivitySuppressionStrategy(
@@ -237,6 +296,13 @@ final class NativeActivityPillSuppressor {
                 Thread.sleep(forTimeInterval: 0.08)
             }
         }
+
+        fallbackScanLock.lock()
+        let livePIDs = Set(codexApplications.map(\.processIdentifier))
+        fallbackScanStateByPID = fallbackScanStateByPID.filter {
+            livePIDs.contains($0.key)
+        }
+        fallbackScanLock.unlock()
 
         if badgeWindowHidingFailed { return .actionFailed }
         if performedMenuAction { return .muted }

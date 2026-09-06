@@ -373,6 +373,33 @@ func runLifecycleSelfTest() -> Never {
         exit(1)
     }
 
-    print("lifecycle-self-test: desktop-app=6/6 standalone-identity=pass legacy-preferences=pet-keys-ignored dynamic-island-only=visibility+commands status-item=restore dock-icon=resource activation=regular terminal-ack=active-skipped+terminal-memory claude-permission-visibility=6/6 live-state-wins=2/2 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut")
+    // 全树扫描节流:从未扫过立即扫;窗口列表变化立即扫;同指纹 20 秒
+    // 内不重扫,到期再扫。
+    let fallbackNow = Date()
+    guard NativeActivityPillSuppressor.fallbackScanIsDue(
+            lastFingerprint: nil, lastScanAt: nil,
+            currentFingerprint: "1,2", now: fallbackNow)
+        == true,
+        NativeActivityPillSuppressor.fallbackScanIsDue(
+            lastFingerprint: "1,2",
+            lastScanAt: fallbackNow.addingTimeInterval(-5),
+            currentFingerprint: "1,2", now: fallbackNow)
+        == false,
+        NativeActivityPillSuppressor.fallbackScanIsDue(
+            lastFingerprint: "1,2",
+            lastScanAt: fallbackNow.addingTimeInterval(-21),
+            currentFingerprint: "1,2", now: fallbackNow)
+        == true,
+        NativeActivityPillSuppressor.fallbackScanIsDue(
+            lastFingerprint: "1,2",
+            lastScanAt: fallbackNow.addingTimeInterval(-1),
+            currentFingerprint: "1,2,3", now: fallbackNow)
+        == true
+    else {
+        fputs("native activity fallback scan throttling failed\n", stderr)
+        exit(1)
+    }
+
+    print("lifecycle-self-test: desktop-app=6/6 standalone-identity=pass legacy-preferences=pet-keys-ignored dynamic-island-only=visibility+commands status-item=restore dock-icon=resource activation=regular terminal-ack=active-skipped+terminal-memory claude-permission-visibility=6/6 live-state-wins=2/2 activity-window=5/5 show-activity-label=7/7 badge-window-selection=3/3 offscreen-placement=5/5 activity-toggle-target=6/6 accessibility-label=5/5 mute-menu=5/5 no-input-injection=2/2 hidden-window=orderOut ax-fallback=throttle")
     exit(0)
 }
