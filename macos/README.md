@@ -2,7 +2,7 @@
 
 ## 安装
 
-1. 完整解压 `ThreadHelm-macOS-arm64-1.1.3.zip`。
+1. 完整解压 `ThreadHelm-macOS-arm64-1.1.4.zip`。
 2. 双击 `安装ThreadHelm.command`。
 3. 如果出现“Apple 无法验证”提示，点“完成”，不要点“移到废纸篓”。
 4. 打开“系统设置”中的“隐私与安全”。
