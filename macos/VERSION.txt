@@ -1,5 +1,5 @@
 Package: ThreadHelm macOS
-Version: 1.1.1
+Version: 1.1.2
 System: macOS 12.3+
 Architecture: arm64 (Apple silicon only)
 Variant: Independent app with dynamic island, quota, and task status

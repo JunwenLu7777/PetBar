@@ -11,7 +11,7 @@ import Foundation
 let refreshInterval: TimeInterval = 60
 let taskProgressRefreshInterval: TimeInterval = 2
 let codexTaskProgressRescanInterval: TimeInterval = 5
-let panelVersion = "1.1.1"
+let panelVersion = "1.1.2"
 let panelEdition = "threadhelm"
 let threadHelmProductID = "threadhelm"
 let overlayStateRefreshInterval: TimeInterval = 0.25
