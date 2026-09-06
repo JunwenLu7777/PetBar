@@ -13,6 +13,7 @@ import ApplicationServices
 import CoreGraphics
 import Darwin
 import Foundation
+import SQLite3
 
 func runTaskProgressSelfTestPhase2(now: Date, started: String) {
     let preferenceSuite = "threadhelm-task-progress-phase2-\(UUID().uuidString)"
@@ -1003,5 +1004,88 @@ func runAntigravityLocalSessionSelfTest() {
             + "planner-only=tool-output-and-user-input-excluded "
             + "sanitize=credential-redacted append=stable-key "
             + "budget=32+newest-kept missing-session=nil"
+    )
+}
+
+
+func runZCodeLocalSessionSelfTest() {
+    func execFail(_ database: OpaquePointer?, _ sql: String) {
+        var error: UnsafeMutablePointer<CChar>?
+        if sqlite3_exec(database, sql, nil, nil, &error) != SQLITE_OK {
+            fputs("zcode local fixture sql failed: "
+                + (error.map { String(cString: $0) } ?? "unknown") + "\n", stderr)
+            exit(1)
+        }
+        if let error { sqlite3_free(error) }
+    }
+
+    let fileManager = FileManager.default
+    let databaseURL = fileManager.temporaryDirectory
+        .appendingPathComponent("threadhelm-zcode-local-\(UUID().uuidString).sqlite")
+    defer { try? fileManager.removeItem(at: databaseURL) }
+    var database: OpaquePointer?
+    guard sqlite3_open(databaseURL.path, &database) == SQLITE_OK, let database
+    else {
+        fputs("zcode local fixture open failed\n", stderr)
+        exit(1)
+    }
+    defer { sqlite3_close(database) }
+    execFail(database, "CREATE TABLE session (id text primary key, title text, directory text);")
+    execFail(database, "CREATE TABLE message (id text primary key, session_id text, data text, time_created integer);")
+    execFail(database, "CREATE TABLE part (id text primary key, message_id text, session_id text, data text, time_created integer);")
+
+    let sessionID = "sess_c1f4a2d9-0000-4000-8000-123456789abc"
+    let assistantRole = #"{"role":"assistant"}"#
+    let userRole = #"{"role":"user"}"#
+    execFail(database, "INSERT INTO session VALUES ('\(sessionID)', '真实会话标题', '/tmp/zcode-project');")
+    execFail(database, "INSERT INTO message VALUES ('m1', '\(sessionID)', '\(assistantRole)', 100);")
+    execFail(database, "INSERT INTO message VALUES ('m2', '\(sessionID)', '\(userRole)', 110);")
+    execFail(database, "INSERT INTO message VALUES ('m3', '\(sessionID)', '\(assistantRole)', 120);")
+    // 每条分片的 time_created 决定排序;text 只属于 assistant 消息。
+    execFail(database, #"INSERT INTO part VALUES ('p1', 'm1', '\#(sessionID)', '{"type":"text","text":"第一条公开叙述。"}', 105);"#)
+    execFail(database, #"INSERT INTO part VALUES ('p2', 'm1', '\#(sessionID)', '{"type":"tool","text":"工具输出 secret-tool-output"}', 106);"#)
+    execFail(database, #"INSERT INTO part VALUES ('p3', 'm1', '\#(sessionID)', '{"type":"reasoning","text":"内部推理绝不显示"}', 107);"#)
+    execFail(database, #"INSERT INTO part VALUES ('p4', 'm2', '\#(sessionID)', '{"type":"text","text":"用户输入绝不显示"}', 115);"#)
+    execFail(database, #"INSERT INTO part VALUES ('p5', 'm3', '\#(sessionID)', '{"type":"text","text":"client_secret=zcode-secret-123456 已脱敏。"}', 125);"#)
+    execFail(database, #"INSERT INTO part VALUES ('p6', 'm3', '\#(sessionID)', '{"type":"text","text":"追加的第二条叙述。"}', 130);"#)
+
+    // 裸 uuid 输入也要归一化成 sess_ 前缀查到同一行。
+    let bareID = String(sessionID.dropFirst("sess_".count))
+    let extracted = ZCodeLocalSession.content(
+        sessionID: bareID,
+        databaseURL: databaseURL
+    )
+    guard let content = extracted, content.title == "真实会话标题",
+        content.workingDirectory == "/tmp/zcode-project",
+        content.projection.publicMessages.map(\.text) == [
+            "第一条公开叙述。",
+            "client_secret=[已隐藏] 已脱敏。",
+            "追加的第二条叙述。",
+        ],
+        content.projection.publicMessages.allSatisfy({
+            !$0.text.contains("内部推理")
+                && !$0.text.contains("用户输入")
+                && !$0.text.contains("secret-tool-output")
+                && !$0.text.contains("zcode-secret-123456")
+        })
+    else {
+        fputs("zcode local public output extraction failed\n", stderr)
+        exit(1)
+    }
+    guard ZCodeLocalSession.cachedContent(sessionID: bareID) != nil else {
+        fputs("zcode local cached read failed\n", stderr)
+        exit(1)
+    }
+    guard ZCodeLocalSession.content(
+        sessionID: "sess_ffffffff-ffff-ffff-ffff-ffffffffffff",
+        databaseURL: databaseURL
+    ) == nil else {
+        fputs("zcode local missing session must be nil\n", stderr)
+        exit(1)
+    }
+    print(
+        "zcode-local-session-self-test: "
+            + "title+cwd=read sqlite=text-parts-only "
+            + "sanitize=credential-redacted missing-session=nil"
     )
 }

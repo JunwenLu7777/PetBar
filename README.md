@@ -1,9 +1,9 @@
 # ThreadHelm macOS
 
-ThreadHelm 是一个独立运行的 macOS App。当前发行版本为 **1.1.4**，输出文件名为：
+ThreadHelm 是一个独立运行的 macOS App。当前发行版本为 **1.1.5**，输出文件名为：
 
 ```text
-ThreadHelm-macOS-arm64-1.1.4.zip
+ThreadHelm-macOS-arm64-1.1.5.zip
 ```
 
 该发行只面向 macOS 12.3+ 的 Apple 芯片（arm64），暂不支持 Intel Mac。包内包含 `ThreadHelm.app`、LaunchAgent 模板、三个安装检查命令、本机事务脚本、License、隐私说明和资产说明。
@@ -31,13 +31,13 @@ ThreadHelm 的源码与发布只以 [JunwenLu7777/PetBar](https://github.com/Jun
 - 版本判定只做溯源标注，不再决定功能开不开。固定真值版本为 Codex `0.150.1`、Claude Code `2.1.226`、Cursor Desktop `3.17.21` + Agent CLI `2026.04.14-ee4b43a`、ZCode `3.9.1` + build `3.9.1.5853`、OMP `17.3.5`、Antigravity `1.1.22`；全部分量精确匹配才标 `validated`，缺版本或任一分量漂移标 `unvalidated`，不会沿用旧版本的能力结论。但实测证据优先于版本比对：收到过该 Agent 的审批请求会把结论抬到「验证状态未知」（承认通道活着），你确认过拒绝真的拦住则重新标为 `validated`；证据绑定在取得它的那个版本上，升级后自动失效。受管集成、审批弹窗、任务预览与提醒都不再受版本闸门限制——这几家的发版节奏不由 ThreadHelm 决定，拿版本号关掉功能只会让集成在每次上游发版后静默失效。唯一仍受版本约束的是 Cursor 本机工作区解析（推断卡片属于哪个目录/会话，格式变了会给出错的信息而不是缺的信息）。卸载仍可只移除 ThreadHelm 自己的条目。
 - 运行中任务会显示开始时间与持续时间；已完成/失败任务的持续时间会固定，不继续增长。
 - 运行中任务预览只显示公开助手输出，新内容会及时替换，同时保留可滚动的完整输出；不展示 thinking、工具参数或原始工具输出。
-- 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json`、CLI 会话公开输出、Claude Desktop 本地 Agent transcript，和 Antigravity 本地 transcript 的模型叙述文本（工具输出与用户输入一律不显示）；不会发起远程第三方行情请求。
+- 本机读取 Codex app-server，以及已安装 Claude CLI 的 `/usage`、`agents --json`、CLI 会话公开输出、Claude Desktop 本地 Agent transcript，Antigravity 本地 transcript 的模型叙述文本，和 ZCode 本地会话库的模型文本分片（reasoning、工具输出与用户输入一律不显示）；不会发起远程第三方行情请求。
 - 若用户已经授予辅助功能权限，ThreadHelm 会通过 Codex 暴露的固定辅助功能标签隐藏/静音 Codex 原生任务气泡；未授权时仍可使用额度、任务和灵动岛。
 - ThreadHelm 不修改 `ChatGPT.app`、`Codex.app`、`app.asar` 或应用签名。
 
 ## 安装
 
-1. 完整解压 `ThreadHelm-macOS-arm64-1.1.4.zip`。
+1. 完整解压 `ThreadHelm-macOS-arm64-1.1.5.zip`。
 2. 双击 `安装ThreadHelm.command`。
 3. 如果 macOS 提示无法验证开发者，点“完成”，不要移到废纸篓。
 4. 打开“系统设置”里的“隐私与安全”，选择“仍要打开”或 “Open Anyway”，输入 Mac 登录密码确认。
@@ -84,7 +84,7 @@ BIN="macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 
 输出里的 miss、false alert、duplicate 和 exact return 只描述这 98 条固定夹具窗口，不代表实际使用指标。OMP 与 Antigravity 的精确返回在该基线中记录为 Unknown：分别可发起 `--resume` 与 `agy --conversation <id>`，但未独立确认落点。发布校验会执行同一回放；夹具比旧 ZIP 更新时，旧 ZIP 会被判为 stale。
 
-构建成功后会生成 `dist/ThreadHelm-macOS-arm64-1.1.4.zip`，并在 staging 目录内生成 `CHECKSUMS-SHA256.txt`。
+构建成功后会生成 `dist/ThreadHelm-macOS-arm64-1.1.5.zip`，并在 staging 目录内生成 `CHECKSUMS-SHA256.txt`。
 
 ## 源码目录
 

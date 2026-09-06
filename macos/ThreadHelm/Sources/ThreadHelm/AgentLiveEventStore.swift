@@ -240,6 +240,11 @@ func agentDashboardProjection(
         Thread.isMainThread
             ? AntigravityLocalSession.cachedContent(sessionID: $0)
             : AntigravityLocalSession.content(sessionID: $0)
+    },
+    zcodeSessionContent: (String) -> ZCodeLocalSessionContent? = {
+        Thread.isMainThread
+            ? ZCodeLocalSession.cachedContent(sessionID: $0)
+            : ZCodeLocalSession.content(sessionID: $0)
     }
 ) -> AgentDashboardProjection {
     let polledCollection = collection
@@ -301,7 +306,8 @@ func agentDashboardProjection(
                 cursorWorkingDirectory: { _ in nil },
                 cursorSessionContent: { _ in nil },
                 ompSessionContent: ompSessionContent,
-                antigravitySessionContent: antigravitySessionContent
+                antigravitySessionContent: antigravitySessionContent,
+                zcodeSessionContent: zcodeSessionContent
             )
         }
         return taskProgressItem(
@@ -310,7 +316,8 @@ func agentDashboardProjection(
             cursorWorkingDirectory: cursorWorkingDirectory,
             cursorSessionContent: cursorSessionContent,
             ompSessionContent: ompSessionContent,
-            antigravitySessionContent: antigravitySessionContent
+            antigravitySessionContent: antigravitySessionContent,
+            zcodeSessionContent: zcodeSessionContent
         )
     }
     return AgentDashboardProjection(
@@ -379,6 +386,11 @@ func taskProgressItem(
         Thread.isMainThread
             ? AntigravityLocalSession.cachedContent(sessionID: $0)
             : AntigravityLocalSession.content(sessionID: $0)
+    },
+    zcodeSessionContent: (String) -> ZCodeLocalSessionContent? = {
+        Thread.isMainThread
+            ? ZCodeLocalSession.cachedContent(sessionID: $0)
+            : ZCodeLocalSession.content(sessionID: $0)
     }
 ) -> TaskProgressItem {
     let kind: TaskProgressKind
@@ -425,6 +437,9 @@ func taskProgressItem(
     let localAntigravityContent = snapshot.identity.agentID == .antigravity
         ? antigravitySessionContent(snapshot.identity.nativeID)
         : nil
+    let localZCodeContent = snapshot.identity.agentID == .zcode
+        ? zcodeSessionContent(snapshot.identity.nativeID)
+        : nil
     let hookEvents = CursorLocalWorkspace.activityEvents(from: sessionEvents)
     let hookProjection = liveHookProjection(
         from: sessionEvents,
@@ -440,6 +455,9 @@ func taskProgressItem(
     } else if snapshot.identity.agentID == .antigravity,
               localAntigravityContent != nil {
         localProjection = localAntigravityContent?.projection
+    } else if snapshot.identity.agentID == .zcode,
+              localZCodeContent != nil {
+        localProjection = localZCodeContent?.projection
     } else {
         localProjection = nil
     }
@@ -457,11 +475,17 @@ func taskProgressItem(
         resolvedDirectory = localOMPContent?.workingDirectory
     } else if snapshot.identity.agentID == .antigravity {
         resolvedDirectory = localAntigravityContent?.workingDirectory
+    } else if snapshot.identity.agentID == .zcode {
+        resolvedDirectory = localZCodeContent?.workingDirectory
     } else {
         resolvedDirectory = nil
     }
     let title: String
-    if let localTitle = localContent?.title, !localTitle.isEmpty {
+    if snapshot.identity.agentID == .zcode,
+       let localZCodeTitle = localZCodeContent?.title,
+       !localZCodeTitle.isEmpty {
+        title = localZCodeTitle
+    } else if let localTitle = localContent?.title, !localTitle.isEmpty {
         title = localTitle
     } else if let resolvedDirectory,
               snapshot.identity.agentID == .cursor
