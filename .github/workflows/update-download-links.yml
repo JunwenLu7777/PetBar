@@ -12,6 +12,12 @@ on:
 permissions:
   contents: write
 
+# release published 与 main 前移并发时,不加并发组会出现两次工作流
+# 互相覆盖 push 的竞态。
+concurrency:
+  group: update-download-links
+  cancel-in-progress: false
+
 jobs:
   update-readme:
     runs-on: ubuntu-latest
@@ -65,6 +71,10 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         shell: bash
         run: |
+          # main 可能在 checkout 之后又被别的提交前移(比如并发跑过的
+          # validate 机器人);push 前先 rebase 到最新 origin/main。
+          git fetch origin main
+          git rebase origin/main
           if git diff --quiet -- README.md macos/README.md; then
             echo "README 已经指向 ThreadHelm Release $VERSION"
             exit 0

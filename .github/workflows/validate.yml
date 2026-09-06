@@ -58,7 +58,7 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")" = "ThreadHelm"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP/Contents/Info.plist")" = "ThreadHelm.icns"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")" = "12.3"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")" = "2"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")" = "3"
           ! /usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$APP/Contents/Info.plist" >/dev/null 2>&1
           test -f "$APP/Contents/Resources/ThreadHelm.icns"
           test ! -e "$APP/Contents/Resources/ThreadHelmPetSpritesheet.webp"
@@ -77,12 +77,13 @@ jobs:
           "$BIN" --self-test-permission-gate-liveness | grep -F 'permission-gate-liveness-self-test ok'
           "$BIN" --self-test-omp-permission | grep -F 'omp-permission-self-test ok'
           "$BIN" --self-test-cursor-permission | grep -F 'cursor-permission-self-test ok'
+          "$BIN" --self-test-antigravity-permission | grep -F 'antigravity-permission-self-test: payload=decode+camelCase'
           "$BIN" --self-test-client-contract | grep -F 'agent-transport=64KiB+250ms+metadata-only+fail-open'
           "$BIN" --self-test-transcript-events | grep -F 'transcript-events-self-test:'
           "$BIN" --self-test-large-window-regression 2>&1 | grep -F 'large-window-regression: providers=4'
           "$BIN" --self-test-dynamic-island | grep -F 'presentation=dynamic-island-only'
           "$BIN" --self-test-agent-integration-manager | grep -F 'agent-integration-manager-self-test:'
-          "$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents | grep -F 'agent-truth-replay: agents=5 scenarios=81 persistent-state=unchanged'
+          "$BIN" --verify-agent-truth macos/ThreadHelm/Tests/Fixtures/Agents | grep -F 'agent-truth-replay: agents=6 scenarios=98 persistent-state=unchanged'
       - name: Run script regression tests
         run: |
           set -euo pipefail

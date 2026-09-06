@@ -134,7 +134,7 @@ assert_package_is_complete() {
   /usr/bin/plutil -lint "$PLIST_SOURCE" >/dev/null \
     || fail "登录启动项模板无效。"
   local unmanaged_artifact
-  for unmanaged_artifact in .claude .cursor .zcode .omp; do
+  for unmanaged_artifact in .claude .cursor .zcode .omp .gemini; do
     [[ ! -e "$ROOT/$unmanaged_artifact" ]] \
       || fail "安装包不得携带厂商配置或未受管 Hook：$unmanaged_artifact"
   done
@@ -265,7 +265,7 @@ INTEGRATION_REPORT="$(
   "$APP_BINARY" --agent-integrations install --live
 )" || fail "无法安全安装 Claude、Cursor、ZCode 和 OMP 的受管集成。"
 threadhelm_set_integration_backup_id "$INTEGRATION_REPORT" \
-  || fail "无法读取五 Agent 本机集成恢复点。"
+  || fail "无法读取六 Agent 本机集成恢复点。"
 "$APP_BINARY" \
   --prepare-codex-overlay-notifications \
   "$STATE_PATH" \

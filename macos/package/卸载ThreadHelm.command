@@ -87,7 +87,7 @@ for candidate in \
   fi
 done
 if [[ -z "$CLEANUP_BINARY" ]]; then
-  echo "找不到可用于安全移除五 Agent 受管集成的 ThreadHelm 程序；已停止卸载。"
+  echo "找不到可用于安全移除六 Agent 受管集成的 ThreadHelm 程序；已停止卸载。"
   exit 1
 else
   INTEGRATION_REPORT="$(
@@ -101,7 +101,7 @@ else
     print -r -- "$INTEGRATION_REPORT" \
       | /usr/bin/plutil -extract backupID raw -o - - 2>/dev/null
   )" || {
-    echo "无法读取五 Agent 本机集成恢复点，已停止卸载。"
+    echo "无法读取六 Agent 本机集成恢复点，已停止卸载。"
     exit 1
   }
 fi

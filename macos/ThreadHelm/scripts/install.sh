@@ -146,24 +146,36 @@ mkdir -p "${HEALTH:h}"
 /usr/bin/codesign --verify --deep --strict "$INSTALLED_APP"
 
 INTEGRATION_REPORT=""
-if ! INTEGRATION_REPORT="$(
+INTEGRATION_RC=0
+INTEGRATION_REPORT="$(
   "$APP_BINARY" --agent-integrations install --live
-)"; then
-  echo "五 Agent 本机集成安装失败" >&2
+)" || INTEGRATION_RC=$?
+# 恢复点必须先落账再谈成败：集成配置此刻已被改写，若备份 ID 没有
+# 交给事务脚本，EXIT trap 的回滚拿不到 ID，只会回滚 App 而留下指向
+# 旧二进制的孤儿 hook 配置——那正是闸门静默失效的状态。
+if [[ -n "$INTEGRATION_REPORT" ]]; then
+  threadhelm_set_integration_backup_id "$INTEGRATION_REPORT" || {
+    echo "无法读取本机集成恢复点" >&2
+    exit 1
+  }
+fi
+if (( INTEGRATION_RC != 0 )); then
+  echo "本机集成安装失败" >&2
   exit 1
 fi
-threadhelm_set_integration_backup_id "$INTEGRATION_REPORT" || {
-  echo "无法读取五 Agent 本机集成恢复点" >&2
-  exit 1
-}
 "$APP_BINARY" \
   --prepare-codex-overlay-notifications \
   "$STATE" \
   "$SESSION_INDEX" \
   "$NATIVE_NOTIFICATION_BACKUP"
 
+# 注入 sed 前转义替换文本里的 \\、|、&：home 目录名含这些字符时
+# 不转义会产出损坏的 plist（有 plutil -lint 兜底，但应当一次写对）。
+SED_BINARY="${APP_BINARY//\\/\\\\}"
+SED_BINARY="${SED_BINARY//|/\\|}"
+SED_BINARY="${SED_BINARY//&/\\&}"
 /usr/bin/sed \
-  -e "s|__EXECUTABLE__|$APP_BINARY|g" \
+  -e "s|__EXECUTABLE__|$SED_BINARY|g" \
   -e "s|__HEALTH_PATH__|$HEALTH|g" \
   -e "s|__STATE_PATH__|$STATE|g" \
   -e "s|__LOG_PATH__|$LOG|g" \

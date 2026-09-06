@@ -60,7 +60,7 @@ for installer in (package_installer, source_installer):
     ):
         assert required in installer, required
 
-for unmanaged_artifact in (".claude", ".cursor", ".zcode", ".omp"):
+for unmanaged_artifact in (".claude", ".cursor", ".zcode", ".omp", ".gemini"):
     assert unmanaged_artifact in package_installer
 
 for required in (
@@ -120,6 +120,7 @@ assert self_test_flags == {
     "--self-test-permission-gate-liveness",
     "--self-test-omp-permission",
     "--self-test-cursor-permission",
+    "--self-test-antigravity-permission",
     "--self-test-dynamic-island",
     "--self-test-client-contract",
     "--self-test-agent-integration-manager",
@@ -139,7 +140,7 @@ for obsolete in (
         f"CI still requires removed desktop-pet behavior: {obsolete}"
     )
 assert "--verify-agent-truth" in validate_workflow
-assert "scenarios=81 persistent-state=unchanged" in validate_workflow
+assert "agents=6 scenarios=98 persistent-state=unchanged" in validate_workflow
 assert "macos/VERSION.txt" in validate_workflow
 assert "build-macos-release.sh" not in validate_workflow
 assert "actions/upload-artifact" not in validate_workflow

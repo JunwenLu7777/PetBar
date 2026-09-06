@@ -184,7 +184,7 @@ fi
 
 if [[ -x "$BIN" ]]; then
   echo ""
-  echo "五 Agent 本机集成状态："
+  echo "六 Agent 本机集成状态："
   "$BIN" --agent-integrations status --live || FAILED=1
 
   # 配置装好了不等于闸门在工作，而这一步对用户完全静默：只有等到某次

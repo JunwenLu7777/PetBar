@@ -44,7 +44,9 @@ write_file() {
 }
 
 write_command() {
-  write_file "$1" "#!/bin/zsh\nexit 0\n"
+  # 必须用真实换行：printf "%s" 不会展开 \n，此前写出的 stub 是一行
+  # 带字面反斜杠的注释，被调用时根本走不到 exit 0。
+  write_file "$1" $'#!/bin/zsh\nexit 0\n'
   /bin/chmod +x "$1"
 }
 
@@ -227,7 +229,7 @@ expect_fail "stale archive relative to local app build"
 make_stage
 make_dist_from_stage
 git -C "$FIXTURE" add dist
-write_file "$FIXTURE/dist/ThreadHelm-macOS-arm64-1.1.0.zip.sha256" "bad  ThreadHelm-macOS-arm64-1.1.0.zip\n"
+write_file "$FIXTURE/dist/ThreadHelm-macOS-arm64-1.1.0.zip.sha256" $'bad  ThreadHelm-macOS-arm64-1.1.0.zip\n' 
 expect_fail "bad archive checksum"
 
 make_dist_from_stage
@@ -256,15 +258,17 @@ make_dist_from_stage
 git -C "$FIXTURE" add dist
 expect_fail "packaged vendor configuration"
 
+# 用真实换行让 stub 真的以 1 退出：此前是单行字面 \n，stub 成了永不
+# 执行的注释，用例靠"输出缺 marker"碰巧失败，没测到目标行为。
 write_file \
   "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm" \
-  "#!/bin/zsh\nexit 1\n"
+  $'#!/bin/zsh\nexit 1\n'
 /bin/chmod +x \
   "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm"
 make_stage
 make_dist_from_stage
 git -C "$FIXTURE" add dist
-expect_fail "packaged binary failing five-agent truth replay"
+expect_fail "packaged binary failing self-test"
 
 write_truth_replay_binary \
   "$FIXTURE/macos/ThreadHelm/build/ThreadHelm.app/Contents/MacOS/ThreadHelm" \

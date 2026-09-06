@@ -139,7 +139,9 @@ path_has_forbidden_marker() {
 
 scan_release_for_forbidden_terms() {
   local target="$1"
-  local forbidden='Mayday|Bubu|bubu|卜卜|Binance|BTC|bitcoin|Codex-Only'
+  # 与 validate-repository-layout.py 的 re.IGNORECASE 标准一致;
+  # 之前无 -i,这些词的小写形态会全部漏扫。
+  local forbidden='mayday|bubu|卜卜|binance|btc|bitcoin|codex-only'
   local matching_path=""
   while IFS= read -r entry_path; do
     if path_has_forbidden_marker "$entry_path"; then
@@ -152,8 +154,8 @@ scan_release_for_forbidden_terms() {
   local found=false
   while IFS= read -r file; do
     if /usr/bin/file "$file" | /usr/bin/grep -q 'text'; then
-      if LC_ALL=C /usr/bin/grep -nE "$forbidden" "$file" >/dev/null; then
-        /usr/bin/grep -nE "$forbidden" "$file" >&2 || true
+      if LC_ALL=C /usr/bin/grep -inE "$forbidden" "$file" >/dev/null; then
+        /usr/bin/grep -inE "$forbidden" "$file" >&2 || true
         found=true
       fi
     fi
@@ -358,6 +360,10 @@ if [[ "$VERIFY_ONLY" == true ]]; then
   exit 0
 fi
 
+# 仓库级闸门(布局校验+隐私审计)对全量构建同样生效:只挂在
+# verify-only 上等于"谁先跑谁负责",单独执行全量构建时 zip 可以在
+# 未过审的情况下产出。
+run_repository_checks
 "$APP_PROJECT/scripts/build.sh" >/dev/null
 require_dir "$APP_BUILD"
 stage_release
