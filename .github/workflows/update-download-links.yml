@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "已经发布的 ThreadHelm 语义化版本（例如 1.0.0）"
+        description: "已发布的 Release tag（v1.1.1 或 1.1.1 均可，自动剥 v 前缀取版本号）"
         required: true
 
 permissions:
